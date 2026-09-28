@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>order-api</artifactId>
+  <dependencies><dependency><groupId>jakarta.validation</groupId><artifactId>jakarta.validation-api</artifactId></dependency></dependencies>
+</project>

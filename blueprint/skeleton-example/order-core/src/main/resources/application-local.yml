@@ -1,0 +1,15 @@
+service-jwt:
+  internal-access:
+    - path: "/internal/orders/*/status"
+      allowed-actors: [ "payment-service" ]
+    - path: "/internal/orders/**"
+      allowed-actors: [ "backoffice-service" ]
+rate-limit:
+  rules:
+    order-create-account: { limit: 60, window-seconds: 60 }
+spring:
+  http:
+    serviceclient:
+      inventory: { base-url: "http://localhost:8086", connect-timeout: 2s, read-timeout: 5s }
+services:
+  inventory.base-url: http://localhost:8086

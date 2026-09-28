@@ -1,0 +1,19 @@
+service-jwt:
+  private-key-path: ${SECRET_ORDER_SIGNING_KEY_PATH}
+  internal-access:
+    - path: "/internal/orders/*/status"
+      allowed-actors: [ "payment-service" ]
+    - path: "/internal/orders/**"
+      allowed-actors: [ "backoffice-service" ]
+rate-limit:
+  rules:
+    order-create-account: { limit: 60, window-seconds: 60 }
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}?currentSchema=order
+    password: ${SECRET_DB_PASSWORD}
+  http:
+    serviceclient:
+      inventory: { base-url: "${INVENTORY_URL}", connect-timeout: 2s, read-timeout: 5s }
+services:
+  inventory.base-url: ${INVENTORY_URL}

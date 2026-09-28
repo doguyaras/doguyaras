@@ -40,6 +40,28 @@
 - `tests/ArchitectureRulesTest.java`
 - `tests/ErrorCodeUniquenessTest.java`
 - `tests/ConfigDriftTest.java`
+- `skeleton-example/README.md`
+- `skeleton-example/deploy/prod.env.example`
+- `skeleton-example/order-api/pom.xml`
+- `skeleton-example/order-api/src/main/java/com/acme/order/api/dto/CreateOrderRequest.java`
+- `skeleton-example/order-core/pom.xml`
+- `skeleton-example/order-core/src/main/java/com/acme/order/OrderApp.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/config/WebConfig.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/controller/OrderController.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/entity/Order.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/exception/ErrorCode.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/repository/OrderRepository.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/service/OrderService.java`
+- `skeleton-example/order-core/src/main/java/com/acme/order/service/impl/OrderServiceImpl.java`
+- `skeleton-example/order-core/src/main/resources/application-local.yml`
+- `skeleton-example/order-core/src/main/resources/config/order.yml`
+- `skeleton-example/order-core/src/test/java/com/acme/order/ArchitectureRulesTest.java`
+- `skeleton-example/order-core/src/test/java/com/acme/order/ConfigDriftTest.java`
+- `skeleton-example/order-core/src/test/java/com/acme/order/ErrorCodeUniquenessTest.java`
+- `skeleton-example/platform-core/pom.xml`
+- `skeleton-example/platform-core/src/main/java/com/acme/platform/core/ErrorCode.java`
+- `skeleton-example/platform-core/src/main/java/com/acme/platform/core/ServiceException.java`
+- `skeleton-example/pom.xml`
 
 ---
 
@@ -86,11 +108,16 @@ blueprint/
 ├── scripts/
 │   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım
 │   └── flyway-immutability.test.js   # node --test
-└── tests/                            # Makine zorlamalı kurallar için Java test şablonları
-    ├── ArchitectureRulesTest.java    # ArchUnit: controller→repository yok, core→core yok, config/ dışı @Configuration yok, @Valid
-    ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik
-    └── ConfigDriftTest.java          # application-local.yml ↔ deploy config drift (allowlist, rate-limit, services.*)
+├── tests/                            # Makine zorlamalı kurallar için Java test şablonları (skeleton-example'da doğrulandı)
+│   ├── ArchitectureRulesTest.java    # ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
+│   ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik + blok + mesaj formatı
+│   └── ConfigDriftTest.java          # application-local.yml ↔ deploy config drift; ${ENV} ↔ env şablonu; secret fallback yasağı
+└── skeleton-example/                 # Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı ihlal yakalandı (README'sine bak)
+    ├── pom.xml                       # BOM, ${revision}, enforcer (Java/Maven sürümü + core→core bannedDependencies)
+    ├── platform-core/  order-api/  order-core/  deploy/prod.env.example
 ```
+
+**Doğrulanmış olanlar:** `scripts/flyway-immutability.js` (12 test), hook'lar (örnek stdin ile kuru çalıştırma), `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, negatif ve pozitif). Skill'ler metin olarak tamamlandı; gerçek bir PR üzerinde bir Claude Code oturumunda henüz koşturulmadı — ilk kullanımda karar formatlarının uyumu gözden geçirilir.
 
 ### Kurulum
 
@@ -1986,84 +2013,112 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.Architectures.layeredArchitecture;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 
+import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
-import com.tngtech.archunit.junit.AnalyzeClasses;
-import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import jakarta.validation.Valid;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Mimari kurallarin makine zorlamasi. Her core modulde bu sinifin bir kopyasi bulunur;
- * yalniz paket koku (com.acme.order) degisir. Referans: mikroservis-mimari-referans.md Bolum 4, 16, 19.5.
+ * yalniz ROOT (paket koku) degisir. Referans: mikroservis-mimari-referans.md Bolum 4, 16, 19.5.
  *
- * Bagimlilik: com.tngtech.archunit:archunit-junit5 (test scope).
+ * Bagimlilik: com.tngtech.archunit:archunit-junit5 (test scope) — kurallar duz JUnit @Test olarak
+ * calisir; ArchUnit'in kendi JUnit engine'ine (@ArchTest) bagimli DEGILDIR. Neden: engine, JUnit
+ * Platform major surumleriyle uyumsuz kalabiliyor ve testler sessizce "0 test" olarak gecebiliyor.
+ * Spring Boot 4.1 + ArchUnit 1.5.1 ile dogrulandi (bos iskelette kasitli ihlaller yakalandi).
  */
-@AnalyzeClasses(packages = ArchitectureRulesTest.ROOT, importOptions = ImportOption.DoNotIncludeTests.class)
 class ArchitectureRulesTest {
 
     static final String ROOT = "com.acme.order";
+    static JavaClasses classes;
+
+    @BeforeAll
+    static void importClasses() {
+        classes = new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages(ROOT);
+    }
 
     /** Katmanlar: controller → service → repository. Controller repository'ye dokunamaz. */
-    @ArchTest
-    static final ArchRule layers = layeredArchitecture().consideringOnlyDependenciesInLayers()
-            .layer("Controller").definedBy(ROOT + ".controller..")
-            .layer("Service").definedBy(ROOT + ".service..")
-            .layer("Repository").definedBy(ROOT + ".repository..")
-            .layer("ReadModel").definedBy(ROOT + ".readmodel..")
-            .layer("Outbox").definedBy(ROOT + ".outbox..", ROOT + ".worker..", ROOT + ".saga..")
-            .whereLayer("Controller").mayNotBeAccessedByAnyLayer()
-            .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service", "ReadModel", "Outbox");
+    @Test
+    void layersAreRespected() {
+        layeredArchitecture().consideringOnlyDependenciesInLayers()
+                .withOptionalLayers(true) // readmodel/outbox paketi henuz yoksa "Layer is empty" ihlali uretmesin
+                .layer("Controller").definedBy(ROOT + ".controller..")
+                .layer("Service").definedBy(ROOT + ".service..")
+                .layer("Repository").definedBy(ROOT + ".repository..")
+                .layer("ReadModel").definedBy(ROOT + ".readmodel..")
+                .layer("Outbox").definedBy(ROOT + ".outbox..", ROOT + ".worker..", ROOT + ".saga..")
+                .whereLayer("Controller").mayNotBeAccessedByAnyLayer()
+                .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service", "ReadModel", "Outbox")
+                .check(classes);
+    }
 
-    @ArchTest
-    static final ArchRule controllersDoNotUseRepositories = noClasses()
-            .that().resideInAPackage(ROOT + ".controller..")
-            .should().dependOnClassesThat().resideInAnyPackage(ROOT + ".repository..", ROOT + ".entity..")
-            .because("controller ince katmandir; mapping ve veri erisimi serviste yapilir");
+    @Test
+    void controllersDoNotUseRepositoriesOrEntities() {
+        noClasses().that().resideInAPackage(ROOT + ".controller..")
+                .should().dependOnClassesThat().resideInAnyPackage(ROOT + ".repository..", ROOT + ".entity..")
+                .because("controller ince katmandir; mapping ve veri erisimi serviste yapilir")
+                .check(classes);
+    }
 
     /** service.impl altinda yalniz *ServiceImpl bulunur. */
-    @ArchTest
-    static final ArchRule implPackageOnlyHoldsImpls = classes()
-            .that().resideInAPackage(ROOT + ".service.impl..")
-            .and().areTopLevelClasses()
-            .should().haveSimpleNameEndingWith("ServiceImpl");
+    @Test
+    void implPackageOnlyHoldsServiceImpls() {
+        classes().that().resideInAPackage(ROOT + ".service.impl..").and().areTopLevelClasses()
+                .should().haveSimpleNameEndingWith("ServiceImpl")
+                .check(classes);
+    }
 
     /** @Configuration yalniz config/ altinda. */
-    @ArchTest
-    static final ArchRule configurationsLiveInConfigPackage = classes()
-            .that().areAnnotatedWith(Configuration.class)
-            .should().resideInAPackage(ROOT + ".config..");
+    @Test
+    void configurationsLiveInConfigPackage() {
+        classes().that().areAnnotatedWith(Configuration.class)
+                .should().resideInAPackage(ROOT + ".config..")
+                .check(classes);
+    }
 
     /**
      * core → baska core yasak. Yalniz kendi paketi, platform starter'lari, *-api modulleri ve
      * ucuncu taraf kutuphaneler. (Maven enforcer bannedDependencies bunun birincil kontroludur.)
      */
-    @ArchTest
-    static final ArchRule noOtherCoreDependencies = classes()
-            .that().resideInAPackage(ROOT + "..")
-            .should().onlyDependOnClassesThat().resideInAnyPackage(
-                    ROOT + "..",
-                    "com.acme.platform..",
-                    "com.acme..api..",
-                    "java..", "javax..", "jakarta..", "org..", "com.fasterxml..", "lombok..",
-                    "io..", "net..", "reactor..", "kotlin..")
-            .because("baska bir *-core'a bagimlilik modul sinirini ihlal eder");
+    @Test
+    void noOtherCoreDependencies() {
+        classes().that().resideInAPackage(ROOT + "..")
+                .should().onlyDependOnClassesThat().resideInAnyPackage(
+                        ROOT + "..",
+                        "com.acme.platform..",
+                        "com.acme..api..",
+                        "java..", "javax..", "jakarta..", "org..", "com.fasterxml..", "lombok..",
+                        "io..", "net..", "reactor..", "kotlin..")
+                .because("baska bir *-core'a bagimlilik modul sinirini ihlal eder")
+                .check(classes);
+    }
 
     /** Paket dongusu yok. */
-    @ArchTest
-    static final ArchRule noCycles = slices().matching(ROOT + ".(*)..").should().beFreeOfCycles();
+    @Test
+    void noPackageCycles() {
+        slices().matching(ROOT + ".(*)..").should().beFreeOfCycles().check(classes);
+    }
 
     /** Her @RequestBody parametresi @Valid tasir. */
-    @ArchTest
-    static final ArchRule requestBodiesAreValidated = methods()
-            .that().areDeclaredInClassesThat().areAnnotatedWith(RestController.class)
-            .should(haveValidOnEveryRequestBodyParameter());
+    @Test
+    void requestBodiesAreValidated() {
+        ArchRule rule = methods()
+                .that().areDeclaredInClassesThat().areAnnotatedWith(RestController.class)
+                .should(haveValidOnEveryRequestBodyParameter());
+        rule.check(classes);
+    }
 
     private static ArchCondition<JavaMethod> haveValidOnEveryRequestBodyParameter() {
         return new ArchCondition<>("have @Valid on every @RequestBody parameter") {
@@ -2082,10 +2137,15 @@ class ArchitectureRulesTest {
     }
 
     /** Entity'ler servisler arasi contract olamaz: api paketinden entity'ye referans yok. */
-    @ArchTest
-    static final ArchRule apiDoesNotSeeEntities = noClasses()
-            .that().resideInAPackage("com.acme..api..")
-            .should().dependOnClassesThat().resideInAPackage(ROOT + ".entity..");
+    @Test
+    void apiDoesNotSeeEntities() {
+        JavaClasses api = new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages("com.acme");
+        noClasses().that().resideInAPackage("com.acme..api..")
+                .should().dependOnClassesThat().resideInAPackage(ROOT + ".entity..")
+                .check(api);
+    }
 }
 ```
 
@@ -2094,7 +2154,8 @@ class ArchitectureRulesTest {
 ## `tests/ErrorCodeUniquenessTest.java`
 
 ```java
-package com.acme.platform.core;
+package com.acme.order;
+import com.acme.platform.core.ErrorCode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -2199,14 +2260,21 @@ class ConfigDriftTest {
 
     private static final Path LOCAL = Path.of("src/main/resources/application-local.yml");
     private static final Path SERVICE = Path.of("src/main/resources/config/order.yml");
-    private static final Path ENV_TEMPLATE = Path.of("../../deploy/prod.env.example");
+    /** Repo kokundeki deploy sablonu; kok, `deploy/` klasoru bulunana kadar yukari cikilarak bulunur. */
+    private static final Path ENV_TEMPLATE = repoRoot().resolve("deploy/prod.env.example");
 
-    /** Iki dosyada da birebir ayni olmasi gereken key prefix'leri. */
-    private static final Set<String> MIRRORED_PREFIXES = Set.of(
+    /**
+     * Iki dosyada da ayni KEY kumesini olusturmasi gereken prefix'ler (degerler ortama gore farkli olabilir:
+     * localhost vs ${ENV}). Ornek: bir rate-limit scope'u local'de tanimli ama deploy'da unutulmus → drift.
+     */
+    private static final Set<String> MIRRORED_KEY_PREFIXES = Set.of(
             "service-jwt.internal-access",
             "rate-limit.rules",
             "spring.http.serviceclient",
             "services.");
+
+    /** Key + DEGER olarak birebir ayni olmasi gereken guvenlik prefix'leri (allowlist path ve aktorleri). */
+    private static final Set<String> MIRRORED_VALUE_PREFIXES = Set.of("service-jwt.internal-access");
 
     /** Fallback yasak olan secret key parcalari. */
     private static final Pattern SECRET_KEY = Pattern.compile("(secret|password|pass|token|key|credential)", Pattern.CASE_INSENSITIVE);
@@ -2216,10 +2284,12 @@ class ConfigDriftTest {
     void mirroredKeysAreIdenticalBetweenLocalAndDeployConfig() {
         Properties local = load(LOCAL);
         Properties service = load(SERVICE);
-        for (String prefix : MIRRORED_PREFIXES) {
-            Set<String> l = keysWithPrefix(local, prefix);
-            Set<String> s = keysWithPrefix(service, prefix);
-            assertThat(l).as("prefix '%s': application-local.yml ↔ config/order.yml key kumesi", prefix)
+        for (String prefix : MIRRORED_KEY_PREFIXES) {
+            boolean withValues = MIRRORED_VALUE_PREFIXES.contains(prefix);
+            Set<String> l = keysWithPrefix(local, prefix, withValues);
+            Set<String> s = keysWithPrefix(service, prefix, withValues);
+            assertThat(l).as("prefix '%s': application-local.yml ↔ config/order.yml %s kumesi",
+                            prefix, withValues ? "key+deger" : "key")
                     .containsExactlyInAnyOrderElementsOf(s);
         }
     }
@@ -2241,9 +2311,9 @@ class ConfigDriftTest {
     void secretKeysHaveNoLiteralFallback() {
         Properties service = load(SERVICE);
         Set<String> offenders = new TreeSet<>();
-        for (String key : service.stringPropertyNames()) {
+        for (String key : keys(service)) {
             if (!SECRET_KEY.matcher(key).find()) continue;
-            Matcher m = PLACEHOLDER.matcher(service.getProperty(key));
+            Matcher m = PLACEHOLDER.matcher(String.valueOf(service.get(key)));
             while (m.find()) {
                 if (m.group(2) != null) offenders.add(key + " = " + m.group());
             }
@@ -2259,12 +2329,31 @@ class ConfigDriftTest {
         return props;
     }
 
-    private static Set<String> keysWithPrefix(Properties props, String prefix) {
-        return props.stringPropertyNames().stream()
+    private static Set<String> keysWithPrefix(Properties props, String prefix, boolean withValues) {
+        return keys(props).stream()
                 .filter(k -> k.startsWith(prefix))
                 // internal-access[0].path gibi listeler icin sirayi degil kumeyi karsilastir
-                .map(k -> k + "=" + props.getProperty(k).replaceAll("\\s+", ""))
+                .map(k -> withValues ? k + "=" + String.valueOf(props.get(k)).replaceAll("\\s+", "") : k)
                 .collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    /**
+     * TUZAK: Properties.stringPropertyNames() yalniz String degerli girdileri doner; YamlPropertiesFactoryBean
+     * sayisal degerleri (limit: 60) Integer olarak koydugu icin o key'ler sessizce kaybolur ve drift testi
+     * hic bir sey yakalamaz. Bu yuzden keySet() uzerinden gidilir.
+     */
+    private static Set<String> keys(Properties props) {
+        return props.keySet().stream().map(String::valueOf).collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    /** Modul dizininden yukari cikarak `deploy/` klasorunu (repo koku) bulur; yoksa test aciklayici hata verir. */
+    private static Path repoRoot() {
+        Path dir = Path.of("").toAbsolutePath();
+        while (dir != null) {
+            if (Files.isDirectory(dir.resolve("deploy"))) return dir;
+            dir = dir.getParent();
+        }
+        throw new IllegalStateException("repo kokunde deploy/ klasoru bulunamadi; ENV_TEMPLATE yolunu ayarla");
     }
 
     private static Set<String> placeholders(String text) {
@@ -2274,4 +2363,706 @@ class ConfigDriftTest {
         return out;
     }
 }
+```
+
+---
+
+## `skeleton-example/README.md`
+
+## skeleton-example — Doğrulanmış Boş İskelet
+
+`blueprint/tests/*.java` şablonlarının ve enforcer kuralının **gerçekten derlenip çalıştığı** en küçük Maven multi-module projesi. Referans dokümanın (Bölüm 3, 4, 7, 16, 19.5) somut, çalışan karşılığı.
+
+- Spring Boot **4.1.1** BOM, Java 21 (25 ile de uyumlu), ArchUnit 1.5.1, Maven 3.9.11.
+- Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + testler).
+- Config: `application-local.yml`, `config/order.yml`, `deploy/prod.env.example` (drift testi için).
+
+### Doğrulama sonucu (2026-09-28)
+
+```
+mvn -q -B -ntp test   → EXIT 0
+ArchitectureRulesTest   8 test  (katman, controller→repository, impl paketi, config/, core→core, döngü, @Valid, api→entity)
+ConfigDriftTest         3 test  (key kümeleri, ${ENV} ↔ env şablonu, secret fallback)
+ErrorCodeUniquenessTest 1 test  (global tekillik, blok, mesaj formatı)
+```
+
+**Negatif doğrulama:** kasıtlı 8 ihlal enjekte edildi (controller→repository, `@Valid`'siz `@RequestBody`, `service/` altında `@Configuration`, `service.impl`'de Impl olmayan sınıf, çakışan + blok dışı + noktasız ErrorCode, local'de olup deploy'da olmayan rate-limit scope'u, `${SECRET_DB_PASSWORD:changeme}` fallback'i) → **8 failure**, hepsi doğru kuralda yakalandı; kaldırılınca yeniden yeşil.
+
+### Denemede öğrenilen 4 ders (şablonlara işlendi)
+
+1. **Enforcer `bannedDependencies`:** `com.acme:*-core` deseni `platform-core`'u da yakalar. Çözüm: `<includes><include>com.acme:platform-core</include></includes>` — ya da platform modüllerini `-core` ile bitirmemek.
+2. **ArchUnit `@ArchTest` + JUnit engine:** Spring Boot 4.1 BOM'un yönettiği JUnit Platform ile ArchUnit'in kendi engine'i **0 test** çalıştırdı; build yeşil göründü ama hiçbir kural kontrol edilmedi. Kurallar düz `@Test` + `rule.check(classes)` olarak yazıldı; engine bağımlılığı yok.
+3. **`Properties.stringPropertyNames()` tuzağı:** `YamlPropertiesFactoryBean` sayısal değerleri (`limit: 60`) Integer koyar; `stringPropertyNames()` bu key'leri **sessizce atlar** → drift testi rate-limit scope'larını hiç görmedi. `keySet()` + `String.valueOf` kullanılır.
+4. **`layeredArchitecture().withOptionalLayers(true)`:** henüz `readmodel/` veya `outbox/` paketi olmayan yeni serviste "Layer is empty" ihlali üretmemesi için.
+
+Bu dört ders "yeşil build = kural çalışıyor" varsayımının yanlış olabileceğini gösterdi; bu yüzden `proj-release-readiness-review` ve CI, mimari testlerin **test sayısını** da doğrular (0 test = başarısız).
+
+### Çalıştırma
+
+```bash
+cd blueprint/skeleton-example
+mvn -q -B -ntp test
+```
+
+---
+
+## `skeleton-example/deploy/prod.env.example`
+
+```bash
+# deploy env sablonu — degerler CI secret'larindan gelir
+DB_HOST=
+DB_PORT=5432
+DB_NAME=app
+INVENTORY_URL=http://inventory:8086
+```
+
+---
+
+## `skeleton-example/order-api/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>order-api</artifactId>
+  <dependencies><dependency><groupId>jakarta.validation</groupId><artifactId>jakarta.validation-api</artifactId></dependency></dependencies>
+</project>
+```
+
+---
+
+## `skeleton-example/order-api/src/main/java/com/acme/order/api/dto/CreateOrderRequest.java`
+
+```java
+package com.acme.order.api.dto;
+import jakarta.validation.constraints.NotBlank;
+public record CreateOrderRequest(@NotBlank String sku, int quantity) {}
+```
+
+---
+
+## `skeleton-example/order-core/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>order-core</artifactId>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-core</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>order-api</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><scope>test</scope></dependency>
+  </dependencies>
+</project>
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/OrderApp.java`
+
+```java
+package com.acme.order;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+@SpringBootApplication
+public class OrderApp { public static void main(String[] a) { SpringApplication.run(OrderApp.class, a); } }
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/config/WebConfig.java`
+
+```java
+package com.acme.order.config;
+import org.springframework.context.annotation.Configuration;
+@Configuration
+public class WebConfig {}
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/controller/OrderController.java`
+
+```java
+package com.acme.order.controller;
+import com.acme.order.api.dto.CreateOrderRequest;
+import com.acme.order.service.OrderService;
+import jakarta.validation.Valid;
+import java.util.UUID;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+@RestController
+@RequestMapping("/v1/orders")
+public class OrderController {
+    private final OrderService service;
+    public OrderController(OrderService service) { this.service = service; }
+    @PostMapping
+    public ResponseEntity<UUID> create(@RequestHeader("X-Idempotency-Key") UUID key, @Valid @RequestBody CreateOrderRequest req) {
+        return ResponseEntity.ok(service.create(UUID.randomUUID(), key, req));
+    }
+    @PostMapping("/{orderId}/cancel")
+    public ResponseEntity<Void> cancel(@PathVariable("orderId") UUID orderId) { service.cancel(UUID.randomUUID(), orderId); return ResponseEntity.noContent().build(); }
+}
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/entity/Order.java`
+
+```java
+package com.acme.order.entity;
+import java.util.UUID;
+public class Order { private UUID id; private String sku; public UUID getId() { return id; } public String getSku() { return sku; } }
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/exception/ErrorCode.java`
+
+```java
+package com.acme.order.exception;
+import org.springframework.http.HttpStatus;
+public enum ErrorCode implements com.acme.platform.core.ErrorCode {
+    ORDER_NOT_FOUND(11001, "Order not found.", HttpStatus.NOT_FOUND),
+    ORDER_NOT_CANCELLABLE(11002, "Order cannot be cancelled.", HttpStatus.CONFLICT);
+    private final int code; private final String message; private final HttpStatus httpStatus;
+    ErrorCode(int c, String m, HttpStatus s) { code = c; message = m; httpStatus = s; }
+    public int getCode() { return code; } public String getMessage() { return message; }
+    public String getService() { return "order"; } public HttpStatus getHttpStatus() { return httpStatus; }
+}
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/repository/OrderRepository.java`
+
+```java
+package com.acme.order.repository;
+import com.acme.order.entity.Order;
+import java.util.Optional; import java.util.UUID;
+import org.springframework.stereotype.Repository;
+@Repository
+public class OrderRepository { public Optional<Order> findById(UUID id) { return Optional.empty(); } }
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/service/OrderService.java`
+
+```java
+package com.acme.order.service;
+import com.acme.order.api.dto.CreateOrderRequest;
+import java.util.UUID;
+public interface OrderService { UUID create(UUID accountId, UUID idempotencyKey, CreateOrderRequest req); void cancel(UUID accountId, UUID orderId); }
+```
+
+---
+
+## `skeleton-example/order-core/src/main/java/com/acme/order/service/impl/OrderServiceImpl.java`
+
+```java
+package com.acme.order.service.impl;
+import com.acme.order.api.dto.CreateOrderRequest;
+import com.acme.order.exception.ErrorCode;
+import com.acme.order.repository.OrderRepository;
+import com.acme.order.service.OrderService;
+import com.acme.platform.core.ServiceException;
+import java.util.UUID;
+import org.springframework.stereotype.Service;
+@Service
+public class OrderServiceImpl implements OrderService {
+    private final OrderRepository repo;
+    public OrderServiceImpl(OrderRepository repo) { this.repo = repo; }
+    public UUID create(UUID a, UUID k, CreateOrderRequest r) { return UUID.randomUUID(); }
+    public void cancel(UUID a, UUID id) { repo.findById(id).orElseThrow(() -> new ServiceException(ErrorCode.ORDER_NOT_FOUND)); }
+}
+```
+
+---
+
+## `skeleton-example/order-core/src/main/resources/application-local.yml`
+
+```yaml
+service-jwt:
+  internal-access:
+    - path: "/internal/orders/*/status"
+      allowed-actors: [ "payment-service" ]
+    - path: "/internal/orders/**"
+      allowed-actors: [ "backoffice-service" ]
+rate-limit:
+  rules:
+    order-create-account: { limit: 60, window-seconds: 60 }
+spring:
+  http:
+    serviceclient:
+      inventory: { base-url: "http://localhost:8086", connect-timeout: 2s, read-timeout: 5s }
+services:
+  inventory.base-url: http://localhost:8086
+```
+
+---
+
+## `skeleton-example/order-core/src/main/resources/config/order.yml`
+
+```yaml
+service-jwt:
+  private-key-path: ${SECRET_ORDER_SIGNING_KEY_PATH}
+  internal-access:
+    - path: "/internal/orders/*/status"
+      allowed-actors: [ "payment-service" ]
+    - path: "/internal/orders/**"
+      allowed-actors: [ "backoffice-service" ]
+rate-limit:
+  rules:
+    order-create-account: { limit: 60, window-seconds: 60 }
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}?currentSchema=order
+    password: ${SECRET_DB_PASSWORD}
+  http:
+    serviceclient:
+      inventory: { base-url: "${INVENTORY_URL}", connect-timeout: 2s, read-timeout: 5s }
+services:
+  inventory.base-url: ${INVENTORY_URL}
+```
+
+---
+
+## `skeleton-example/order-core/src/test/java/com/acme/order/ArchitectureRulesTest.java`
+
+```java
+package com.acme.order;
+
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static com.tngtech.archunit.library.Architectures.layeredArchitecture;
+import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
+
+import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaMethod;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.importer.ImportOption;
+import com.tngtech.archunit.lang.ArchCondition;
+import com.tngtech.archunit.lang.ArchRule;
+import com.tngtech.archunit.lang.ConditionEvents;
+import com.tngtech.archunit.lang.SimpleConditionEvent;
+import jakarta.validation.Valid;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Mimari kurallarin makine zorlamasi. Her core modulde bu sinifin bir kopyasi bulunur;
+ * yalniz ROOT (paket koku) degisir. Referans: mikroservis-mimari-referans.md Bolum 4, 16, 19.5.
+ *
+ * Bagimlilik: com.tngtech.archunit:archunit-junit5 (test scope) — kurallar duz JUnit @Test olarak
+ * calisir; ArchUnit'in kendi JUnit engine'ine (@ArchTest) bagimli DEGILDIR. Neden: engine, JUnit
+ * Platform major surumleriyle uyumsuz kalabiliyor ve testler sessizce "0 test" olarak gecebiliyor.
+ * Spring Boot 4.1 + ArchUnit 1.5.1 ile dogrulandi (bos iskelette kasitli ihlaller yakalandi).
+ */
+class ArchitectureRulesTest {
+
+    static final String ROOT = "com.acme.order";
+    static JavaClasses classes;
+
+    @BeforeAll
+    static void importClasses() {
+        classes = new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages(ROOT);
+    }
+
+    /** Katmanlar: controller → service → repository. Controller repository'ye dokunamaz. */
+    @Test
+    void layersAreRespected() {
+        layeredArchitecture().consideringOnlyDependenciesInLayers()
+                .withOptionalLayers(true) // readmodel/outbox paketi henuz yoksa "Layer is empty" ihlali uretmesin
+                .layer("Controller").definedBy(ROOT + ".controller..")
+                .layer("Service").definedBy(ROOT + ".service..")
+                .layer("Repository").definedBy(ROOT + ".repository..")
+                .layer("ReadModel").definedBy(ROOT + ".readmodel..")
+                .layer("Outbox").definedBy(ROOT + ".outbox..", ROOT + ".worker..", ROOT + ".saga..")
+                .whereLayer("Controller").mayNotBeAccessedByAnyLayer()
+                .whereLayer("Repository").mayOnlyBeAccessedByLayers("Service", "ReadModel", "Outbox")
+                .check(classes);
+    }
+
+    @Test
+    void controllersDoNotUseRepositoriesOrEntities() {
+        noClasses().that().resideInAPackage(ROOT + ".controller..")
+                .should().dependOnClassesThat().resideInAnyPackage(ROOT + ".repository..", ROOT + ".entity..")
+                .because("controller ince katmandir; mapping ve veri erisimi serviste yapilir")
+                .check(classes);
+    }
+
+    /** service.impl altinda yalniz *ServiceImpl bulunur. */
+    @Test
+    void implPackageOnlyHoldsServiceImpls() {
+        classes().that().resideInAPackage(ROOT + ".service.impl..").and().areTopLevelClasses()
+                .should().haveSimpleNameEndingWith("ServiceImpl")
+                .check(classes);
+    }
+
+    /** @Configuration yalniz config/ altinda. */
+    @Test
+    void configurationsLiveInConfigPackage() {
+        classes().that().areAnnotatedWith(Configuration.class)
+                .should().resideInAPackage(ROOT + ".config..")
+                .check(classes);
+    }
+
+    /**
+     * core → baska core yasak. Yalniz kendi paketi, platform starter'lari, *-api modulleri ve
+     * ucuncu taraf kutuphaneler. (Maven enforcer bannedDependencies bunun birincil kontroludur.)
+     */
+    @Test
+    void noOtherCoreDependencies() {
+        classes().that().resideInAPackage(ROOT + "..")
+                .should().onlyDependOnClassesThat().resideInAnyPackage(
+                        ROOT + "..",
+                        "com.acme.platform..",
+                        "com.acme..api..",
+                        "java..", "javax..", "jakarta..", "org..", "com.fasterxml..", "lombok..",
+                        "io..", "net..", "reactor..", "kotlin..")
+                .because("baska bir *-core'a bagimlilik modul sinirini ihlal eder")
+                .check(classes);
+    }
+
+    /** Paket dongusu yok. */
+    @Test
+    void noPackageCycles() {
+        slices().matching(ROOT + ".(*)..").should().beFreeOfCycles().check(classes);
+    }
+
+    /** Her @RequestBody parametresi @Valid tasir. */
+    @Test
+    void requestBodiesAreValidated() {
+        ArchRule rule = methods()
+                .that().areDeclaredInClassesThat().areAnnotatedWith(RestController.class)
+                .should(haveValidOnEveryRequestBodyParameter());
+        rule.check(classes);
+    }
+
+    private static ArchCondition<JavaMethod> haveValidOnEveryRequestBodyParameter() {
+        return new ArchCondition<>("have @Valid on every @RequestBody parameter") {
+            @Override
+            public void check(JavaMethod method, ConditionEvents events) {
+                method.getParameters().forEach(p -> {
+                    boolean body = p.isAnnotatedWith(RequestBody.class);
+                    boolean valid = p.isAnnotatedWith(Valid.class);
+                    if (body && !valid) {
+                        events.add(SimpleConditionEvent.violated(method,
+                                method.getFullName() + " parametresi @RequestBody ama @Valid degil"));
+                    }
+                });
+            }
+        };
+    }
+
+    /** Entity'ler servisler arasi contract olamaz: api paketinden entity'ye referans yok. */
+    @Test
+    void apiDoesNotSeeEntities() {
+        JavaClasses api = new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages("com.acme");
+        noClasses().that().resideInAPackage("com.acme..api..")
+                .should().dependOnClassesThat().resideInAPackage(ROOT + ".entity..")
+                .check(api);
+    }
+}
+```
+
+---
+
+## `skeleton-example/order-core/src/test/java/com/acme/order/ConfigDriftTest.java`
+
+```java
+package com.acme.order;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
+import org.springframework.core.io.FileSystemResource;
+
+/**
+ * Local yml ile deploy config'i arasindaki drift'i yakalar:
+ *  1) Guvenlik ve baglanti key'leri (internal-access, rate-limit scope'lari, client base-url'leri)
+ *     application-local.yml ve config/<svc>.yml'de AYNI kumeyi olusturmali.
+ *  2) config/*.yml icinde kullanilan her ${ENV_VAR} placeholder'i deploy env sablonunda tanimli olmali.
+ *  3) Secret key'lerinde literal fallback (${X:deger}) bulunmamali.
+ *
+ * Yollar modul kokune goredir; deploy sablonu repo kokundedir (../../deploy/prod.env.example).
+ * Referans: mikroservis-mimari-referans.md Bolum 15.2, 19.5.
+ */
+class ConfigDriftTest {
+
+    private static final Path LOCAL = Path.of("src/main/resources/application-local.yml");
+    private static final Path SERVICE = Path.of("src/main/resources/config/order.yml");
+    /** Repo kokundeki deploy sablonu; kok, `deploy/` klasoru bulunana kadar yukari cikilarak bulunur. */
+    private static final Path ENV_TEMPLATE = repoRoot().resolve("deploy/prod.env.example");
+
+    /**
+     * Iki dosyada da ayni KEY kumesini olusturmasi gereken prefix'ler (degerler ortama gore farkli olabilir:
+     * localhost vs ${ENV}). Ornek: bir rate-limit scope'u local'de tanimli ama deploy'da unutulmus → drift.
+     */
+    private static final Set<String> MIRRORED_KEY_PREFIXES = Set.of(
+            "service-jwt.internal-access",
+            "rate-limit.rules",
+            "spring.http.serviceclient",
+            "services.");
+
+    /** Key + DEGER olarak birebir ayni olmasi gereken guvenlik prefix'leri (allowlist path ve aktorleri). */
+    private static final Set<String> MIRRORED_VALUE_PREFIXES = Set.of("service-jwt.internal-access");
+
+    /** Fallback yasak olan secret key parcalari. */
+    private static final Pattern SECRET_KEY = Pattern.compile("(secret|password|pass|token|key|credential)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{([A-Z0-9_]+)(:[^}]*)?}");
+
+    @Test
+    void mirroredKeysAreIdenticalBetweenLocalAndDeployConfig() {
+        Properties local = load(LOCAL);
+        Properties service = load(SERVICE);
+        for (String prefix : MIRRORED_KEY_PREFIXES) {
+            boolean withValues = MIRRORED_VALUE_PREFIXES.contains(prefix);
+            Set<String> l = keysWithPrefix(local, prefix, withValues);
+            Set<String> s = keysWithPrefix(service, prefix, withValues);
+            assertThat(l).as("prefix '%s': application-local.yml ↔ config/order.yml %s kumesi",
+                            prefix, withValues ? "key+deger" : "key")
+                    .containsExactlyInAnyOrderElementsOf(s);
+        }
+    }
+
+    @Test
+    void everyPlaceholderInServiceConfigExistsInDeployEnvTemplate() throws IOException {
+        Set<String> declared = Files.readAllLines(ENV_TEMPLATE).stream()
+                .map(String::trim)
+                .filter(l -> !l.isEmpty() && !l.startsWith("#") && l.contains("="))
+                .map(l -> l.substring(0, l.indexOf('=')).trim())
+                .collect(Collectors.toSet());
+        Set<String> used = placeholders(Files.readString(SERVICE));
+        // /run/secrets ile gelen degerler env degil, config tree'dir; onlar env sablonunda aranmaz.
+        used.removeIf(v -> v.startsWith("SECRET_"));
+        assertThat(declared).as("deploy env sablonunda eksik degiskenler").containsAll(used);
+    }
+
+    @Test
+    void secretKeysHaveNoLiteralFallback() {
+        Properties service = load(SERVICE);
+        Set<String> offenders = new TreeSet<>();
+        for (String key : keys(service)) {
+            if (!SECRET_KEY.matcher(key).find()) continue;
+            Matcher m = PLACEHOLDER.matcher(String.valueOf(service.get(key)));
+            while (m.find()) {
+                if (m.group(2) != null) offenders.add(key + " = " + m.group());
+            }
+        }
+        assertThat(offenders).as("secret key'lerinde literal fallback yasak (fail-fast)").isEmpty();
+    }
+
+    private static Properties load(Path p) {
+        YamlPropertiesFactoryBean f = new YamlPropertiesFactoryBean();
+        f.setResources(new FileSystemResource(p));
+        Properties props = f.getObject();
+        assertThat(props).as("yml okunamadi: %s", p).isNotNull();
+        return props;
+    }
+
+    private static Set<String> keysWithPrefix(Properties props, String prefix, boolean withValues) {
+        return keys(props).stream()
+                .filter(k -> k.startsWith(prefix))
+                // internal-access[0].path gibi listeler icin sirayi degil kumeyi karsilastir
+                .map(k -> withValues ? k + "=" + String.valueOf(props.get(k)).replaceAll("\\s+", "") : k)
+                .collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    /**
+     * TUZAK: Properties.stringPropertyNames() yalniz String degerli girdileri doner; YamlPropertiesFactoryBean
+     * sayisal degerleri (limit: 60) Integer olarak koydugu icin o key'ler sessizce kaybolur ve drift testi
+     * hic bir sey yakalamaz. Bu yuzden keySet() uzerinden gidilir.
+     */
+    private static Set<String> keys(Properties props) {
+        return props.keySet().stream().map(String::valueOf).collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    /** Modul dizininden yukari cikarak `deploy/` klasorunu (repo koku) bulur; yoksa test aciklayici hata verir. */
+    private static Path repoRoot() {
+        Path dir = Path.of("").toAbsolutePath();
+        while (dir != null) {
+            if (Files.isDirectory(dir.resolve("deploy"))) return dir;
+            dir = dir.getParent();
+        }
+        throw new IllegalStateException("repo kokunde deploy/ klasoru bulunamadi; ENV_TEMPLATE yolunu ayarla");
+    }
+
+    private static Set<String> placeholders(String text) {
+        Set<String> out = new TreeSet<>();
+        Matcher m = PLACEHOLDER.matcher(text);
+        while (m.find()) out.add(m.group(1));
+        return out;
+    }
+}
+```
+
+---
+
+## `skeleton-example/order-core/src/test/java/com/acme/order/ErrorCodeUniquenessTest.java`
+
+```java
+package com.acme.order;
+import com.acme.platform.core.ErrorCode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.importer.ImportOption;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tum servislerin ErrorCode enum'lari global olarak tekil ve kendi bloklarinda olmali.
+ * Bu test, tum core modulleri classpath'ine alan bir "aggregate" test modulunde (veya platform-core'da
+ * test-jar bagimliliklariyla) calisir. Bloklar README'deki tabloyla ayni tutulur.
+ *
+ * Referans: mikroservis-mimari-referans.md Bolum 7.2.
+ */
+class ErrorCodeUniquenessTest {
+
+    /** service → [min, max]. README'deki hata kodu bloklariyla birebir. */
+    private static final Map<String, int[]> BLOCKS = Map.of(
+            "validation", new int[]{90000, 90099},
+            "security", new int[]{90100, 90199},
+            "system", new int[]{99998, 99999},
+            "auth", new int[]{10000, 10999},
+            "order", new int[]{11000, 11999},
+            "notification", new int[]{16000, 16999},
+            "backoffice", new int[]{17000, 17999});
+
+    @Test
+    void allErrorCodesAreGloballyUniqueAndInsideTheirBlock() {
+        JavaClasses classes = new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages("com.acme");
+
+        Map<Integer, String> seen = new HashMap<>();
+        List<String> problems = new java.util.ArrayList<>();
+
+        for (JavaClass jc : classes) {
+            if (!jc.isEnum() || !jc.isAssignableTo(ErrorCode.class)) continue;
+            Class<?> enumClass = jc.reflect();
+            for (Object constant : enumClass.getEnumConstants()) {
+                ErrorCode code = (ErrorCode) constant;
+                String owner = enumClass.getName() + "." + ((Enum<?>) constant).name();
+                String prev = seen.putIfAbsent(code.getCode(), owner);
+                if (prev != null) {
+                    problems.add("cakisma: " + code.getCode() + " → " + prev + " ve " + owner);
+                }
+                int[] block = BLOCKS.get(code.getService());
+                if (block == null) {
+                    problems.add("bilinmeyen service: " + code.getService() + " (" + owner + ")");
+                } else if (code.getCode() < block[0] || code.getCode() > block[1]) {
+                    problems.add("blok disi: " + owner + " = " + code.getCode()
+                            + " (beklenen " + block[0] + "–" + block[1] + ")");
+                }
+                if (code.getMessage() == null || code.getMessage().isBlank() || !code.getMessage().endsWith(".")) {
+                    problems.add("mesaj formati: " + owner + " → Ingilizce, nokta ile biten kisa cumle olmali");
+                }
+            }
+        }
+        assertThat(problems).as("ErrorCode kurallari").isEmpty();
+        assertThat(seen).isNotEmpty();
+    }
+}
+```
+
+---
+
+## `skeleton-example/platform-core/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>platform-core</artifactId>
+  <dependencies><dependency><groupId>org.springframework</groupId><artifactId>spring-web</artifactId></dependency></dependencies>
+</project>
+```
+
+---
+
+## `skeleton-example/platform-core/src/main/java/com/acme/platform/core/ErrorCode.java`
+
+```java
+package com.acme.platform.core;
+import org.springframework.http.HttpStatus;
+public interface ErrorCode { int getCode(); String getMessage(); String getService(); HttpStatus getHttpStatus(); }
+```
+
+---
+
+## `skeleton-example/platform-core/src/main/java/com/acme/platform/core/ServiceException.java`
+
+```java
+package com.acme.platform.core;
+public class ServiceException extends RuntimeException {
+    private final ErrorCode errorCode;
+    public ServiceException(ErrorCode c) { super(c.getMessage()); this.errorCode = c; }
+    public ErrorCode getErrorCode() { return errorCode; }
+}
+```
+
+---
+
+## `skeleton-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version><packaging>pom</packaging>
+  <properties>
+    <revision>0.1.0-SNAPSHOT</revision>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <spring-boot.version>4.1.1</spring-boot.version>
+    <archunit.version>1.5.1</archunit.version>
+  </properties>
+  <modules><module>platform-core</module><module>order-api</module><module>order-core</module></modules>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-dependencies</artifactId><version>${spring-boot.version}</version><type>pom</type><scope>import</scope></dependency>
+    <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
+  </dependencies></dependencyManagement>
+  <build>
+    <plugins>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-enforcer-plugin</artifactId><version>3.5.0</version>
+        <executions><execution><id>enforce</id><goals><goal>enforce</goal></goals><configuration><rules>
+          <requireJavaVersion><version>[21,)</version></requireJavaVersion>
+          <requireMavenVersion><version>[3.9,)</version></requireMavenVersion>
+          <!-- core → core yasak: *-core artefaktlari yalniz kendi modulunde bulunur -->
+          <bannedDependencies><excludes><exclude>com.acme:*-core</exclude></excludes><includes><include>com.acme:platform-core</include></includes></bannedDependencies>
+        </rules></configuration></execution></executions></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.3</version></plugin>
+    </plugins>
+  </build>
+</project>
 ```

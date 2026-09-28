@@ -39,11 +39,16 @@ blueprint/
 ├── scripts/
 │   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım
 │   └── flyway-immutability.test.js   # node --test
-└── tests/                            # Makine zorlamalı kurallar için Java test şablonları
-    ├── ArchitectureRulesTest.java    # ArchUnit: controller→repository yok, core→core yok, config/ dışı @Configuration yok, @Valid
-    ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik
-    └── ConfigDriftTest.java          # application-local.yml ↔ deploy config drift (allowlist, rate-limit, services.*)
+├── tests/                            # Makine zorlamalı kurallar için Java test şablonları (skeleton-example'da doğrulandı)
+│   ├── ArchitectureRulesTest.java    # ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
+│   ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik + blok + mesaj formatı
+│   └── ConfigDriftTest.java          # application-local.yml ↔ deploy config drift; ${ENV} ↔ env şablonu; secret fallback yasağı
+└── skeleton-example/                 # Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı ihlal yakalandı (README'sine bak)
+    ├── pom.xml                       # BOM, ${revision}, enforcer (Java/Maven sürümü + core→core bannedDependencies)
+    ├── platform-core/  order-api/  order-core/  deploy/prod.env.example
 ```
+
+**Doğrulanmış olanlar:** `scripts/flyway-immutability.js` (12 test), hook'lar (örnek stdin ile kuru çalıştırma), `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, negatif ve pozitif). Skill'ler metin olarak tamamlandı; gerçek bir PR üzerinde bir Claude Code oturumunda henüz koşturulmadı — ilk kullanımda karar formatlarının uyumu gözden geçirilir.
 
 ## Kurulum
 
