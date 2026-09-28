@@ -1,0 +1,101 @@
+# AGENTS.md — <proje> için AI Ajan Kuralları
+
+Bu dosya tüm AI kodlama ajanları (Claude Code, Codex, Copilot, Cursor vb.) için **kanonik giriş noktasıdır**. `CLAUDE.md` ve `.github/copilot-instructions.md` yalnız buraya yönlendirir. Kurallar burada **tekrar edilmez**; ilgili dosyaya link verilir.
+
+## 1. Okuma Sırası
+
+Önce bu dosya. Sonra göreve göre:
+
+| Görev | Aç |
+|---|---|
+| Her görev | `docs/ai/repo-context.md` (modül haritası, portlar, sıcak yol tablosu) |
+| Güvenlik, kimlik, secret, log, dosya, privacy | `docs/ai/security-rules.md` |
+| Büyük repo taraması gerekiyorsa | `docs/ai/context-boundaries.md` (neyi açma, neyi şartlı aç) |
+| Değişiklik bitince | `docs/ai/review-checklist.md` (hangi skill'ler çalışacak) |
+| Servisler arası yazma, outbox, event, saga | `docs/ai/operation-consistency.md` |
+| Mimari karar (yeni servis, yeni altyapı bileşeni, veri ayrımı) | `docs/adr/` (mevcut ADR'leri oku, yenisini şablondan aç) |
+| Mimari referans (nasıl inşa edilir) | `docs/mikroservis-mimari-referans.md` — yalnız ilgili bölüm |
+
+## 2. Temel Kurallar
+
+- Gereksiz geniş tarama yapma; `docs/ai/context-boundaries.md`'deki sınırlara uy.
+- Doğrulanmamış bilgiyi kesin yazma. Dosya yolu, key, env, path, tablo, schema, secret, paket veya servis adı **uydurma**. Doğrulayamıyorsan "**net kanıt bulunamadı**" yaz ve sor.
+- Mevcut bir pattern varsa onu kullan; yoksa yenisini icat etmeden önce sor.
+- Secret, token, parola, private key değerlerini hiçbir yeni içeriğe (kod, doküman, test, log, PR açıklaması) taşıma. Yalnız isimleri yaz.
+- Aynı kuralı iki yerde yazma; belgeye link ver.
+- Her değişiklikte ownership kontrolü: kimlik her zaman doğrulanmış bağlamdan (`@CurrentAccount`), path/body'den değil.
+- Ana README kökteki `README.md`'dir; servis kimlik tablosu ve hata kodu blokları oradadır.
+
+## 3. Kanıt ve Varsayım Disiplini
+
+- Varsayımla kod, config, migration, endpoint veya güvenlik kuralı üretme.
+- Kritik bir belirsizlik varsa (güvenlik, veri kaybı, ödeme, yasal) kod yazmadan önce sor.
+- Bir iddiayı yazarken dayandığı dosyayı/satırı belirt.
+
+## 4. Modül Sınırı ve DB Erişimi
+
+- Hiçbir modül başka modülün tablosuna, schema'sına, repository'sine, entity'sine veya migration'ına erişmez. **Yönetim (backoffice) servisi de istisna değildir.**
+- Cross-schema FK ve join yasaktır. Başka servisin kimliği düz UUID kolon olarak tutulur.
+- Başka servisin verisi gerekiyorsa: public API/contract, event ile replike edilen read-model (`readmodel/` paketi) veya JWT claim. Böyle bir ihtiyaç doğarsa **kod yazmadan önce** `proj-architecture-boundary-review` skill'ini çalıştır ve sor.
+- DB rolleri şema bazlıdır; kod bu sınırı aşmaya çalışırsa çalışma zamanında hata alır. Bu hatayı "GRANT ekleyerek" çözme.
+
+## 5. Sıcak Yol Kuralı
+
+- Kullanıcıya latency olarak yansıyan bir istekte **en fazla bir** uzak senkron çağrı olur, o da yazma/rezervasyon türünden. Okuma amaçlı senkron çağrı eklemek yasaktır; read-model veya JWT claim kullan.
+- Yeni bir uzak çağrı ekliyorsan `docs/ai/repo-context.md`'deki sıcak yol tablosunu güncelle ve `proj-resilience-review` skill'ini çalıştır.
+- Her HTTP client çağrısı timeout + circuit breaker + bulkhead altındadır; bunlar olmadan client ekleme.
+
+## 6. Migration Değişmezliği
+
+- Base branch'e (`develop`/`release`/`main`) girmiş `V*.sql` dosyasına dokunulmaz (değiştirme, silme, yeniden adlandırma yok). Düzeltme yeni `V<sonraki>` ile yapılır.
+- Migration'a her dokunuştan sonra: `node scripts/flyway-immutability.js check --base origin/<hedef-branch>`.
+- Hook bunu yazma anında engeller; engellenirse kuralı aşmaya çalışma, yeni dosya aç.
+
+## 7. API / Core Contract
+
+- `<domain>-api` yalnız DTO, enum, sabit ve event payload'ı taşır; hiçbir `*-core`'a bağımlı olamaz.
+- `<domain>-core` başka bir `*-core`'a bağımlı olamaz (enforcer bunu kırar).
+- Entity dışarı açılmaz; DTO kopyalanmaz; hedefin api modülü import edilir.
+- Contract değişikliği geriye uyumluluk açısından mobil, panel ve internal çağıranlar için değerlendirilir; `proj-api-contract-review` çalıştırılır.
+
+## 8. Event ve Outbox
+
+- Başka servisin verisini değiştirmek için komut gönderilmez; kendi domain event'in yayınlanır (`outbox_event`, `kind=EVENT`).
+- Yayın her zaman outbox'tan; doğrudan `convertAndSend` yasak.
+- Yeni event/komut için `proj-event-design-review` çalıştırılır; tüketici önce deploy edilir.
+
+## 9. Environment ve Config Etkisi
+
+- Yeni property, URL, port, audience, issuer, rate limit scope'u, bağlantı ayarı, internal uç veya feature flag eklendiğinde şu yüzeyler **birlikte** güncellenir: deploy `env_file`/secrets, `config/<svc>.yml`, `application-local.yml`. Dockerfile yalnız build/runtime davranışı değişiyorsa.
+- Dockerfile'a config için `ENV` eklenmez. Secret için `${ENV:literal}` fallback yazılmaz.
+- Admin'in değiştirebileceği iş kuralı değeri config'e değil parametre kataloğuna gider.
+- `proj-environment-impact-review` çalıştırılır.
+
+## 10. Multi-Instance
+
+- Her servisin birden fazla instance ile çalıştığı varsayılır. `@Scheduled`/poller/worker `FOR UPDATE SKIP LOCKED` + lease + `claim_token` ile claim eder.
+- Check-then-act güvenli değildir; unique/partial unique index, koşullu update veya lock kullan.
+- Instance'lar arası state JVM'de tutulmaz. Bilinçli single-instance davranış yorumla gerekçelendirilir.
+
+## 11. Loglama
+
+- Throw öncesi tek structured log satırı: `"<Olay> rejected: code=X reason=Y"`. Kullanıcı kaynaklı reddetme WARN, altyapı/beklenmeyen ERROR.
+- Ham exception mesajı, body, token, OTP, telefon, e-posta, plaka, konum, IP, şifreli içerik loglanmaz. `docs/ai/security-rules.md`.
+
+## 12. Kod Açıklama Disiplini
+
+- Yorumlar kısa, ekibin dilinde (Türkçe, ASCII), "**neden** var" anlatır. Changelog tarzı yorum ("şu güncellendi") yasak.
+- Business rule, güvenlik, modül sınırı, fallback, rate limit, ownership, migration etkisi ve non-obvious kararlar için yorum şart. Kendini açıklayan koda yorum yazılmaz.
+
+## 13. Çıktı Disiplini
+
+- Kısa, kanıta dayalı, görev odaklı. Güvenlik ve privacy riski açıkça yazılır. Belirsiz alan gizlenmez.
+- Push öncesi `docs/ai/review-checklist.md`'deki skill'ler çalıştırılır; PR şablonundaki "Review skill'leri" bölümü doldurulur.
+
+## 14. Bu Belgede Özellikle Taşınmayanlar
+
+Secret değerleri, default admin parolası, üretim host adları, CI token'ları. Bunlar deploy secret'larında yaşar; dokümanlarda yalnız **isimleri** geçer.
+
+## 15. Net Kanıt Bulunamayan Alanlar
+
+Her `docs/ai/*` dosyasının sonunda bu başlık bulunur; ajan doğrulayamadığı iddiaları buraya ekler, uydurmaz.

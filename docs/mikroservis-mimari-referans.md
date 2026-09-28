@@ -17,7 +17,9 @@
 >
 > **Sürüm notu:** Sürüm numaraları ve destek tarihleri **2026-09** itibarıyla geçerlidir. Yeni projeye başlarken Bölüm 25'teki kaynaklardan güncel OSS destek durumu kontrol edilir; destek dışı bir sürümle başlanmaz.
 >
-> **Bu revizyon (v2):** Gerçek bir projenin (9 servis, tek host, tek PostgreSQL) mimari değerlendirmesinden çıkan dersler işlendi: mimari şekil kararı (Bölüm 1.1), sıcak yolda senkron zincir yasağı ve read-model replikasyonu (Bölüm 4.6), domain event akışı ve Kafka karar kriterleri (Bölüm 12), asimetrik servis kimliği (Bölüm 9.2), secret yönetimi (Bölüm 15.3), yedekleme/HA (Bölüm 10.5), dayanıklılık (Bölüm 4.7), Alloy/structured logging/SLO (Bölüm 8), ölçek eşikleri (Bölüm 24), sürüm takibi (Bölüm 25) ve proje başlangıç checklist'i (Bölüm 21.0).
+> **Bu revizyon (v2.1):** Gerçek bir projenin (9 servis, tek host, tek PostgreSQL) mimari değerlendirmesinden çıkan dersler işlendi: mimari şekil kararı (Bölüm 1.1), uygulama profilleri MVP/Büyüme/Ölçek (Bölüm 1.3), sıcak yolda senkron zincir yasağı ve read-model replikasyonu (Bölüm 4.6), dayanıklılık (Bölüm 4.7), domain event akışı ve Kafka karar kriterleri (Bölüm 12), asimetrik servis kimliği (Bölüm 9.2), güvenlik süreci (Bölüm 9.10), secret yönetimi (Bölüm 15.3), yedekleme/HA (Bölüm 10.5), Alloy/structured logging/SLO ve runbook/olay yönetimi (Bölüm 8), ölçek eşikleri (Bölüm 24), sürüm takibi (Bölüm 25), proje başlangıç checklist'i (Bölüm 21.0) ve **kopyalanabilir `blueprint/` klasörü** (AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, ArchUnit/ErrorCode/config-drift testleri — Bölüm 19).
+>
+> **Kapsam dışı (bilinçli):** çok bölgeli (multi-region) aktif-aktif mimari, platform/SRE ekibi olan 10+ ekipli organizasyonlar, service mesh, Spring dışı ekosistemler (desenler taşınır, şablonlar taşınmaz), veri ambarı/ML platformu tasarımı. Bunlar için Bölüm 24'teki eşikler tutunca ayrı ADR gerekir.
 
 ---
 
@@ -48,6 +50,8 @@
 23. [Kod Şablonları](#23-kod-şablonları)
 24. [Ölçek Eşikleri ve Evrim Yolu](#24-ölçek-eşikleri-ve-evrim-yolu)
 25. [Sürüm ve Destek Takibi](#25-sürüm-ve-destek-takibi)
+
+Ek dosyalar: `blueprint/` (kopyalanabilir AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, test şablonları) · `docs/mikroservis-blueprint-dosyalari.md` (aynı içerik tek dosyada).
 
 ---
 
@@ -99,6 +103,26 @@ Kullanıcıya doğrudan latency olarak yansıyan her istek ("sıcak yol") için:
 - Her uzak çağrının timeout'u, üst istek bütçesinin altındadır; circuit breaker açıkken hızlı ve tanımlı bir hata döner.
 
 Availability aritmetiği: %99,9'luk 5 bileşene bağlı bir istek en iyi ihtimalle ≈ %99,5 (yılda ~44 saat kesinti); 2 bileşene bağlıysa ≈ %99,8. p99 latency ardışık çağrıların p99'larının toplamına yakınsar.
+
+### 1.3 Uygulama Profilleri: MVP / Büyüme / Ölçek
+
+Bu doküman kapsamlıdır; hepsi ilk gün yapılmaz. Üç profil, hangi pratiğin ne zaman **zorunlu** olduğunu söyler. Profil kararı ADR'ye yazılır; bir sonraki profile geçiş Bölüm 24 eşikleriyle tetiklenir.
+
+| Alan | **P0 — MVP** (1–3 kişi, ilk kullanıcılar, tek host) | **P1 — Büyüme** (3–8 kişi, gelir var, düzenleyici görünürlük) | **P2 — Ölçek** (çok ekip / çok host) |
+|---|---|---|---|
+| Şekil | Modüler monolit (Spring Modulith) veya hibrit | Hibrit; farklı ölçek profilli modüller ayrı servis | Mikroservis; read-model'lerle tam asenkron |
+| Sınırlar | `*-api`/`*-core` ayrımı, ArchUnit, enforcer, şema+rol/modül — **ilk gün** | + read-model'ler, sıcak yol tablosu | + kontrat versiyonlama, polyrepo değerlendirmesi |
+| Veri | Tek Postgres, roller, **yedek + restore provası**, UUIDv7, retention politikası | + PgBouncer, managed/standby, partition'lı büyük tablolar, exporter'lar | + domain bazlı instance ayrımı, wide-column/arama motoru eşiğe göre |
+| Mesajlaşma | Generic outbox + RabbitMQ QQ; komut/olay ayrımı ilk günden (envelope ucuz) | + `domain.events` tüketicileri (analytics sink, read-model), streams | + Kafka/Redpanda eşiğe göre, Debezium |
+| Güvenlik | Asimetrik service JWT (monolitte gerek yok), secret'lar `/run/secrets`, gitleaks, mock guard'ları, rate limit, `sv` | + passkey admin 2FA, attestation, SOPS, silme saga'sı, DPIA, görsel pipeline | + mTLS/SPIRE, OpenBao, pentest döngüsü |
+| Dayanıklılık | Timeout'lar + circuit breaker (config, 1 gün) | + bulkhead, bounded-staleness, yük testi, kapasite planı | + tail sampling, çok host rollout |
+| Gözlem | Structured log → Alloy → Loki, Prometheus, **Alertmanager + kanal**, 5 temel alarm | + SLO/burn-rate, tracing tail sampling, runbook'lar, on-call | + SLO bazlı kapasite, çoklu ortam panoları |
+| Build/deploy | CI'da image → registry → digest; compose; `restart: always`; staging | + cosign/SBOM, `docker-rollout`, affected-module CI, Renovate | + k3s/Swarm/managed k8s eşiğe göre |
+| Test | Unit + binding + Testcontainers (CI'da), ArchUnit, ErrorCode tekilliği | + config drift, dayanıklılık, yük testi, OpenAPI diff + client generation | + contract testleri (polyrepo ise) |
+| AI yönetişimi | `AGENTS.md`, `docs/ai/*`, immutability hook + CI, 4 temel skill (code, security, migration, test) | + tüm 12 skill, review gate, PR şablonu | + skill'lerin CI'da otomatik koşması |
+| Süre tahmini | Altyapı: 2–3 sprint | Kademeli, çeyreklik | Ürün/ekip yapısına bağlı |
+
+**Kural:** P0'da bile pazarlık edilmeyenler: yedek + restore provası, alarm kanalı, secret hijyeni, DB rolleri, CI'da gerçek DB testleri, modül sınırı testleri, komut/olay ayrımı. Bunlar sonradan eklenmesi en pahalı olanlardır.
 
 ```
                     ┌──────────────── İnternet ────────────────┐
@@ -820,6 +844,30 @@ Tüm gözlem portları yalnız `127.0.0.1`'e açılır; erişim SSH tüneli veya
 - Datasource `uid`'lerini sabitlememek.
 - %100 head sampling'i trafik büyüdükten sonra da sürdürmek (Tempo ingester belleği ve depolama aynı host'ta).
 
+### 8.8 Runbook, On-call ve Olay Yönetimi
+
+Alarm, cevabı olmayan bir sorudur. Her alarm kuralının bir **runbook** sayfası vardır (`docs/runbooks/<alarm-adı>.md`) ve alarm mesajı ona link verir.
+
+**Runbook şablonu:**
+```
+# <Alarm adı>
+Ne anlama gelir · Kullanıcı etkisi · İlk 5 dakika (bak: pano linki, log sorgusu, komut) ·
+Olası nedenler ve düzeltme (sıralı) · Ne zaman eskalasyon · Kalıcı düzeltme için ADR/issue linki
+```
+
+**Asgari runbook seti (P0):** servis DOWN / restart-loop · disk doluyor · PostgreSQL bağlantı tükenmesi · WAL arşiv gecikmesi · Redis bellek/eviction · RabbitMQ DLQ > 0 · `outbox_oldest_pending_age_seconds` > lease · circuit breaker açık kaldı · deploy geri alma · yedekten restore.
+
+**On-call:** Tek kişilik ekipte bile "kim bakar, hangi kanaldan, hangi saatlerde" yazılıdır. Alertmanager route'ları önem derecesine göre (sayfa / ticket) ayrılır; gece yalnız kullanıcı-etkili alarmlar sayfa atar.
+
+**Olay (incident) süreci:**
+1. Tespit → alarm veya kullanıcı bildirimi; olay kanalı açılır, tek koordinatör.
+2. Azaltma (mitigate) önce, kök neden sonra: geri alma (önceki digest), circuit'i elle açma, feature flag kapatma, parametre ile limit düşürme.
+3. İletişim: kullanıcıya görünür etki varsa durum notu (şablon hazır).
+4. **Postmortem** (suçlamasız, 5 iş günü içinde): zaman çizelgesi, etki, kök neden(ler), neyin işe yaradığı, aksiyonlar (sahipli, tarihli). Aksiyonlar Bölüm 24 eşiklerini veya bu dokümanı güncelleyebilir.
+5. Tekrarlayan olay = eksik alarm/test/runbook; postmortem aksiyonu bunu kapatır.
+
+**Kural:** Runbook'suz alarm ve postmortem'siz olay kabul edilmez; release-readiness skill'i bunları kontrol eder.
+
 ---
 
 ## 9. Güvenlik Mimarisi
@@ -1078,6 +1126,25 @@ istemci ─presigned PUT─► private QUARANTINE bucket ─► worker: magic by
 - **Kaçın:** public bucket'a doğrudan yükleme. Ham telefon fotoğrafı EXIF GPS ile kullanıcının ev adresini sızdırır; public URL bir kez sızınca süresiz çalışır, kullanıcı silse de CDN'de kalır, kazıma ve ters görsel arama ile kimlik tespiti kolaylaşır.
 - Yükleme sonrası HEAD, içerik ve ETag doğrulaması yapılır. Temp → final taşıma yapılır, yetim dosyalar temizlenir (cron + dağıtık kilit).
 - Kullanıcı üretimi içerik barındıran uygulamalar için mağaza gereksinimleri (Apple Guideline 1.2: filtre, zamanında yanıtlanan raporlama, engelleme, iletişim) ve bölgesel yükümlülükler (NCMEC raporlama, EU DSA notice-and-action, UK OSA) tasarımda hesaba katılır.
+
+### 9.10 Güvenlik Süreci: Tehdit Modelleme, Tarama, Test
+
+Güvenlik bir review skill'i değil, süreçtir. Asgari döngü:
+
+| Ne | Ne zaman | Nasıl |
+|---|---|---|
+| **Tehdit modeli** (STRIDE-lite) | Her yeni özellik/uç/entegrasyon tasarımında; yılda bir sistem geneli | 4 soru: ne inşa ediyoruz (veri akış diyagramı: güven sınırları), ne yanlış gidebilir (STRIDE: spoofing, tampering, repudiation, info disclosure, DoS, elevation), ne yapacağız (kontrol → bu dokümandaki bölüm), yeterince iyi mi. Çıktı ADR veya `docs/threat-model/<özellik>.md`. |
+| Bağımlılık taraması | Her PR + haftalık | Dependabot/Renovate + GitHub Advisory/OSV; OWASP dependency-check veya Trivy (`trivy fs`, `trivy image`); CRITICAL/HIGH bulgu PR gate'i. |
+| Image taraması | Her build | Trivy/Grype; base image güncel; non-root doğrulaması. |
+| Secret taraması | Pre-commit + CI + geçmiş | gitleaks (`--log-opts` ile tüm geçmiş). |
+| Statik analiz | Her PR | ErrorProne/Checkstyle (özel kurallar: throw öncesi log, literal fallback yok), SpotBugs find-sec-bugs, Semgrep (Spring kural seti). |
+| DAST / API testi | Release öncesi | OWASP ZAP API scan (OpenAPI çıktısından); auth'suz erişim, IDOR, rate limit testleri otomasyonda. |
+| Pentest | İlk prod + yılda bir + büyük özellik (ödeme, mesajlaşma, kimlik) sonrası | Dış ekip; kapsam: mobil API, panel, gateway, servisler arası kimlik. Bulgular issue + ADR. |
+| Erişim gözden geçirme | Çeyreklik | Admin rolleri, DB rolleri, CI secret'ları, bucket politikaları, JWKS anahtarları; kullanılmayanlar kaldırılır. |
+| Anahtar/secret rotasyonu | JWT anahtarları 6 ay (`kid` ile kesintisiz), DB parolaları yıllık, sızıntı şüphesinde anında | Prosedür `docs/runbooks/secret-rotation.md`. |
+| Güvenlik olayı | Her olayda | Bölüm 8.8 süreci + yasal bildirim süreleri (KVKK: Kurul'a 72 saat içinde ihlal bildirimi; GDPR: 72 saat) runbook'ta. |
+
+**Kural:** Kimlik, ödeme, mesajlaşma, dosya yükleme ve moderasyon alanlarındaki değişiklikler tehdit modeli olmadan tasarlanmaz; `proj-security-review` bunu ister.
 
 ---
 
@@ -1828,19 +1895,29 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
 
 ### 19.1 Yapı
 
+Bu bölümdeki her dosyanın **kopyalanabilir gerçek hali** repodaki `blueprint/` klasöründedir (`blueprint/README.md` kurulum adımlarını verir). Aynı içerik, gizli klasörler (`.agents`, `.claude`, `.github`) uygulamada görünmeyebileceği için tek dosya olarak `docs/mikroservis-blueprint-dosyalari.md`'de de bulunur.
+
 ```
-AGENTS.md                          ← kanonik giriş: okuma sırası + temel kurallar (tüm ajanlar)
+AGENTS.md                          ← kanonik giriş: okuma sırası + 15 temel kural bölümü (tüm ajanlar)
 CLAUDE.md / .github/copilot-instructions.md  ← yalnız "AGENTS.md'yi oku" (kural tekrarı yok, boş da değil)
+.github/PULL_REQUEST_TEMPLATE.md   ← etki kutucukları + çalıştırılan skill'ler ve kararları tablosu
 docs/ai/
-├── repo-context.md                ← modül haritası, portlar, stack, yüksek sinyalli dosyalar
-├── security-rules.md              ← secret, log, JWT, internal uç, rate limit, privacy kuralları
-├── context-boundaries.md          ← token ekonomisi: hariç klasörler, şartlı açılacak yüzeyler
-├── review-checklist.md            ← değişiklik sonrası kontrol listesi (skill'lere link)
-└── operation-consistency.md       ← servisler arası tutarlılık standardı
-.agents/skills/<skill>/SKILL.md    ← tek kaynak (+ template.md, references/*.md)
-.claude/skills/                    ← symlink / senkron script ile üretilir
-.claude/hooks/*.js  .claude/settings.json
-scripts/<kural>.js (+ test)        ← makine zorlamalı kuralların tek kaynağı
+├── repo-context.md                ← modül haritası, kimlik tablosu, SICAK YOL tablosu, yüksek sinyalli dosyalar
+├── security-rules.md              ← secret, kimlik, OTP/abuse, log, privacy, dosya, DB, tedarik zinciri (tek kaynak)
+├── context-boundaries.md          ← token ekonomisi: hariç klasörler, görev→yüzey tablosu
+├── review-checklist.md            ← değişiklik türü → zorunlu skill'ler; makine kontrolleri; karar formatları
+└── operation-consistency.md       ← mekanizma seçimi, idempotency, outbox, event, saga, doğrulama matrisi
+docs/adr/0000-template.md          ← ADR şablonu
+.agents/skills/<skill>/SKILL.md    ← TEK KAYNAK (+ template.md, references/*.md); 12 skill (19.3)
+.claude/skills → ../.agents/skills ← symlink
+.claude/settings.json              ← 3 hook tanımı
+.claude/hooks/flyway-immutability.js  ← PreToolUse(Edit|Write|MultiEdit) adaptörü, fail-closed
+.claude/hooks/review-gate.sh          ← PreToolUse(Bash git push): son 1 saatte review skill'i? → "ask"
+.claude/hooks/review-stamp.sh         ← PostToolUse(Skill): damga
+scripts/flyway-immutability.js (+ .test.js)  ← kuralın tek kaynağı; CI + hook + elle; 12 testi var
+tests/ArchitectureRulesTest.java   ← ArchUnit: katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
+tests/ErrorCodeUniquenessTest.java ← tüm ErrorCode enum'ları global tekil + blok içinde + mesaj formatı
+tests/ConfigDriftTest.java         ← local ↔ deploy config key kümeleri; ${ENV} placeholder'ları env şablonunda; secret fallback yok
 ```
 
 ### 19.2 `AGENTS.md` Bölümleri
@@ -1863,15 +1940,20 @@ scripts/<kural>.js (+ test)        ← makine zorlamalı kuralların tek kaynağ
 - **Standart bölümler:** Her dokümanda "Taşınmayanlar" ve "Net Kanıt Bulunamayan Alanlar" bölümleri bulunur.
 - **Token ekonomisi:** `target/`, `node_modules/`, `dist/`, IDE klasörleri, loglar ve `.env` varsayılan olarak context dışında tutulur.
 
-### 19.3 Skill Seti (Önerilen, 9 Adet)
+### 19.3 Skill Seti (12 Adet; tam metinler `blueprint/.agents/skills/`)
+
+Üç skill (`resilience`, `event-design`, `release-readiness`) bu revizyonda eklendi; bir projede en pahalı hataların (senkron zincir, outbox üzerinden RPC, yedeksiz/alarmsız prod, destek dışı sürüm) review'da yakalanmadığı görüldüğü için.
 
 | Skill | Kontrol ettiği | Karar formatı |
 |---|---|---|
-| `<proje>-spring-code-review` | İnce controller, constructor injection, geniş catch yok, hedef başına tek Feign, throw öncesi log, Normal Flow Logging, tracing/async context, Multi-Instance Safety, dinamik parametre kuralları | 7 maddelik yapılandırılmış çıktı |
+| `<proje>-resilience-review` **(yeni)** | Sıcak yol uzak çağrı sayısı (≤1), timeout bütçesi zinciri, circuit breaker/bulkhead (TimeLimiter tuzağı), senkron retry yok, fail politikası, control-plane bounded-staleness, Redis eviction, kapasite (thread/havuz), "hedef yanıt vermiyor" testi | Bağımlılık tablosu + `APPROVE…BLOCK`; sıcak yolda ikinci senkron okuma → en az `REQUEST CHANGES` |
+| `<proje>-event-design-review` **(yeni)** | Komut/olay ayrımı, "outbox üzerinden RPC" yasağı, CloudEvents envelope, `revision`, şema evrimi (kırıcı → yeni type + çift yayın), RabbitMQ 4.x topolojisi (QQ, DLQ, native retry), üretici (outbox'tan yayın), tüketici (`defaultRequeueRejected=false`, inbox, read-model UPSERT), analytics sink | Olay tablosu + `APPROVE…BLOCK` |
+| `<proje>-release-readiness-review` **(yeni)** | Yedek + restore provası tarihi, alarm kanalı testi, asgari alarm seti, SLO/yük testi, kapasite, digest/imza/rollback, güvenlik duruşu, **sürüm/EOL**, silme akışı/DPIA, runbook/on-call, dokümantasyon | Kontrol tablosu + `PASS/FAIL/BLOCKED`; yedek/restore/alarm eksikse `FAIL` |
+| `<proje>-spring-code-review` | İnce controller, constructor injection, geniş catch yok, hedef başına tek client, throw öncesi log, Normal Flow Logging, tracing/async context, Multi-Instance Safety, dinamik parametre kuralları, **sıcak yolda okuma çağrısı yok** | 8 maddelik yapılandırılmış çıktı + `APPROVE…BLOCK` |
 | `<proje>-security-review` | Trust boundary, ownership/IDOR, OTP/token/abuse, WebSocket, input/query, object storage, log/secret (`safeLogReason` katı kuralı), tracing güvenliği, privacy | Risk `CRITICAL…OK`; bulgu başına severity, dosya, kanıt, exploit senaryosu, düzeltme, test; `APPROVE / APPROVE WITH NON-BLOCKING COMMENTS / REQUEST CHANGES / BLOCK` |
 | `<proje>-db-migration-review` | Flyway güvenliği, mevcut veri/expand-contract, modül sahipliği, lock/rewrite riski, tip/constraint, soft delete, index gerekçesi, seed/cascade, privacy | Risk `BLOCKER…OK` + doğrulama SQL'leri + nihai karar |
 | `<proje>-api-contract-review` | DTO yeri, api→core bağımlılığı yok, entity dışarı açılmıyor, geriye uyumluluk, **HTTP parameter binding** (açık isimler, HTTP üzerinden doğrulama) | Contract riski, breaking-change riski, etkilenen çağıranlar, binding bulguları |
-| `<proje>-architecture-boundary-review` | Cross-module DB/repository/entity/migration erişimi, yönetim servisi bypass'ı, api/core yönü | Sınır risk seviyesi, ihlal yeri, alternatif, sorular |
+| `<proje>-architecture-boundary-review` | Cross-module DB/repository/entity/migration erişimi, yönetim servisi bypass'ı, api/core yönü, read-model kuralları, paylaşılan Redis/queue sözleşmeleri, dağıtık monolit sinyalleri; **kod yazılmadan önce** de çalışır | Sınır risk seviyesi, ihlal yeri, alternatif, sorular; sınır ihlali `APPROVE WITH COMMENTS` alamaz |
 | `<proje>-environment-impact-review` | Güncellenmesi gereken config yüzeyleri, Dockerfile ENV yasağı, replica bağımlılığı, tracing/obs tutarlılığı | Etki özeti, güncellenen dosyalar, kanıtsız dosyalar, doğrulama komutu |
 | `<proje>-operation-consistency-review` | Saga uygunluğu → implementasyon (12 adım) → doğrulama (senaryo matrisi, 4 kanıt seviyesi). `references/{assessment,implementation,verification}.md` | `saga unnecessary / existing suitable / extension required / blocked` + `PASS/FAIL/BLOCKED` |
 | `<proje>-test-writer` | Anlamlı test, negatif ve yetki case'leri, concurrency, parametre, HTTP binding, safe logging testleri | Eklenen case'ler, kalan boşluklar, komutlar |
@@ -1908,11 +1990,13 @@ Kontrol et:
 
 ### 19.4 Hook'lar ve Makine Zorlaması
 
-| Olay | Matcher | Amaç |
-|---|---|---|
-| `PreToolUse` | `Edit\|Write\|MultiEdit` | Base'teki migration'a yazmayı **engelle** (exit 2, fail-closed) |
-| `PreToolUse` | `Bash` + `git push*` | Son 1 saatte review skill'i çalışmadıysa kullanıcıya sor (`permissionDecision: "ask"`) |
-| `PostToolUse` | `Skill` | Review skill'i çalıştı damgası |
+| Olay | Matcher | Dosya | Amaç |
+|---|---|---|---|
+| `PreToolUse` | `Edit\|Write\|MultiEdit` | `.claude/hooks/flyway-immutability.js` | Base'teki migration'a yazmayı **engelle** (exit 2, fail-closed; bozuk girdi ve git hatasında da engeller; base yoksa HEAD ağacına göre korur) |
+| `PreToolUse` | `Bash` (komut `git push` içeriyorsa) | `.claude/hooks/review-gate.sh` | Son 1 saatte review skill'i çalışmadıysa kullanıcıya sor (`hookSpecificOutput.permissionDecision: "ask"`); push dışı komutlarda sessiz |
+| `PostToolUse` | `Skill` | `.claude/hooks/review-stamp.sh` | `*-review`, `*test-writer`, `*integration-doc` çalıştıysa `.claude/.last-review-check` damgası |
+
+Hook komutları **ayrı dosyalarda** yaşar; `settings.json` yalnız dosyayı çağırır. **Neden:** JSON içine gömülü shell komutunda kaçış hatası hook'u sessizce etkisiz bırakır (bir projede push gate'i bu yüzden hiç çalışmamıştı). Her hook `bash -n` ve örnek stdin ile CI'da kuru çalıştırılır (`blueprint/README.md`).
 
 **Migration immutability script'i** (tek kaynak; CI, hook ve elle kullanım aynı kodu çağırır):
 - Regex `/(^|\/)db\/migration\/(.+\/)?V[^/]*\.sql$/i`.
@@ -1923,6 +2007,8 @@ Kontrol et:
 - Testler geçici git repolarında `node --test` ile çalışır.
 
 **Kural:** Hook komutları örnek girdiyle test edilir (`bash -n` + sahte stdin ile CI'da). JSON içine gömülü shell komutlarında kaçış hatası kolay yapılır ve hook sessizce etkisiz kalabilir.
+
+**Immutability script'i doğrulanmış davranış** (`node --test scripts/flyway-immutability.test.js`, 12 test): base V dosyasını değiştirme/silme/`git mv` → ihlal; iç içe klasör korunur; branch'te eklenen V ve tüm R__ serbest; Windows ters bölü; `check-file` mutlak/göreli yol; base yokken `fail` → exit 3, `head` → HEAD ağacı; `-` ile başlayan ref reddi; CLI çıkış kodları 0/1/3.
 
 ### 19.5 Kural → Makine İlkesi
 
@@ -1957,8 +2043,11 @@ Dokümandaki bir kural, AI ajanı veya geliştirici unutsa bile **bir şey kırm
 | API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Kırıcı değişiklik yeni versiyon; eski versiyon sunset tarihiyle en az N ay yaşar. |
 | İstemci handoff | İstemciyi etkileyen her değişiklik için versiyonlu entegrasyon dokümanı yazılır (şablon aşağıda) — endpoint/alan listesi OpenAPI'den gelir, doküman **davranış, ekran akışı ve hata kodu → ekran** eşlemesine odaklanır |
 | Mimari plan | Büyük alanlar için modül içi `docs/` planı; kodla farkları periyodik güncellenir |
+| **ADR** (Architecture Decision Record) | Mimari şekil, veri ayrımı, yeni altyapı bileşeni, versiyonlama, güvenlik modeli gibi geri alması pahalı her karar `docs/adr/NNNN-<baslik>.md` olarak yazılır (şablon: `blueprint/docs/adr/0000-template.md`): bağlam, seçenekler, karar, sonuçlar, **yeniden değerlendirme eşiği** (Bölüm 24). ADR'siz mimari değişiklik PR'ı `REQUEST CHANGES`. |
+| Local geliştirme | `docker compose -f deploy/docker-compose.local.yml up -d` altyapıyı (Postgres, Valkey ×2, RabbitMQ, Alloy/Grafana) kaldırır; servisler IDE'den `local` profiliyle; Testcontainers dev-time desteği (`SpringApplication.from(App::main).with(LocalContainers.class)`) alternatif. Seed verisi `db/seed-local`. `make up / test / lint / check` hedefleri README'de. İlk kurulum 30 dakikayı geçmemeli; geçiyorsa `docs/onboarding.md` güncellenir. |
 | Deploy sırası | Contract, enum veya event tipi ekleyen taraf tüketiciden **önce** deploy edilir |
 | Bağımlılık hijyeni | Renovate/Dependabot haftalık; çeyrekte bir Bölüm 25 EOL kontrolü; destek dışı sürüm PR gate'te uyarı |
+| Dokümantasyon hijyeni | README kimlik/sıcak yol/fail politikası/kapasite tabloları, `docs/ai/repo-context.md`, `docs/versions.md` her release'te; runbook'lar her yeni alarmda; bu referans dokümanı çeyreklik gözden geçirme |
 
 **İstemci entegrasyon dokümanı şablonu:**
 
