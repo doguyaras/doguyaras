@@ -1,8 +1,8 @@
 # Plate App — Mimari Eleştirel Değerlendirme
 
-> **Amaç:** `plate-app` mimarisinde gerçek anlamda eksik, kusurlu veya geliştirilmesi gereken yapıları; hangi kararların bugün doğru, hangilerinin yarın sorun olacağını; ve neyin **yapılmaması** gerektiğini belgelemek. Referans dokümanındaki (§22) tek tek kod tutarsızlıkları burada tekrar edilmedi; burada **mimari seviyedeki** kararlar tartışılıyor.
+> **Amaç:** `plate-app` mimarisinde gerçek anlamda eksik, kusurlu veya geliştirilmesi gereken yapıları; hangi kararların bugün doğru, hangilerinin yarın sorun olacağını; ve neyin **yapılmaması** gerektiğini belgelemek. Referans dokümanındaki (Bölüm 22) tek tek kod tutarsızlıkları burada tekrar edilmedi; burada **mimari seviyedeki** kararlar tartışılıyor.
 >
-> **Kaynaklar:** (1) `plate-app-mimari-referans.md` (2026-09-28 tarihli, 3104 satır) satır satır okundu. (2) Beş konu kümesinde (veri katmanı, mesajlaşma, güvenlik, platform/ops, dating-app domain'i) internet araştırması yapıldı; kaynaklar §16'da. Koda doğrudan erişim **yoktu**; yalnız referans dokümandan çıkarılan noktalar "**doğrulanmalı**" diye işaretli.
+> **Kaynaklar:** (1) `plate-app-mimari-referans.md` (2026-09-28 tarihli, 3104 satır) satır satır okundu. (2) Beş konu kümesinde (veri katmanı, mesajlaşma, güvenlik, platform/ops, dating-app domain'i) internet araştırması yapıldı; kaynaklar Bölüm 16'da. Koda doğrudan erişim **yoktu**; yalnız referans dokümandan çıkarılan noktalar "**doğrulanmalı**" diye işaretli.
 >
 > **Önem işaretleri:**
 > - 🔴 **Kritik** — Prod'da gerçek kullanıcı varken kabul edilemez; ilk sprint.
@@ -41,20 +41,20 @@ Gerçek sorunlar bunların **etrafında**:
 
 | # | Bulgu | Önem | Kısa gerekçe |
 |---|---|---|---|
-| 1 | Sistem bir **mikroservis değil, dağıtık monolit**: tek DB, tek host, tek secret, tek deploy birimi, sıcak yolda 3–4 ardışık senkron HTTP çağrısı | 🟠 | Mikroservisin maliyetini ödüyor (ağ, JWT, outbox, 9 deploy), faydasını (bağımsız ölçek/deploy/hata izolasyonu) almıyor. §2 |
-| 2 | **Monorepo sorun değil; build/deploy pipeline'ı sorun.** Image'lar prod sunucusunda build ediliyor, registry yok, her Dockerfile `COPY . .` + tam Maven install, rollback = `git reset` + yeniden build | 🟠 | Polyrepo bunu düzeltmez, kötüleştirir. §3, §12 |
-| 3 | Tek PostgreSQL'de **DB seviyesinde izolasyon yok** (tek DB kullanıcısı, cross-schema yasağı yalnız testle); **yedekleme/PITR/HA hakkında tek satır yok** | 🔴 | Şema sınırı kağıt üstünde. Veri kaybı senaryosu belgelenmemiş. §4.1 |
-| 4 | **Chat için farklı DB bugün gerekmiyor**; ama tablo tasarımı (base64 TEXT, partition yok, retention yok) ölçek eşiğini gereksiz öne çekiyor | 🟡 | Önce partitioning + ayrı instance; ScyllaDB/Cassandra eşiği somut sayılarla tanımlı. §4.2 |
-| 5 | **Kafka bugün gerekmiyor; ama "domain event stream" eksikliği gerçek.** 11 outbox tablosunun çoğu asenkron RPC yapıyor, event yayınlamıyor; analytics, recommendation, fraud, read-model replikasyonu için hiçbir veri akışı yok | 🟠 | Kafka'nın çözeceği problem henüz tanımlı değil; önce event envelope + topic + Debezium, Kafka'ya geçiş sonra ucuz. §5 |
-| 6 | **Paylaşılan tek HS256 secret** ile servis kimliği; her istekte Redis'e replay kontrolü | 🟠 | Bir servis ele geçirilirse tüm aktörler taklit edilebilir; Redis her isteğin sıcak yolunda. §6.1 |
-| 7 | **E2EE gerçek anlamda E2EE değil ("E2EE-lite")**: statik anahtar + HKDF, forward secrecy yok, anahtar dağıtımı sunucunun kontrolünde (MITM mümkün) | 🟠 | Ürün "uçtan uca şifreli" iddiasıyla pazarlanıyorsa hukuki/itibar riski. §6.2 |
-| 8 | **Mağaza makbuz doğrulaması mock** ve her ortamda aktif | 🔴 | Gelir sızıntısı; referans doküman §22.1 #1 ile aynı, burada çözüm yolu var. §11.3 |
-| 9 | **Sürümler EOL ve yamasız CVE'ler:** Spring Boot 3.2.5 (OSS desteği Aralık 2024'te bitti), Spring Cloud 2023.0.1 (Temmuz 2025), Promtail (Mart 2026), RabbitMQ 3.13, Elasticsearch 8.10, Redis 7. Kullanılan Config Server ve Gateway sürümlerinde **CRITICAL** CVE'ler var; düzeltmeler bu dallar için yalnız ticari sürümde | 🔴 | Config Server 4.1.x native backend'de kimlik doğrulamasız dizin geçişi (CVE-2026-40982); Gateway 4.1.x'te 9.9 puanlı SpEL (CVE-2025-41243). §9 |
-| 10 | **Backoffice tier-0 bağımlılık:** parametre kataloğu erişilemezse tüm servisler 503 (fail-closed, 5 sn cache) | 🟠 | Moderasyon paneli düştüğünde swipe/mesaj/abonelik de düşüyor. §7.2 |
-| 11 | **Gerçek-PostgreSQL testleri CI'da hiç çalışmıyor** (Testcontainers yok, env ile açılıyor) | 🟠 | En kritik concurrency testleri (claim, unique, lock) yalnız geliştirici makinesinde koşuyor. §10 |
-| 12 | **Ürün analitiği / event pipeline'ı yok** (funnel, retention, eşleşme kalitesi ölçülemiyor); feature flag ve A/B yok | 🟠 | Dating app'in temel geri besleme döngüsü eksik. §11.2 |
-| 13 | **Dayanıklılık desenleri yok:** circuit breaker, bulkhead, retry budget, virtual thread; Tomcat thread'i 4 ardışık uzak çağrı boyunca bloke | 🟠 | Bir servisin yavaşlaması zincirleme thread tükenmesine dönüşür. §7.1 |
-| 14 | **KVKK silme (right to erasure)** için 9 şema + ES + Redis + S3 + yedekler boyunca orkestrasyon yok (export var, silme yok) | 🟠 | Yasal yükümlülük; doğrulanmalı. §6.7 |
+| 1 | Sistem bir **mikroservis değil, dağıtık monolit**: tek DB, tek host, tek secret, tek deploy birimi, sıcak yolda 3–4 ardışık senkron HTTP çağrısı | 🟠 | Mikroservisin maliyetini ödüyor (ağ, JWT, outbox, 9 deploy), faydasını (bağımsız ölçek/deploy/hata izolasyonu) almıyor. Bölüm 2 |
+| 2 | **Monorepo sorun değil; build/deploy pipeline'ı sorun.** Image'lar prod sunucusunda build ediliyor, registry yok, her Dockerfile `COPY . .` + tam Maven install, rollback = `git reset` + yeniden build | 🟠 | Polyrepo bunu düzeltmez, kötüleştirir. Bölüm 3, Bölüm 12 |
+| 3 | Tek PostgreSQL'de **DB seviyesinde izolasyon yok** (tek DB kullanıcısı, cross-schema yasağı yalnız testle); **yedekleme/PITR/HA hakkında tek satır yok** | 🔴 | Şema sınırı kağıt üstünde. Veri kaybı senaryosu belgelenmemiş. Bölüm 4.1 |
+| 4 | **Chat için farklı DB bugün gerekmiyor**; ama tablo tasarımı (base64 TEXT, partition yok, retention yok) ölçek eşiğini gereksiz öne çekiyor | 🟡 | Önce partitioning + ayrı instance; ScyllaDB/Cassandra eşiği somut sayılarla tanımlı. Bölüm 4.2 |
+| 5 | **Kafka bugün gerekmiyor; ama "domain event stream" eksikliği gerçek.** 11 outbox tablosunun çoğu asenkron RPC yapıyor, event yayınlamıyor; analytics, recommendation, fraud, read-model replikasyonu için hiçbir veri akışı yok | 🟠 | Kafka'nın çözeceği problem henüz tanımlı değil; önce event envelope + topic + Debezium, Kafka'ya geçiş sonra ucuz. Bölüm 5 |
+| 6 | **Paylaşılan tek HS256 secret** ile servis kimliği; her istekte Redis'e replay kontrolü | 🟠 | Bir servis ele geçirilirse tüm aktörler taklit edilebilir; Redis her isteğin sıcak yolunda. Bölüm 6.1 |
+| 7 | **E2EE gerçek anlamda E2EE değil ("E2EE-lite")**: statik anahtar + HKDF, forward secrecy yok, anahtar dağıtımı sunucunun kontrolünde (MITM mümkün) | 🟠 | Ürün "uçtan uca şifreli" iddiasıyla pazarlanıyorsa hukuki/itibar riski. Bölüm 6.2 |
+| 8 | **Mağaza makbuz doğrulaması mock** ve her ortamda aktif | 🔴 | Gelir sızıntısı; referans dokümanı Bölüm 22.1, madde 1 ile aynı, burada çözüm yolu var. Bölüm 11.3 |
+| 9 | **Sürümler EOL ve yamasız CVE'ler:** Spring Boot 3.2.5 (OSS desteği Aralık 2024'te bitti), Spring Cloud 2023.0.1 (Temmuz 2025), Promtail (Mart 2026), RabbitMQ 3.13, Elasticsearch 8.10, Redis 7. Kullanılan Config Server ve Gateway sürümlerinde **CRITICAL** CVE'ler var; düzeltmeler bu dallar için yalnız ticari sürümde | 🔴 | Config Server 4.1.x native backend'de kimlik doğrulamasız dizin geçişi (CVE-2026-40982); Gateway 4.1.x'te 9.9 puanlı SpEL (CVE-2025-41243). Bölüm 9 |
+| 10 | **Backoffice tier-0 bağımlılık:** parametre kataloğu erişilemezse tüm servisler 503 (fail-closed, 5 sn cache) | 🟠 | Moderasyon paneli düştüğünde swipe/mesaj/abonelik de düşüyor. Bölüm 7.2 |
+| 11 | **Gerçek-PostgreSQL testleri CI'da hiç çalışmıyor** (Testcontainers yok, env ile açılıyor) | 🟠 | En kritik concurrency testleri (claim, unique, lock) yalnız geliştirici makinesinde koşuyor. Bölüm 10 |
+| 12 | **Ürün analitiği / event pipeline'ı yok** (funnel, retention, eşleşme kalitesi ölçülemiyor); feature flag ve A/B yok | 🟠 | Dating app'in temel geri besleme döngüsü eksik. Bölüm 11.2 |
+| 13 | **Dayanıklılık desenleri yok:** circuit breaker, bulkhead, retry budget, virtual thread; Tomcat thread'i 4 ardışık uzak çağrı boyunca bloke | 🟠 | Bir servisin yavaşlaması zincirleme thread tükenmesine dönüşür. Bölüm 7.1 |
+| 14 | **KVKK silme (right to erasure)** için 9 şema + ES + Redis + S3 + yedekler boyunca orkestrasyon yok (export var, silme yok) | 🟠 | Yasal yükümlülük; doğrulanmalı. Bölüm 6.7 |
 
 **Tek cümlelik özet:** Kod içi disiplin çok iyi, ama sistemin *şekli* (dağıtık monolit + tek host + tek DB + senkron zincirler) ile *ürün ihtiyaçları* (event akışı, analytics, güvenilir ödeme, gerçek E2EE) arasında boşluk var. Öncelik, yeni teknoloji eklemek değil, mevcut sınırları **gerçek** sınırlara çevirmek ve ölçek eşiklerini önceden tanımlamak.
 
@@ -66,18 +66,18 @@ Gerçek sorunlar bunların **etrafında**:
 
 Referans dokümandan, sistemin bağımsız servisler gibi değil tek bir uygulama gibi davrandığını gösteren noktalar:
 
-| Kanıt | Nerede |
+| Kanıt | Referans dokümanında (bölüm) |
 |---|---|
-| Tek PostgreSQL instance, tek DB kullanıcısı (muhtemel), şema/servis | §10.1 |
-| Tek host `docker compose`; tüm servisler aynı `.env`, aynı rollout | §18.2 |
-| Tek simetrik service-JWT secret, `iss=gateway` her yerde | §9.2 |
-| `common-security` değişince **tüm** servisler rebuild + deploy | §18.3 deploy script |
-| `*-api` modülleri versiyonsuz (`1.0.0`), aynı build'de derleniyor | §3.2 |
-| Sıcak yolda senkron zincir: swipe = legal (auth) → hidden (user) → block (user) → consumeRight (subscription) → DB | §4.5-A |
-| Chat mesajı: legal → hidden → block (user) → DB | §4.5-D |
-| Backoffice `ModerationServiceImpl.moderate` transaction + advisory lock içinde user-core'u senkron çağırıyor | §4.4 |
-| Her servis, backoffice parametre kataloğuna ve config-server'a açılışta/çalışmada bağımlı | §14.3, §15.1 |
-| Chat/user/match/backoffice arasında Redis key sözleşmeleri kodda kopyalanmış (`presence:*`, `seen:*`, `ip-block:*`) | §10.1 |
+| Tek PostgreSQL instance, tek DB kullanıcısı (muhtemel), şema/servis | 10.1 |
+| Tek host `docker compose`; tüm servisler aynı `.env`, aynı rollout | 18.2 |
+| Tek simetrik service-JWT secret, `iss=gateway` her yerde | 9.2 |
+| `common-security` değişince **tüm** servisler rebuild + deploy | 18.3 (deploy script) |
+| `*-api` modülleri versiyonsuz (`1.0.0`), aynı build'de derleniyor | 3.2 |
+| Sıcak yolda senkron zincir: swipe = legal (auth) → hidden (user) → block (user) → consumeRight (subscription) → DB | 4.5, akış A |
+| Chat mesajı: legal → hidden → block (user) → DB | 4.5, akış D |
+| Backoffice `ModerationServiceImpl.moderate` transaction + advisory lock içinde user-core'u senkron çağırıyor | 4.4 |
+| Her servis, backoffice parametre kataloğuna ve config-server'a açılışta/çalışmada bağımlı | 14.3, 15.1 |
+| Chat/user/match/backoffice arasında Redis key sözleşmeleri kodda kopyalanmış (`presence:*`, `seen:*`, `ip-block:*`) | 10.1 |
 
 ### 2.2 Bunun somut maliyeti
 
@@ -85,7 +85,7 @@ Referans dokümandan, sistemin bağımsız servisler gibi değil tek bir uygulam
 
 **Latency toplamı.** p99 = dört çağrının p99'larının toplamına yakınsar. Mobil UX'te swipe'ın 100 ms altında hissedilmesi beklenir.
 
-**Operasyon.** 9 deploy birimi, 9 Flyway history, 11 outbox, 7 poller, 32 Feign client, allowlist drift'i (referans §9.5). Bu yükü tek ekip taşıyor.
+**Operasyon.** 9 deploy birimi, 9 Flyway history, 11 outbox, 7 poller, 32 Feign client, allowlist drift'i (referans dokümanı Bölüm 9.5). Bu yükü tek ekip taşıyor.
 
 ### 2.3 Seçenekler
 
@@ -131,16 +131,16 @@ Sonuç: swipe = 1 uzak çağrı (subscription) + local DB. Availability ≈ %99,
 | Sorun | Etki | Çözüm |
 |---|---|---|
 | Her PR'da `mvn verify` **tüm** modülleri derleyip test ediyor | CI süresi modül sayısıyla lineer büyüyor | Affected-module tespiti: **gitflow-incremental-builder** (GIB 4.7.0; `buildDownstream`, `buildUpstreamMode=impacted`, referans branch'e göre yalnız değişen modül + bağımlıları) veya **Maven Build Cache Extension** (1.3.0, Ağustos 2026; girdi hash'ine göre modül çıktısını cache'ler, Maven 3.9+/4.x). En basit hali: `dorny/paths-filter` + servis başına GitHub Actions matrix + `mvn -pl <modül> -amd`. Gradle/Bazel'e geçiş ~1000 dosyada haklı çıkmaz. |
-| Dockerfile'lar `COPY . .` + `mvn install -pl <liste> -am` | Her image build'i tüm bağımlılık ağacını yeniden derler; `-pl` listesi elle tutuluyor ve **yanlış** (referans §22.2 #29: backoffice'te `notification-api` eksik) | Jib (`jib-maven-plugin` zaten pom'da tanımlı, hiç kullanılmıyor) veya Spring Boot layered jar + Buildpacks. `-pl` listesi Maven reactor'dan otomatik türer. |
+| Dockerfile'lar `COPY . .` + `mvn install -pl <liste> -am` | Her image build'i tüm bağımlılık ağacını yeniden derler; `-pl` listesi elle tutuluyor ve **yanlış** (referans dokümanı Bölüm 22.2, madde 29: backoffice'te `notification-api` eksik) | Jib (`jib-maven-plugin` zaten pom'da tanımlı, hiç kullanılmıyor) veya Spring Boot layered jar + Buildpacks. `-pl` listesi Maven reactor'dan otomatik türer. |
 | Build **prod sunucusunda** yapılıyor | Prod CPU/disk build'e gidiyor; "bende çalışıyordu" image'ı yok; rollback = eski commit'i yeniden build (dakikalar, hata riski) | CI'da image build → GHCR'a push → deploy yalnız `docker compose pull` + `up`. Image tag = git SHA, deploy digest ile. Rollback = önceki digest. |
-| `*-api` modülleri versiyonsuz | Bir servis yeni api ile derlenirken diğeri eskisiyle çalışıyor olabilir (deploy sırası kuralı buna bağlı) | Monorepo'da bu **kabul edilebilir**: contract değişiklikleri geriye uyumlu tutuluyor (referans §6.9). Bağımsız versiyonlama yalnız birlikte deploy etmeyi bıraktığınızda gerekir; o güne kadar `${revision}` (CI-friendly version) + uyumluluk testleri yeter. `@since`/deprecation etiketi ve consumer-first deploy kuralı yazılı olmalı; zaten var. |
-| `common-security` bir "god library": JWT, filtreler, exception, rate limit, saga store, tracing, SMS | Her değişiklik 9 servisi rebuild ediyor; test yüzeyi belirsiz | Referans §21.1'deki öneri doğru: `platform-core`, `platform-security`, `platform-observability`, `platform-consistency` olarak **gerçek Spring Boot starter**'lara (`AutoConfiguration.imports`) böl. |
+| `*-api` modülleri versiyonsuz | Bir servis yeni api ile derlenirken diğeri eskisiyle çalışıyor olabilir (deploy sırası kuralı buna bağlı) | Monorepo'da bu **kabul edilebilir**: contract değişiklikleri geriye uyumlu tutuluyor (referans dokümanı Bölüm 6.9). Bağımsız versiyonlama yalnız birlikte deploy etmeyi bıraktığınızda gerekir; o güne kadar `${revision}` (CI-friendly version) + uyumluluk testleri yeter. `@since`/deprecation etiketi ve consumer-first deploy kuralı yazılı olmalı; zaten var. |
+| `common-security` bir "god library": JWT, filtreler, exception, rate limit, saga store, tracing, SMS | Her değişiklik 9 servisi rebuild ediyor; test yüzeyi belirsiz | Referans dokümanı Bölüm 21.1'deki öneri doğru: `platform-core`, `platform-security`, `platform-observability`, `platform-consistency` olarak **gerçek Spring Boot starter**'lara (`AutoConfiguration.imports`) böl. |
 | Split package (api ve core aynı paket kökü) | Sahiplik belirsiz; ileride JPMS/modülerlik kapalı | `com.<org>.<servis>.api.*` (subscription-api zaten böyle) |
 | `payment`, `validation` iskelet modülleri build'de | Gereksiz derleme; "var ama yok" kafa karışıklığı | Sil; ihtiyaç olunca git history'den al. |
 
 ### 3.2 Ne zaman polyrepo düşünülür?
 
-Literatür net: Google'ın monorepo makalesi (Potvin & Levenberg, CACM 2016) faydaları atomik değişiklik, diamond-dependency sorununun olmaması ve büyük ölçekli refactor olarak sayar; maliyeti ise **araç yatırımı** (affected-target tespiti, build cache) ve "implementasyon detayına bağımlanma" riskidir. Sam Newman'ın (*Building Microservices*, 2. baskı) ölçütü ise "bağımsız deploy edilebilirlik": servisler arası değişiklik **sık** oluyorsa sorun repo değil, **sınırlar**dır. Plate'te `common-security` değişikliklerinin 9 servisi rebuild etmesi tam bu sinyal (§3.1 son satır).
+Literatür net: Google'ın monorepo makalesi (Potvin & Levenberg, CACM 2016) faydaları atomik değişiklik, diamond-dependency sorununun olmaması ve büyük ölçekli refactor olarak sayar; maliyeti ise **araç yatırımı** (affected-target tespiti, build cache) ve "implementasyon detayına bağımlanma" riskidir. Sam Newman'ın (*Building Microservices*, 2. baskı) ölçütü ise "bağımsız deploy edilebilirlik": servisler arası değişiklik **sık** oluyorsa sorun repo değil, **sınırlar**dır. Plate'te `common-security` değişikliklerinin 9 servisi rebuild etmesi tam bu sinyal (Bölüm 3.1 son satır).
 
 Polyrepo şu koşullarda düşünülür:
 - Birden fazla ekip, ayrı release kadansı ve **ayrı on-call** olduğunda.
@@ -160,7 +160,7 @@ Pratik merdiven: **(a)** servis başına rol + şema (şimdi) → **(b)** aynı 
 
 **Ama dört şey eksik:**
 
-**(a) DB seviyesinde izolasyon yok.** Referans dokümana göre tüm servisler `${DB_USER}` ile bağlanıyor — büyük olasılıkla tek kullanıcı (**doğrulanmalı**). "Cross-schema erişim yasak" kuralı yalnız `BackofficeMigrationBoundaryTest` gibi testlerle ve konvansiyonla korunuyor. Bir `nativeQuery` ile `users.user` tablosuna backoffice'ten erişmek teknik olarak mümkün. Bu hem mimari hem **yetki** sorunudur (referans §10.1 kendisi de öyle diyor).
+**(a) DB seviyesinde izolasyon yok.** Referans dokümana göre tüm servisler `${DB_USER}` ile bağlanıyor — büyük olasılıkla tek kullanıcı (**doğrulanmalı**). "Cross-schema erişim yasak" kuralı yalnız `BackofficeMigrationBoundaryTest` gibi testlerle ve konvansiyonla korunuyor. Bir `nativeQuery` ile `users.user` tablosuna backoffice'ten erişmek teknik olarak mümkün. Bu hem mimari hem **yetki** sorunudur (referans dokümanı Bölüm 10.1 kendisi de öyle diyor).
 
 Çözüm ucuz:
 ```sql
@@ -213,8 +213,8 @@ Geçiş olursa: chat-core zaten ayrı servis, veri erişimi repository arkasınd
 
 ### 4.3 Elasticsearch: tek use-case için ağır bileşen — 🟡
 
-ES yalnız user-core'da, `users` index'inde, geo sorgu için (referans §2.1). Bunun için:
-- Ayrı JVM, ayrı bellek (tek host'ta en az 1–2 GB), ayrı yedek, ayrı sürüm takibi (8.10.4 → destek dışı, bkz. §9).
+ES yalnız user-core'da, `users` index'inde, geo sorgu için (referans dokümanı Bölüm 2.1). Bunun için:
+- Ayrı JVM, ayrı bellek (tek host'ta en az 1–2 GB), ayrı yedek, ayrı sürüm takibi (8.10.4 → destek dışı, bkz. Bölüm 9).
 - ES ↔ Postgres senkronizasyonu (`UserSearchRepairJob` var → tutarsızlık zaten yaşanmış).
 
 **Alternatifler:**
@@ -232,7 +232,7 @@ Sorunlar:
 - **HA yok** (referans dokümanda Sentinel/Cluster geçmiyor; **doğrulanmalı**). Redis düşerse: OTP/login 503, servisler arası çağrılar 401 (replay guard), swipe 503 (rate limit). Yani Redis = tüm ürün.
 - **Eviction politikası güvenlik key'lerini silebilir.** Aynı instance'ta cache ile güvenlik state'i varsa ve `maxmemory-policy allkeys-*` ise Redis **JTI, session-version ve rate-limit key'lerini de** evict eder → replay koruması sessizce kalkar, oturum iptali unutulur. Redis'in kendi dokümanı cache ile kalıcı key'ler karışınca "iki ayrı instance çalıştırın" der. Mevcut ayar **doğrulanmalı**.
 - **Fail-open / fail-closed tutarsız.** Session iptali fail-open (banlı kullanıcı Redis kesintisinde devam eder), rate limit fail-closed (Redis kesintisinde kimse giriş yapamaz). Her ikisi de savunulabilir ama **birlikte** tuhaf: aynı kesintide "güvenlik kontrolü atlanır" ve "herkes kilitlenir" aynı anda oluyor. Karşılaştırma: Stripe'ın rate limiter'ları bilinçli olarak **fail-open** (Redis yoksa limit uygulanmaz); replay guard'da fail-open güvenlik açığı, fail-closed kesinti — karar key tipine göre açıkça verilmeli.
-- **Her istekte Redis'e yazma** (JTI `SET NX`). TLS + 30–45 sn TTL varken per-request replay guard'ın kazandırdığı güvenlik marjinal, maliyeti her isteğe bir Redis round-trip. Bkz. §6.1.
+- **Her istekte Redis'e yazma** (JTI `SET NX`). TLS + 30–45 sn TTL varken per-request replay guard'ın kazandırdığı güvenlik marjinal, maliyeti her isteğe bir Redis round-trip. Bkz. Bölüm 6.1.
 - **Lisans ve bakım:** 7.2 ve öncesi BSD; 7.4 (Mart 2024) RSALv2/SSPL; 8.0 (Mayıs 2025) buna AGPLv3 ekledi. 7.x dalının son sürümleri Ağustos 2025'te çıktı, o zamandan beri yok → **"Redis 7" fiilen bakımsız**. Güncel: Redis 8.10.x. **Valkey** (Linux Foundation, 7.2.4 fork'u, BSD; 9.1.x – Ağustos 2026; DigitalOcean destekçiler arasında) drop-in alternatif.
 - **Sentinel** en az 3 Sentinel (bağımsız hata alanlarında) ister ve asenkron replikasyon nedeniyle onaylanmış yazmayı kaybedebilir (`min-replicas-to-write 1` ile azaltılır). Bu uygulama için doğru boy Sentinel'dir; Cluster (≥3 master, 6 node) yatay ölçek içindir, bugün gereksiz.
 
@@ -240,7 +240,7 @@ Sorunlar:
 
 ### 4.5 Kimlik üretimi: UUIDv4 → UUIDv7 — 🟢
 
-73 entity'nin 63'ü UUID, 5 farklı üretim yöntemi (referans §10.3). UUIDv4 rastgele; B-tree PK'da sayfa bölünmeleri ve WAL şişmesi yaratır (özellikle mesaj, outbox, log gibi yüksek insert tablolarında). UUIDv7 zaman sıralı: insert'ler sona eklenir, `created_at DESC, id DESC` keyset sıralaması id ile doğal olarak uyuşur. Ölçümler: v7 ile B-tree ~%26–27 daha küçük ve yaprak sayfalar ardışık; bazı benchmark'larda insert ~%49 daha hızlı, `ORDER BY id` ~3× (credativ, PG 18 üzerinde).
+73 entity'nin 63'ü UUID, 5 farklı üretim yöntemi (referans dokümanı Bölüm 10.3). UUIDv4 rastgele; B-tree PK'da sayfa bölünmeleri ve WAL şişmesi yaratır (özellikle mesaj, outbox, log gibi yüksek insert tablolarında). UUIDv7 zaman sıralı: insert'ler sona eklenir, `created_at DESC, id DESC` keyset sıralaması id ile doğal olarak uyuşur. Ölçümler: v7 ile B-tree ~%26–27 daha küçük ve yaprak sayfalar ardışık; bazı benchmark'larda insert ~%49 daha hızlı, `ORDER BY id` ~3× (credativ, PG 18 üzerinde).
 
 - Java: **`uuid-creator`** 6.1.x (MIT; `UuidCreator.getTimeOrderedEpoch()`) veya **Java Uuid Generator** 5.1 (Apache-2.0). Hibernate'in `@UuidGenerator(style = VERSION_7)`'si **yalnız ORM 7'de** (`@Incubating(since="7.0")`, yani Spring Boot 4); Boot 3.2.5'in Hibernate 6.4.4'ünde yok — "6.5+" diyen bloglar yanlış.
 - PostgreSQL 18 (GA Eylül 2025; 18.6 – Ağustos 2026): native `uuidv7()` (RFC 9562, backend içinde monotonik) ve `uuid_extract_timestamp()`. PG 15'te yok.
@@ -248,12 +248,12 @@ Sorunlar:
 
 ### 4.6 Outbox çeşitliliği: 11 tablo, 3 desen — 🟡
 
-Referans §11.2 envanteri: `retry_count`/`attempt_count`, lease var/yok, `claim_token` var/yok, DEAD var/yok, "eski desen" (`ProvisioningOutboxPoller`: kilitsiz, TX içinde Feign). Aynı problem 7 kez, 3 farklı kalitede çözülmüş. Her yeni outbox aynı hataları tekrar etme riski taşıyor (referans §22.2 #16: auth outbox'ta lease aşımı).
+Referans dokümanı Bölüm 11.2 envanteri: `retry_count`/`attempt_count`, lease var/yok, `claim_token` var/yok, DEAD var/yok, "eski desen" (`ProvisioningOutboxPoller`: kilitsiz, TX içinde Feign). Aynı problem 7 kez, 3 farklı kalitede çözülmüş. Her yeni outbox aynı hataları tekrar etme riski taşıyor (referans dokümanı Bölüm 22.2, madde 16: auth outbox'ta lease aşımı).
 
 Seçenekler:
 1. **Tek generic outbox** (`platform-consistency` starter): Debezium'un önerdiği şema — `outbox_event(id, aggregate_type, aggregate_id, event_type, payload jsonb, headers jsonb, status, ...)` — + tek poller + hedef bazlı `OutboxHandler` arayüzü. Tüm servisler aynı tabloyu kendi şemasında kullanır. Chris Richardson'ın sınıflamasında bu "polling publisher": her DB'de çalışır, gecikme poll aralığına bağlı (1 sn poll ≈ 500 ms p50), Kafka/Connect yoksa "**saner default**". **Bugün için doğru seçim.**
 2. **Debezium Outbox Event Router** (transaction log tailing): poller'lar tamamen kalkar; Debezium WAL'dan okur (~50–200 ms gecikme), `outbox.event.<aggregate_type>` topic'ine yönlendirir. **Debezium Server** (3.6.x, Eylül 2026) Kafka Connect gerektirmeden çalışır ve 19 sink'i var: Kafka, **RabbitMQ (streams)**, **Redis Streams**, NATS JetStream, HTTP… Operasyon riski: `wal_level=logical` + replication slot; connector durursa veya yakalanan tablo boşta kalırken başka tablolar yazarsa **WAL disk'i doldurur** — `heartbeat.interval.ms` + `heartbeat.action.query` ve `max_slot_wal_keep_size` (PG13+; aşılırsa slot geçersizleşir → yeniden snapshot) + slot lag alarmı şart. Tek host'ta bu risk gerçek; 7 poller'ın bakımı buna değmez **henüz**.
-3. **Spring Modulith event publication registry**: iş transaction'ı içinde publication-log satırı; `@Externalized` ile Kafka/AMQP'ye dışa aktarma; `IncompleteEventPublications.resubmit`. Yalnız §2.3-A/C seçilirse ve Boot 3.2.5'ten çıkılınca (Modulith 1.4.x → Boot 3.5, 2.x → Boot 4).
+3. **Spring Modulith event publication registry**: iş transaction'ı içinde publication-log satırı; `@Externalized` ile Kafka/AMQP'ye dışa aktarma; `IncompleteEventPublications.resubmit`. Yalnız Bölüm 2.3 seçenek A/C seçilirse ve Boot 3.2.5'ten çıkılınca (Modulith 1.4.x → Boot 3.5, 2.x → Boot 4).
 
 Hangisi seçilirse: Feign'e giden outbox'lar (`user_block_outbox`, `account_status_outbox`, `report_outbox`, `moderation_action_outbox`, `user_notification_outbox`) aslında **event**: "kullanıcı X, Y'yi engelledi", "hesap X banlandı", "şikayet oluştu". Bunlar event olarak yayınlanırsa tüketici match, chat, auth, backoffice kendi subscribe eder; user-core'un kimi çağıracağını bilmesi gerekmez. Bugünkü model "outbox üzerinden RPC": user-core hem event'i hem tüketicinin adresini biliyor.
 
@@ -265,8 +265,8 @@ Hangisi seçilirse: Feign'e giden outbox'lar (`user_block_outbox`, `account_stat
 
 - RabbitMQ yalnız **komut** taşıyor: "şu numaraya SMS gönder", "şu kullanıcıya push at". İki exchange/queue. Bu iş için RabbitMQ **doğru** araç (per-message ack, DLQ, TTL). RabbitMQ'nun kendi karşılaştırma sayfası da aynı çizgiyi çiziyor: task queue, RPC, öncelik, mesaj başına durum → RabbitMQ; yüksek hacimli stream, stateful stream processing, log compaction → Kafka.
 - Sistemde **domain event yok**. `SwipeMade`, `MatchCreated`, `MessageSent`, `ProfileUpdated`, `UserBlocked`, `SubscriptionActivated`, `ReportFiled` gibi olaylar hiçbir yerde yayınlanmıyor. Yan etkiler outbox → Feign ile **noktadan noktaya** uygulanıyor.
-- Sonuç: analytics yok (§11.2), recommendation için sinyal yok, fraud/abuse tespiti için akış yok, read-model replikasyonu (§2.4) yapılamıyor, olay geçmişi tekrar oynatılamıyor.
-- **Consumer tarafı tehlikeli biçimde ayarsız** (referans §12.3). Spring AMQP'de `defaultRequeueRejected=true` **varsayılandır**: iş hatası fırlatan mesaj "sonsuza kadar yeniden teslim edilebilir" (Spring dokümanının kendi ifadesi). Varsayılan `prefetchCount` 250 — tek consumer 250 mesajı alıp DB kesintisinde hepsini `ImmediateRequeue` ile döndürür → sıcak döngü. DLQ replay aracı yok.
+- Sonuç: analytics yok (Bölüm 11.2), recommendation için sinyal yok, fraud/abuse tespiti için akış yok, read-model replikasyonu (Bölüm 2.4) yapılamıyor, olay geçmişi tekrar oynatılamıyor.
+- **Consumer tarafı tehlikeli biçimde ayarsız** (referans dokümanı Bölüm 12.3). Spring AMQP'de `defaultRequeueRejected=true` **varsayılandır**: iş hatası fırlatan mesaj "sonsuza kadar yeniden teslim edilebilir" (Spring dokümanının kendi ifadesi). Varsayılan `prefetchCount` 250 — tek consumer 250 mesajı alıp DB kesintisinde hepsini `ImmediateRequeue` ile döndürür → sıcak döngü. DLQ replay aracı yok.
 - **RabbitMQ 3.13'ün community desteği 17 Eylül 2024'te bitti** (son community patch 3.13.7). Bugün community-destekli tek seri **4.3.x** (Nisan 2026; 4.3.6 – Eylül 2026; Erlang 27+). Yükseltme yolu: 3.13 → 4.2.x → 4.3 (4.3'e yalnız 4.2'den geçilir) veya blue/green. 4.0'da classic **mirrored** queue kalktı (classic queue kaldı ama replikasız); 4.3'te Mnesia kalktı (Khepri).
 
 ### 5.2 Kafka ne zaman mantıklı, bu sistemde nerede?
@@ -284,7 +284,7 @@ Kafka'nın RabbitMQ'ya göre **farklı** olduğu yerler (daha iyi değil, farkl�
 
 **Bu sistemde Kafka'nın anlamlı olacağı somut use-case'ler:**
 1. **Domain event stream** → analytics/warehouse (ClickHouse/BigQuery), recommendation feature'ları, fraud/abuse skorlama, moderasyon kuyruğu besleme.
-2. **Read-model replikasyonu** (§2.4): `account_standing` gibi projeksiyonları yeni bir servise **replay ile** sıfırdan kurabilme.
+2. **Read-model replikasyonu** (Bölüm 2.4): `account_standing` gibi projeksiyonları yeni bir servise **replay ile** sıfırdan kurabilme.
 3. **CDC** (Debezium) ile outbox'ları poller'sız yayınlama.
 4. **Audit/olay geçmişi**: "bu kullanıcı bu hesabı ne zaman engelledi/açtı" gibi soruları DB'yi sorgulamadan cevaplama.
 
@@ -301,13 +301,13 @@ Kafka'nın RabbitMQ'ya göre **farklı** olduğu yerler (daha iyi değil, farkl�
 **Aşama 1 — Event kavramını sisteme sok (RabbitMQ ile, 2–4 hafta):**
 - Standart **event envelope**, **CloudEvents 1.0** şemasında: zorunlu `id, source, specversion, type`; opsiyonel `subject` (aggregate id), `time`, `datacontenttype`, `dataschema`, `data`; `traceparent` extension. Not: CloudEvents'in AMQP binding'i yalnız AMQP **1.0** için; AMQP 0-9-1 (Spring AMQP) ile header eşlemesini kendiniz yaparsınız — sorun değil, belgelenmeli.
 - `domain.events` **topic exchange**; routing key `<servis>.<aggregate>.<olay>` (`user.account.blocked`, `match.match.created`). Tüketici başına bir queue + DLQ.
-- Şema evrimi kuralı: geriye uyumlu değişiklik (opsiyonel alan ekleme) `type`'ı değiştirmez; kırıcı değişiklikte yeni `type` ve bir süre **iki olay birden** üretilir (CloudEvents primer). Tüketici bilinmeyen `type`'ı **yok sayar** (bugün DLQ'ya düşürüyor — referans §6.9; event stream'de bu yanlış). Consumer-first deploy kuralı korunur. Schema registry (Apicurio, Apache 2.0) bu ölçekte opsiyonel.
+- Şema evrimi kuralı: geriye uyumlu değişiklik (opsiyonel alan ekleme) `type`'ı değiştirmez; kırıcı değişiklikte yeni `type` ve bir süre **iki olay birden** üretilir (CloudEvents primer). Tüketici bilinmeyen `type`'ı **yok sayar** (bugün DLQ'ya düşürüyor — referans dokümanı Bölüm 6.9; event stream'de bu yanlış). Consumer-first deploy kuralı korunur. Schema registry (Apicurio, Apache 2.0) bu ölçekte opsiyonel.
 - Outbox'lar Feign yerine event yayınlar; tüketiciler idempotent inbox (`ON CONFLICT (event_id) DO NOTHING`, zaten var).
-- **Kazanç:** §2.4 read-model'i (Richardson'ın "command-side replica" deseni: `ConsentRecorded`, `HiddenModeChanged`, `BlockCreated`, `AccountBanned` olayları match/chat'te local tabloya yazılır, swipe local bayraklara bakar), §11.2 analytics'in ilk adımı (bir "event sink" tüketicisi olayları Postgres/ClickHouse'a yazar), user-core'un tüketicileri tanıması biter.
+- **Kazanç:** Bölüm 2.4 read-model'i (Richardson'ın "command-side replica" deseni: `ConsentRecorded`, `HiddenModeChanged`, `BlockCreated`, `AccountBanned` olayları match/chat'te local tabloya yazılır, swipe local bayraklara bakar), Bölüm 11.2 analytics'in ilk adımı (bir "event sink" tüketicisi olayları Postgres/ClickHouse'a yazar), user-core'un tüketicileri tanıması biter.
 
 **Aşama 2 — Replay ve çoklu tüketici gerekince: RabbitMQ Streams (aynı broker):**
 - `domain.events` için stream (max-age retention, non-destructive read); analytics/recommendation gibi "geçmişi baştan oku" tüketicileri stream'den okur, işlemsel tüketiciler queue'dan. Kafka'nın replay faydasının çoğu, yeni bileşen eklemeden.
-- Debezium'a geçiş (poller'sız outbox) bu aşamada değerlendirilir (§4.6 seçenek 2; WAL riski).
+- Debezium'a geçiş (poller'sız outbox) bu aşamada değerlendirilir (Bölüm 4.6 seçenek 2; WAL riski).
 
 **Aşama 3 — Kafka/Redpanda (şu koşullardan ≥2'si oluşunca):**
 - Aynı olayı ≥3 bağımsız tüketici okuyor, replay ve **stateful stream processing** (Kafka Streams/Flink) ihtiyacı çıktı.
@@ -319,7 +319,7 @@ Aşama 1'de envelope ve topic yapısı doğru kurulursa Aşama 3 yalnız transpo
 
 ### 5.4 WebSocket fan-out: Redis pub/sub yeterli mi?
 
-At-most-once ("bir mesaj en fazla bir kez teslim edilir, hiç edilmeyebilir" — Redis dokümanı), kalıcılık yok, abone olmayan pod'a mesaj gitmez. Mobil tarafın "realtime + history pull" yapması (referans §13) bunu **tolere edilebilir** kılıyor; Centrifugo'nun tasarım dokümanı da aynı deseni önerir: önce DB'ye yaz, sonra pub/sub ile it, istemci yeniden bağlanınca **sıra numarasıyla** kaçırdıklarını çeker. Eksik olan muhtemelen bu **sıra numarası** (mesaj tablosunda sohbet başına monoton `seq`): istemci "son gördüğüm seq = N" diyerek boşluğu tespit edebilmeli (**doğrulanmalı**).
+At-most-once ("bir mesaj en fazla bir kez teslim edilir, hiç edilmeyebilir" — Redis dokümanı), kalıcılık yok, abone olmayan pod'a mesaj gitmez. Mobil tarafın "realtime + history pull" yapması (referans dokümanı Bölüm 13) bunu **tolere edilebilir** kılıyor; Centrifugo'nun tasarım dokümanı da aynı deseni önerir: önce DB'ye yaz, sonra pub/sub ile it, istemci yeniden bağlanınca **sıra numarasıyla** kaçırdıklarını çeker. Eksik olan muhtemelen bu **sıra numarası** (mesaj tablosunda sohbet başına monoton `seq`): istemci "son gördüğüm seq = N" diyerek boşluğu tespit edebilmeli (**doğrulanmalı**).
 
 Alternatifler ancak şu durumlarda: Redis kesintisinde mesajların "kaybolmuş gibi" görünmesi ürün sorunu olursa → **Redis Streams** (consumer group, `XACK`/`XAUTOCLAIM`, `MAXLEN` trimming; Socket.IO'nun Streams adapter'ı bu yüzden pub/sub adapter'ının yerine geldi) veya **Centrifugo** gibi ayrı realtime sunucu (history + recovery ile retention içinde at-least-once; STOMP/SockJS de kalkar; Flutter için SockJS zaten gereksiz). Kafka bu iş için değil.
 
@@ -329,12 +329,12 @@ Alternatifler ancak şu durumlarda: Redis kesintisinde mesajların "kaybolmuş g
 
 ### 6.1 Servis kimliği: paylaşılan HS256 secret — 🟠
 
-Referans §9.2 "Dikkat" zaten söylüyor; burada nedeni ve çözüm sırası:
+Referans dokümanı Bölüm 9.2 "Dikkat" zaten söylüyor; burada nedeni ve çözüm sırası:
 
-- **Risk:** Simetrik MAC'te her doğrulayıcı aynı zamanda imzalayıcıdır. Secret'ı bilen her bileşen (9 servis, config-server, sızan bir `.env` — referans §22.2 #27: `.env` build context'e giriyor) `act=backoffice-service, sub=<herhangi hesap>` token'ı basabilir. Bir servisteki tek SSRF/RCE/deserialization açığı = tam yatay hareket + kullanıcı taklidi; **actor allowlist'i yalnız dürüst çağıranları kısıtlar**, güvenlik sınırı değildir. `iss=gateway` her yerde olduğundan issuer bir güven sinyali taşımıyor; `act` token sahibinin kendi beyanı.
-- **RFC 8725 (JWT BCP)** §3.5: düşük entropili HS256 anahtarı (config'teki literal default gibi) ele geçirilen **tek** token'dan offline brute-force ile bulunur; §3.11–3.12: farklı JWT türleri (user/admin/service) için açık `typ` ve birbirini dışlayan doğrulama kuralları — ideali farklı anahtarlar. OWASP Microservices Security Cheat Sheet iki kabul edilebilir desen tanımlar: mTLS **veya** STS'nin **public** anahtarıyla offline doğrulanan token; paylaşılan simetrik anahtar ikisi de değil. NIST SP 800-204B: servis kimliği için mTLS "de facto" mekanizma.
+- **Risk:** Simetrik MAC'te her doğrulayıcı aynı zamanda imzalayıcıdır. Secret'ı bilen her bileşen (9 servis, config-server, sızan bir `.env` — referans dokümanı Bölüm 22.2, madde 27: `.env` build context'e giriyor) `act=backoffice-service, sub=<herhangi hesap>` token'ı basabilir. Bir servisteki tek SSRF/RCE/deserialization açığı = tam yatay hareket + kullanıcı taklidi; **actor allowlist'i yalnız dürüst çağıranları kısıtlar**, güvenlik sınırı değildir. `iss=gateway` her yerde olduğundan issuer bir güven sinyali taşımıyor; `act` token sahibinin kendi beyanı.
+- **RFC 8725 (JWT BCP)** bölüm 3.5: düşük entropili HS256 anahtarı (config'teki literal default gibi) ele geçirilen **tek** token'dan offline brute-force ile bulunur; bölüm 3.11–3.12: farklı JWT türleri (user/admin/service) için açık `typ` ve birbirini dışlayan doğrulama kuralları — ideali farklı anahtarlar. OWASP Microservices Security Cheat Sheet iki kabul edilebilir desen tanımlar: mTLS **veya** STS'nin **public** anahtarıyla offline doğrulanan token; paylaşılan simetrik anahtar ikisi de değil. NIST SP 800-204B: servis kimliği için mTLS "de facto" mekanizma.
 - **Rotasyon:** tek anahtar, 10 process, `kid` yok = eşzamanlı restart veya elle yazılmış çift-kabul penceresi; tek sızıntı her yerde rotasyon.
-- **JTI replay guard'ın maliyeti:** her istekte Redis `SET NX` (fail-closed). RFC 9700 (OAuth 2.0 Security BCP, Ocak 2025) replay için `jti` deposu yerine **sender-constrained** token (mTLS RFC 8705 / DPoP RFC 9449) + `aud` kısıtı önerir; bearer token ele geçirilirse zaten replay edilebilir. TLS içinde 45 sn TTL + sıkı `aud` varken kalan tehdit "token'ı meşru olarak gören taraf" (hedef servis, log, trace) — `aud` bunu zaten aynı servise hapsediyor. Redis kontrolü ~45 sn'lik aynı-servis replay koruması satın alıyor; bedeli her çağrıda Redis RTT + sert availability bağımlılığı. Uyarı: Spring Security'nin kendi DPoP `jti` cache'i **boyut sınırlı** olduğu için flood ile evict edilebildi (CVE-2026-41707, HIGH, Ağustos 2026) — bir `jti` deposu **TTL sınırlı** olmalı (≥ token TTL), asla boyut sınırlı değil; Redis'te `allkeys-*` eviction ile aynı hata oluşur (§4.4).
+- **JTI replay guard'ın maliyeti:** her istekte Redis `SET NX` (fail-closed). RFC 9700 (OAuth 2.0 Security BCP, Ocak 2025) replay için `jti` deposu yerine **sender-constrained** token (mTLS RFC 8705 / DPoP RFC 9449) + `aud` kısıtı önerir; bearer token ele geçirilirse zaten replay edilebilir. TLS içinde 45 sn TTL + sıkı `aud` varken kalan tehdit "token'ı meşru olarak gören taraf" (hedef servis, log, trace) — `aud` bunu zaten aynı servise hapsediyor. Redis kontrolü ~45 sn'lik aynı-servis replay koruması satın alıyor; bedeli her çağrıda Redis RTT + sert availability bağımlılığı. Uyarı: Spring Security'nin kendi DPoP `jti` cache'i **boyut sınırlı** olduğu için flood ile evict edilebildi (CVE-2026-41707, HIGH, Ağustos 2026) — bir `jti` deposu **TTL sınırlı** olmalı (≥ token TTL), asla boyut sınırlı değil; Redis'te `allkeys-*` eviction ile aynı hata oluşur (Bölüm 4.4).
 
 **Çözüm sırası (kolaydan zora):**
 1. **Asimetrik imza, yeni altyapı yok:** Gateway ve her servis kendi **Ed25519/ES256** anahtar çiftine sahip; `iss=<servis-adı>`; doğrulayan taraf `iss`+`aud`+`kid` ile public key'i JWKS'ten (paylaşılan salt-okunur JWKS dosyası veya her servisin `/.well-known/jwks.json` ucu) okur. Nimbus JOSE ve Spring Security resource-server (`JwtIssuerAuthenticationManagerResolver`) bunu destekler; kod değişikliği `ServiceJwtSigner`/`ServiceJwtVerificationFilter` ile sınırlı. Bir servis sızsa yalnız **kendi** kimliğiyle konuşabilir; allowlist gerçekten işe yarar. Servisler user JWT'yi de imza anahtarı tutmadan doğrulayabilir.
@@ -344,7 +344,7 @@ Referans §9.2 "Dikkat" zaten söylüyor; burada nedeni ve çözüm sırası:
 
 ### 6.2 E2EE: gerçek durum ve iddia arasındaki fark — 🟠
 
-Mevcut şema (referans §9.9): kullanıcı başına **tek statik** X25519 anahtarı (public key user-core'da), sohbet anahtarı = HKDF(ECDH(a, B), salt=conversationId), AES-256-GCM.
+Mevcut şema (referans dokümanı Bölüm 9.9): kullanıcı başına **tek statik** X25519 anahtarı (public key user-core'da), sohbet anahtarı = HKDF(ECDH(a, B), salt=conversationId), AES-256-GCM.
 
 Bu şemanın eksikleri kriptografik literatürde iyi bilinir:
 - **Forward secrecy yok:** Bir cihazın private key'i sızarsa, o kullanıcının **tüm geçmiş ve gelecek** sohbetleri (sunucudaki ciphertext ile birlikte) çözülür. Signal Double Ratchet'in varlık sebebi bu.
@@ -360,13 +360,13 @@ Bu şemanın eksikleri kriptografik literatürde iyi bilinir:
 
 ### 6.3 Kimlik doğrulama: SMS OTP ve admin 2FA — 🟠
 
-- **NIST SP 800-63B-4** (final, 2025): PSTN üzerinden OTP (SMS/sesli) tek "**restricted**" authenticator; kullanmak için belgelenmiş risk değerlendirmesi, en az bir restricted-olmayan alternatif sunma, kullanıcıyı bilgilendirme ve geçiş planı gerekir. Kullanıcı girişi için pratikte kabul edilebilir (dating app'lerin çoğu kullanıyor) ama **admin paneli** için SMS 2FA zayıf: TOTP (RFC 6238) veya **passkey/WebAuthn** (phishing'e dirençli). Spring Security **6.4** (Kasım 2024) `webAuthn()` DSL'i, `/webauthn/register` ve `/login/webauthn` uçları ve JDBC repository'leriyle passkey'i native destekliyor; Boot 3.2.5'in Security 6.2.4'ünde yok → Boot ≥3.4, pratikte 4.x (§9). Admin hesapları moderasyon kanıtına ve tüm kullanıcı verisine erişiyor.
+- **NIST SP 800-63B-4** (final, 2025): PSTN üzerinden OTP (SMS/sesli) tek "**restricted**" authenticator; kullanmak için belgelenmiş risk değerlendirmesi, en az bir restricted-olmayan alternatif sunma, kullanıcıyı bilgilendirme ve geçiş planı gerekir. Kullanıcı girişi için pratikte kabul edilebilir (dating app'lerin çoğu kullanıyor) ama **admin paneli** için SMS 2FA zayıf: TOTP (RFC 6238) veya **passkey/WebAuthn** (phishing'e dirençli). Spring Security **6.4** (Kasım 2024) `webAuthn()` DSL'i, `/webauthn/register` ve `/login/webauthn` uçları ve JDBC repository'leriyle passkey'i native destekliyor; Boot 3.2.5'in Security 6.2.4'ünde yok → Boot ≥3.4, pratikte 4.x (Bölüm 9). Admin hesapları moderasyon kanıtına ve tüm kullanıcı verisine erişiyor.
 - **SMS pumping (toll fraud / AIT):** Saldırgan `otp/start` ucunu premium numaralara SMS attırmak için kullanır; fatura patlar. Rate limit var (`otp-start`, `otp-start-ip`), ama tipik ek önlemler (Twilio'nun toll-fraud rehberi): hizmet verilmeyen ülke kodlarını engelleme (geo-permissions), `libphonenumber` doğrulaması + VoIP/premium aralık reddi, numara başına günlük tavan, "OTP gönder"den önce bot tespiti/attestation, harcama alarmı ve otomatik kesici. NetGSM tarafında benzer bir "fraud guard" var mı **doğrulanmalı**.
-- **Bot/scraper koruması:** Public API'de cihaz attestation yok; profil kazıma ve toplu fake hesap için engel yalnız rate limit. Dating app'lerde fake profil ana abuse vektörü (§11.1). Attestation **kademeli risk sinyali** olarak kullanılmalı, ikili kapı olarak değil (rooted cihaz/token relay ile aşılabilir); önce kayıt, OTP-gönder ve beğeni/swipe uçlarına.
+- **Bot/scraper koruması:** Public API'de cihaz attestation yok; profil kazıma ve toplu fake hesap için engel yalnız rate limit. Dating app'lerde fake profil ana abuse vektörü (Bölüm 11.1). Attestation **kademeli risk sinyali** olarak kullanılmalı, ikili kapı olarak değil (rooted cihaz/token relay ile aşılabilir); önce kayıt, OTP-gönder ve beğeni/swipe uçlarına.
 
 ### 6.4 Secret ve config yönetimi — 🟠
 
-- Config reposunda literal varsayılanlar (gateway JWT, SMTP, `QR_SALT`), local yml'lerde `${ENV:literal}` fallback'leri, `SPRING_CONFIG_IMPORT` URL'sinde basic-auth bilgisi (referans §15.4). `${JWT_SECRET:changeme}` gibi bir fallback, env eksikse uygulamayı **sessizce tahmin edilebilir anahtarla** açar; RFC 8725 §3.5'e göre bu anahtar tek token'dan geri kazanılır.
+- Config reposunda literal varsayılanlar (gateway JWT, SMTP, `QR_SALT`), local yml'lerde `${ENV:literal}` fallback'leri, `SPRING_CONFIG_IMPORT` URL'sinde basic-auth bilgisi (referans dokümanı Bölüm 15.4). `${JWT_SECRET:changeme}` gibi bir fallback, env eksikse uygulamayı **sessizce tahmin edilebilir anahtarla** açar; RFC 8725 bölüm 3.5'e göre bu anahtar tek token'dan geri kazanılır.
 - `.env` sunucuda `chmod 600` ile üretiliyor; kaynağı GitHub Secrets. Bu küçük ekip için **kabul edilebilir** bir başlangıç. Eksikler: rotasyon prosedürü yok, secret'ın nereden geldiği izlenemiyor, `.env` build context'e giriyor.
 - **Config Server'ın kendisi 2026'da ciddi bir risk oldu.** Spring Cloud Config'in güvenlik dokümanı: varsayılan HTTP Basic "pratikte yararlı değil", TLS ayrıca kurulmalı ve **"uygulama adını bilen her kimliği doğrulanmış istemci, başka uygulamanın config'ini isteyebilir"** — yani gateway, backoffice'in secret'larını okuyabilir. Üstüne, kullanılan 4.1.x dalında ve özellikle **native backend**'de 2026 CVE'leri: **CVE-2026-40982 CRITICAL** dizin geçişi (4.1.0–4.1.9; OSS düzeltmesi yalnız 4.3.3/5.0.3), **CVE-2026-22739 HIGH, kimlik doğrulamasız** — `profile` parametresi ile arama dizinlerinden kaçış/SSRF (4.1.0–4.1.8), CVE-2026-47894 native repo ifşası, CVE-2026-41004 trace log'larında secret sızması. Config-server port'u host'a açık değil (compose iç ağ) ama SSRF'e açık herhangi bir servis üzerinden erişilebilir.
 - Öneri (kolaydan zora): (1) `.dockerignore`'a `.env*`; gitleaks CI'a. (2) Fallback'siz **fail-fast** (secret yoksa uygulama açılmaz). (3) Secret'ları Config Server'dan **çıkar**: Docker Compose `secrets:` + Spring Boot **config tree** (`spring.config.import=optional:configtree:/run/secrets/`, Boot 2.4+; sıfır bağımlılık) — her dosya bir property olur. (4) Git'te şifreli secret için **SOPS + age** (CNCF sandbox; yalnız değerleri şifreler, diff okunabilir kalır); deploy'da compose secret dosyalarına çözülür. (5) Dinamik DB kimliği ve audit gerekirse **OpenBao** (MPL-2.0, Vault API uyumlu, Linux Foundation) veya Infisical; Vault (BSL) şart değil.
@@ -376,20 +376,20 @@ Bu şemanın eksikleri kriptografik literatürde iyi bilinir:
 
 - Rate limit yalnız downstream'de; gateway'de yok → kimliksiz istek seli doğrudan auth-core'a ulaşır. Spring Cloud Gateway `RequestRateLimiter` (Redis) veya önündeki reverse proxy'de (nginx `limit_req`) IP bazlı limit ucuz.
 - CORS `*`: mobil için gereksiz, panel için tehlikeli.
-- Header temizliği (`X-Subject-Id`, `X-User-*`) ve `StripPrefix` sonrası `/internal` kontrolü — referans §22.2 #17–18.
+- Header temizliği (`X-Subject-Id`, `X-User-*`) ve `StripPrefix` sonrası `/internal` kontrolü — referans dokümanı Bölüm 22.2, madde 17–18.
 - WebSocket `?token=` query parametresi erişim loguna düşüyor.
 
 ### 6.6 Fotoğraf pipeline'ı — 🟠 (doğrulanmalı)
 
-Presigned POST ile **doğrudan public bucket'a** yükleme + `validateDocument` (HEAD, başlık, ETag). Referans dokümanda **EXIF temizleme** geçmiyor. Telefon fotoğraflarında EXIF `GPSLatitude/Longitude` bulunur; konum fuzzing yapan bir uygulamanın profil fotoğrafından **ev adresini** sızdırması klasik hata. Ayrıca: yeniden boyutlandırma/thumbnail yok (mobil veri), NSFW/CSAM taraması yok (§11.1).
+Presigned POST ile **doğrudan public bucket'a** yükleme + `validateDocument` (HEAD, başlık, ETag). Referans dokümanda **EXIF temizleme** geçmiyor. Telefon fotoğraflarında EXIF `GPSLatitude/Longitude` bulunur; konum fuzzing yapan bir uygulamanın profil fotoğrafından **ev adresini** sızdırması klasik hata. Ayrıca: yeniden boyutlandırma/thumbnail yok (mobil veri), NSFW/CSAM taraması yok (Bölüm 11.1).
 
 İkinci sorun **public bucket'ın kendisi**: object key rastgele olsa da bucket public ise bir kez sızan/kazınan URL süresiz çalışır, kullanıcı fotoğrafını silse bile CDN'de kalır, "gizli mod"daki kullanıcının fotoğrafı erişilebilir kalır. Dating app'lerde profil fotoğrafı kazıma (scraping) ve ters görsel arama ile kimlik tespiti bilinen saldırı.
 
-Öneri: Yükleme private "inbox" bucket'a; bir işleme adımı (imgproxy/Thumbor veya user-core'da bir worker) **yeniden kodlar** (EXIF gider), boyutlar üretir, moderasyon API'sine gönderir (§11.1), sonra **private** servis bucket'ına taşır; istemciye kısa ömürlü **signed GET** URL'si (veya imzalı CDN URL'si) verilir. Belgeler için zaten böyle yapılıyor (private bucket, 5 dk presigned görüntüleme); aynı model profil fotoğrafına uygulanmalı.
+Öneri: Yükleme private "inbox" bucket'a; bir işleme adımı (imgproxy/Thumbor veya user-core'da bir worker) **yeniden kodlar** (EXIF gider), boyutlar üretir, moderasyon API'sine gönderir (Bölüm 11.1), sonra **private** servis bucket'ına taşır; istemciye kısa ömürlü **signed GET** URL'si (veya imzalı CDN URL'si) verilir. Belgeler için zaten böyle yapılıyor (private bucket, 5 dk presigned görüntüleme); aynı model profil fotoğrafına uygulanmalı.
 
 ### 6.7 KVKK: silme hakkı orkestrasyonu — 🟠 (doğrulanmalı)
 
-Export (veri taşınabilirliği) detaylı tasarlanmış (referans §9.10). **Silme** için: 9 şema, ES index'i, Redis key'leri, S3 (fotoğraf + belge), notification cihaz token'ları, backoffice kanıtları (yasal saklama süresiyle çelişir), yedekler. Bunu tek transaction'da yapmak imkânsız; **silme saga'sı** gerekir: `account.deletion_requested` event'i → her servis kendi verisini siler/anonimleştirir → tamamlanma raporu. Yasal saklama gereken kayıtlar (moderasyon, ödeme) **anonimleştirilir**, silinmez. Yedeklerde kalan veri için **crypto-shredding** (kullanıcı başına anahtar; silmede anahtarı yok et) en pratik çözüm.
+Export (veri taşınabilirliği) detaylı tasarlanmış (referans dokümanı Bölüm 9.10). **Silme** için: 9 şema, ES index'i, Redis key'leri, S3 (fotoğraf + belge), notification cihaz token'ları, backoffice kanıtları (yasal saklama süresiyle çelişir), yedekler. Bunu tek transaction'da yapmak imkânsız; **silme saga'sı** gerekir: `account.deletion_requested` event'i → her servis kendi verisini siler/anonimleştirir → tamamlanma raporu. Yasal saklama gereken kayıtlar (moderasyon, ödeme) **anonimleştirilir**, silinmez. Yedeklerde kalan veri için **crypto-shredding** (kullanıcı başına anahtar; silmede anahtarı yok et) en pratik çözüm.
 
 Bu yalnız KVKK meselesi değil: **Apple App Store Review Guideline 5.1.1**, hesap oluşturan her uygulamanın **uygulama içinden hesap silme** sunmasını zorunlu kılıyor; Google Play'de de benzer "veri silme" beyanı var. Silme akışı yoksa mağaza incelemesinde ret sebebi.
 
@@ -404,7 +404,7 @@ Yasal süreler ve kapsam:
 - **Polakis vd., CCS 2015 ("Where's Wally")**: istek başına rastgele gürültü, tekrarlı örneklemeyle ortalaması alınarak etkisizleşir; ortalama 56 sorgu / 7 sn'de konum bulundu. Önerilen çözüm sabit **spatial cloaking** (grid hücresi).
 - **KU Leuven, USENIX Security 2024 / Black Hat 2024**: 15 dating app'in 6'sında (Bumble, Hinge, Happn, Grindr, Badoo, Hily) kesin konum çıkarılabildi; Grindr'da ~111 m. Daha önemlisi **"oracle trilateration"**: mesafe gizlense bile "X km içinde mi" gibi ikili filtreler yeterli — ~2 m hassasiyete inildi. Öneri: mesafeyi gerçek koordinattan değil, **genelleştirilmiş noktadan** (grid hücresi / ilçe merkezi) hesapla; yakınlık oracle'ı olabilecek filtreleri kaldır.
 
-Yeterli sayılan önlemler: kullanıcı başına **deterministik** sabit grid hücresi veya sunucuda saklanan sabit (seed'li) ofset (~1–3 km; kullanıcı hareket etmeden değişmez), aynı yuvarlanmış noktanın **ES geo sorgusu ve filtrelerde de** kullanılması (yalnız gösterimde değil), mesafeyi **aralık** olarak gösterme ("<2 km"), minimum yarıçap, mesafeye göre kesin sıralama yapmama, kullanıcı/cihaz başına arama hız limiti. `LocationFuzzer`'ın deterministik mi rastgele mi olduğu ve ES sorgusunun ham koordinatı mı kullandığı **doğrulanmalı**. Harita özelliği (`X-Map-*` header'ları, referans §5.5) bu açıdan en riskli yüzey.
+Yeterli sayılan önlemler: kullanıcı başına **deterministik** sabit grid hücresi veya sunucuda saklanan sabit (seed'li) ofset (~1–3 km; kullanıcı hareket etmeden değişmez), aynı yuvarlanmış noktanın **ES geo sorgusu ve filtrelerde de** kullanılması (yalnız gösterimde değil), mesafeyi **aralık** olarak gösterme ("<2 km"), minimum yarıçap, mesafeye göre kesin sıralama yapmama, kullanıcı/cihaz başına arama hız limiti. `LocationFuzzer`'ın deterministik mi rastgele mi olduğu ve ES sorgusunun ham koordinatı mı kullandığı **doğrulanmalı**. Harita özelliği (`X-Map-*` header'ları, referans dokümanı Bölüm 5.5) bu açıdan en riskli yüzey.
 
 ---
 
@@ -420,7 +420,7 @@ Yeterli sayılan önlemler: kullanıcı başına **deterministik** sabit grid h�
 2. **Resilience4j + OpenFeign:** `spring.cloud.openfeign.circuitbreaker.enabled=true` her Feign metodunu `FooClient#bar()` adıyla sarar; hedef başına circuit breaker (açılınca hızlı 503, thread bloke olmaz), bulkhead (hedef başına eşzamanlı çağrı üst sınırı), `fallbackFactory`. **Tuzak:** Spring Cloud CircuitBreaker'ın Resilience4j entegrasyonu varsayılan olarak **1 sn'lik TimeLimiter** ve thread-pool bulkhead da ekler; `resilience4j.timelimiter.instances.*` ayarlanmazsa 5 sn'lik read timeout'unuz anlamsızlaşır (`spring.cloud.circuitbreaker.resilience4j.disable-time-limiter` / `enableSemaphoreDefaultBulkhead`).
 3. **Virtual threads** (`spring.threads.virtual.enabled=true`, Boot 4'te de opt-in): Tomcat thread sınırı kalkar; bloklayan IO ucuzlar. Java 21'de `synchronized` bloğu carrier thread'i **pin'ler** (JDBC sürücüleri/havuzlar dahil); JEP 491 (JDK 24) bunu çözdü → **Java 25 LTS'te** değerlendirin, 21'de değil. Hikari havuzu yine sınır — bilinçli tutulmalı.
 4. **OpenFeign'in geleceği:** Spring Cloud 2022.0.0'dan (Aralık 2022) beri "**feature-complete**" — yalnız bugfix; Spring ekibi HTTP Service Clients'a geçişi öneriyor. Hâlâ 2025.1'de (5.0.2) ve 2026.0-M1'de geliyor; ölü değil. Spring Framework 7 / Boot 4'te `@HttpExchange` arayüzleri + `@ImportHttpServices`, grup başına `spring.http.serviceclient.<grup>.base-url|connect-timeout|read-timeout`, `RestClient` altyapısı; Framework 7 ayrıca çekirdeğe `@Retryable` / `@ConcurrencyLimit` (`@EnableResilientMethods`) ekledi. Boot 4 upgrade'iyle birlikte planlanır; yeni client'lar o modelde yazılır.
-5. §2.4 read-model işi bunların hepsinden daha etkili.
+5. Bölüm 2.4 read-model işi bunların hepsinden daha etkili.
 
 ### 7.2 Backoffice parametre kataloğu = tier-0 bağımlılık — 🟠
 
@@ -430,18 +430,18 @@ Kural: "default yok, fallback yok, süresi geçmiş cache yok, hata yutulmaz →
 
 Bu, sektörün standart deseni: AWS'nin "**static stability**" ilkesi — data plane, control plane bozulduğunda **son bilinen konfigürasyonla** çalışmaya devam eder. Unleash Java SDK 15 sn'de bir poll eder, `unleash-repo.json` yedeğini diske yazar ve sunucu düşünce onu servis etmeye devam eder; OpenFeature SDK provider hatasında default döner; LaunchDarkly/Flagsmith/GrowthBook aynı (local evaluation + last-known-good). "5 sn cache + 503", backoffice'i her servisin tier-0 bağımlılığı yapar.
 
-Alternatif: parametre revizyonlarını **event** olarak yayınla (§5.3); tüketiciler local tabloda tutar; backoffice yalnız yazma yolu olur.
+Alternatif: parametre revizyonlarını **event** olarak yayınla (Bölüm 5.3); tüketiciler local tabloda tutar; backoffice yalnız yazma yolu olur.
 
 ### 7.3 Açılış bağımlılıkları ve health — 🟡
 
 - Healthcheck yalnız 3 serviste (config-server, gateway, auth). Compose `depends_on: service_healthy` diğerleri için çalışmıyor.
 - Readiness ≠ liveness: Spring Boot `management.endpoint.health.probes.enabled=true` ile `/actuator/health/readiness` ayrı; gateway hazır olmayan servise route etmesin.
-- `restart: on-failure:5` — beşinci hatadan sonra servis **ölü kalır** ve kimse haber almaz (Alertmanager yok, §8).
+- `restart: on-failure:5` — beşinci hatadan sonra servis **ölü kalır** ve kimse haber almaz (Alertmanager yok, Bölüm 8).
 - Graceful shutdown (`server.shutdown=graceful` + `spring.lifecycle.timeout-per-shutdown-phase`) belirtilmemiş (**doğrulanmalı**); `stop_grace_period 30s` var ama uygulama in-flight isteği bitirmiyorsa anlamsız. Poller'ların lease modeli çökmeyi tolere ediyor; bu iyi.
 
 ### 7.4 Kapasite — 🟡
 
-Tek host: 9 JVM × 700 MB limit = 6,3 GB + Postgres + Redis + RabbitMQ + ES (≥1 GB) + obs yığını (Loki, Tempo, Prometheus, Grafana ≈ 2 GB). Bu host en az 16 GB olmalı; yatay ölçek (ikinci instance) için host kapasitesi **yok**. "Multi-instance kuralı" kodda var, altyapıda karşılığı yok. Bu bir çelişki değil (hazırlık iyi) ama ikinci host planı olmalı: hangi servis önce çoğalır (chat: WebSocket bağlantı sayısı; gateway), oraya nasıl yönlendirilir (host nginx upstream), DB bağlantı bütçesi (§4.1-c).
+Tek host: 9 JVM × 700 MB limit = 6,3 GB + Postgres + Redis + RabbitMQ + ES (≥1 GB) + obs yığını (Loki, Tempo, Prometheus, Grafana ≈ 2 GB). Bu host en az 16 GB olmalı; yatay ölçek (ikinci instance) için host kapasitesi **yok**. "Multi-instance kuralı" kodda var, altyapıda karşılığı yok. Bu bir çelişki değil (hazırlık iyi) ama ikinci host planı olmalı: hangi servis önce çoğalır (chat: WebSocket bağlantı sayısı; gateway), oraya nasıl yönlendirilir (host nginx upstream), DB bağlantı bütçesi (Bölüm 4.1 (c)).
 
 ---
 
@@ -454,7 +454,7 @@ Yığın doğru bileşenlerden kurulu (OTLP → Tempo, Prometheus, Loki, Grafana
 | **Alertmanager yok**; alarm kuralları hiçbir yere gitmiyor | 🔴 | Alertmanager + Telegram/Slack/e-posta receiver; tek host'ta Grafana'nın kendi unified alerting'i de yeter (Grafana 11+). Container restart-loop ve `*_STUCK` logları için kural. |
 | **Promtail EOL** — Grafana'nın kendi dokümanı: "**2026-03-02 itibarıyla EOL, gelecekte destek veya güncelleme yok**"; tüm geliştirme Alloy'da | 🟠 | Grafana **Alloy**'a geç (1.20, Eylül 2026; içinde OTel Collector 0.161). Geçiş aracı hazır: `alloy convert --source-format=promtail`, geçişte `--config.format=promtail` ile eski config'i doğrudan çalıştırabilir. |
 | Loglar düz metin; `key=value` regex ile ayrıştırılıyor | 🟡 | Spring Boot 3.4+ **structured logging** (`logging.structured.format.console=ecs\|gelf\|logstash`; MDC ve fluent `addKeyValue` JSON alanı olur; 3.5'te stacktrace kontrolü); Loki `json` stage; `code=`, `outcome=` gerçek alan olur. Boot 4 ile OTLP log export (`spring-boot-starter-opentelemetry`) ve Loki'nin native OTLP alımı da seçenek. |
-| Loki label disiplini belirsiz | 🟢 | Loki rehberi: label değerleri onlarla sınırlı; trace/kullanıcı id'si **asla label değil** (referans §8.6 bunu zaten söylüyor) → **structured metadata** (schema v13 + TSDB; mevcut Loki config'i v13 — uygun). `logcli series --analyze-labels` ile denetle. |
+| Loki label disiplini belirsiz | 🟢 | Loki rehberi: label değerleri onlarla sınırlı; trace/kullanıcı id'si **asla label değil** (referans dokümanı Bölüm 8.6 bunu zaten söylüyor) → **structured metadata** (schema v13 + TSDB; mevcut Loki config'i v13 — uygun). `logcli series --analyze-labels` ile denetle. |
 | %100 trace sampling | 🟡 | Düşük trafikte sorun değil (Boot varsayılanı %10). Büyüyünce **tail sampling** (Alloy/OTel Collector `tailsampling`: tüm hatalı + yavaş izler %100, kalanı olasılıksal; `decision_wait` 30 sn, 50k iz bellekte) — aynı host'ta Tempo ingester belleği ve depolama için. |
 | OTel Collector yok; uygulamalar doğrudan Tempo'ya | 🟢 | Alloy zaten Collector; araya girince sampling, retry, vendor değişimi tek yerden. |
 | DB/Redis/Rabbit metrikleri yok (exporter yok) | 🟠 | postgres-exporter, redis-exporter, RabbitMQ prometheus plugin. Bağlantı havuzu, replication slot, queue derinliği görülmeli. |
@@ -480,10 +480,10 @@ Bu bölüm **🔴 kritik**: yığının büyük kısmı OSS desteği bitmiş sü
 | PostgreSQL | 15 | Destek **2027-11-11**'e kadar (14: 2026-11-12). Güncel 18.6 (Ağustos 2026); 19 GA Ekim 2026 | 18 (`uuidv7()`, performans) |
 | Redis | 7 (image tag'i) | 7.x son sürümleri Ağustos 2025; **fiilen bakımsız**. 7.4+ RSALv2/SSPL, 8.x AGPL ekli (8.10.2 güncel) | **Valkey 9.x** (BSD) veya Redis 8.x |
 | RabbitMQ | 3.13 | Community desteği **2024-09-17**'de bitti. Community-destekli tek seri **4.3.x** (4.3.6, Eylül 2026); 4.0–4.2 destek dışı | 4.3.x (yol: 3.13 → 4.2 → 4.3 veya blue/green; classic mirrored queue kalktı → quorum queue) |
-| Elasticsearch | 8.10.4 | Yama almıyor (8.x son: 8.19.22; 8.x bakım sonu Ocak 2027). 8.10 lisansı yalnız SSPL/ELv2 | OpenSearch 3.x (Apache-2.0) veya ES 9.x (AGPL seçeneği) — ya da PostGIS (§4.3) |
+| Elasticsearch | 8.10.4 | Yama almıyor (8.x son: 8.19.22; 8.x bakım sonu Ocak 2027). 8.10 lisansı yalnız SSPL/ELv2 | OpenSearch 3.x (Apache-2.0) veya ES 9.x (AGPL seçeneği) — ya da PostGIS (Bölüm 4.3) |
 | Promtail | 3.3.2 | **EOL 2026-03-02** | Grafana Alloy 1.20 |
 | Grafana / Loki / Tempo / Prometheus | 11.5 / 3.3 / 2.7 / 3.2 | Çalışır; güncel 13.2 / 3.7 / 3.0 / 3.15 | Alloy geçişiyle güncelle |
-| Spring Cloud OpenFeign | 4.1.x | "Feature-complete" (Aralık 2022'den beri), bugfix alıyor; 5.x var | Boot 4 ile HTTP Service Clients'a kademeli geçiş (§7.1) |
+| Spring Cloud OpenFeign | 4.1.x | "Feature-complete" (Aralık 2022'den beri), bugfix alıyor; 5.x var | Boot 4 ile HTTP Service Clients'a kademeli geçiş (Bölüm 7.1) |
 | Spring Cloud Gateway | 4.1.1 (WebFlux) | Artefakt 2025.0'da `spring-cloud-starter-gateway-server-webflux`, property prefix'i `spring.cloud.gateway.server.webflux.*` oldu; eski adlar 5.0'da kaldırıldı (OpenRewrite reçetesi var) | 5.0.x |
 | Testcontainers | yok | 2.0 (Nisan 2026) artefakt adlarını değiştirdi (`testcontainers-postgresql`), JUnit 4 kalktı | 2.x |
 | React / MUI / Vite | 18.3 / 5.18 / 6.4 | Çalışır | React 19, MUI 7 (acele yok) |
@@ -513,7 +513,7 @@ Gateway'in `gateway` actuator ucu açık değilse (exposure `health,info,prometh
 ### 9.3 Upgrade sırası
 
 1. **Java 25** (Boot 3.2 Java 25'te çalışır; önce JDK).
-2. **Boot 3.5 + Cloud 2025.0** — birkaç gün: `taskExecutor` bean adı `applicationTaskExecutor`, katı boolean/profil ayrıştırma, Gateway artefakt/property adları (OpenRewrite), Hibernate 6.6. Bu basamakta Testcontainers CI (§10) ve `common-security` → starter dönüşümü (§3.1) yapılır; sonraki adımı kolaylaştırır.
+2. **Boot 3.5 + Cloud 2025.0** — birkaç gün: `taskExecutor` bean adı `applicationTaskExecutor`, katı boolean/profil ayrıştırma, Gateway artefakt/property adları (OpenRewrite), Hibernate 6.6. Bu basamakta Testcontainers CI (Bölüm 10) ve `common-security` → starter dönüşümü (Bölüm 3.1) yapılır; sonraki adımı kolaylaştırır.
 3. **Boot 4.0/4.1 + Cloud 2025.1** — 2–4 mühendis-haftası: Spring Framework 7 (Jakarta EE 11, Tomcat 11, `RestTemplate` deprecated), **Jackson 3** (`tools.jackson`, `JsonMapper`; `spring-boot-jackson2` köprüsü), Hibernate ORM 7.1/7.2 (`@UuidGenerator` v7), modüler starter'lar (`spring-boot-starter-webmvc`, `-flyway`, `-<tech>-test`), `@MockBean` → `@MockitoBean`, `@SpringBootTest`'in MockMvc'yi otomatik vermemesi, Testcontainers 2 artefakt adları. `spring-boot-properties-migrator` ve OpenRewrite reçeteleri işi kısaltır.
 4. Dependabot/Renovate ile borcun yeniden birikmesini engelle.
 
@@ -526,12 +526,12 @@ Mevcut test kültürü güçlü (1.600+ test metodu, log-privacy testleri, concu
 | Boşluk | Önem | Çözüm |
 |---|---|---|
 | **Gerçek-PG testleri CI'da atlanıyor** (`@EnabledIfEnvironmentVariable`); Testcontainers yok | 🟠 | Testcontainers (`postgres`, `redis`, `rabbitmq`) + Spring Boot **`@ServiceConnection`** (3.1+; `@DynamicPropertySource`'un yerine). `ubuntu-latest` runner'da Docker hazır. Not: Testcontainers "reuse" modu deneysel ve **CI için uygun değil**; CI'da Spring context cache + JVM başına tek container yeter. Testcontainers 2.x artefakt adları değişti (`testcontainers-postgresql`). Daha ucuz alternatif: workflow `services:` bloğu ile Postgres; mevcut `PLATE_*_PG_TESTS` env'ini CI'da set etmek **bugün yarım saatlik iş** — Testcontainers'ı beklemeden. |
-| Mimari kurallar yalnız dokümanda (controller→repository yasağı, core→core yasağı, `service.impl`'de yalnız Impl) | 🟡 | **ArchUnit** (1.5.x) testleri her core modülde: `noClasses().that().resideInAPackage("..controller..").should().dependOnClassesThat().resideInAPackage("..repository..")`, `layeredArchitecture()`, `slices().should().beFreeOfCycles()`; `*-core` → başka `*-core` bağımlılığı Maven enforcer `bannedDependencies` ile. §2.3-A/C seçilirse **Spring Modulith** `ApplicationModules.of(App.class).verify()` (döngü yok, yalnız API paketine erişim, `allowedDependencies`) + `spring.modulith.runtime.verification-enabled` ile açılışta ihlalde durma; Modulith 2.0 GA (Kasım 2025, Boot 4), 1.4.x Boot 3.x için. |
+| Mimari kurallar yalnız dokümanda (controller→repository yasağı, core→core yasağı, `service.impl`'de yalnız Impl) | 🟡 | **ArchUnit** (1.5.x) testleri her core modülde: `noClasses().that().resideInAPackage("..controller..").should().dependOnClassesThat().resideInAPackage("..repository..")`, `layeredArchitecture()`, `slices().should().beFreeOfCycles()`; `*-core` → başka `*-core` bağımlılığı Maven enforcer `bannedDependencies` ile. Bölüm 2.3 seçenek A/C seçilirse **Spring Modulith** `ApplicationModules.of(App.class).verify()` (döngü yok, yalnız API paketine erişim, `allowedDependencies`) + `spring.modulith.runtime.verification-enabled` ile açılışta ihlalde durma; Modulith 2.0 GA (Kasım 2025, Boot 4), 1.4.x Boot 3.x için. |
 | Feign contract testleri yalnız **istek** biçimini doğruluyor; sağlayıcı tarafı yok | 🟢 | Monorepo'da derleme zamanı tip kontrolü zaten var; Pact'in kendi karşılaştırma sayfası bile "iki tarafı aynı ekip yazıyor ve kod aynı repoda ise az katkı sağlar" der. Bunun yerine `@WebMvcTest` ile internal controller'ların gerçek path/binding testi (backoffice'te var, diğerlerinde yok). |
-| **Yük testi yok** (k6/Gatling); swipe/mesaj kapasitesi bilinmiyor | 🟠 | Staging'de haftalık k6 senaryosu: N eşzamanlı kullanıcı swipe + mesaj; p99 ve hata oranı SLO'ya karşı. Kapasite planı (§7.4) buna dayanır. |
+| **Yük testi yok** (k6/Gatling); swipe/mesaj kapasitesi bilinmiyor | 🟠 | Staging'de haftalık k6 senaryosu: N eşzamanlı kullanıcı swipe + mesaj; p99 ve hata oranı SLO'ya karşı. Kapasite planı (Bölüm 7.4) buna dayanır. |
 | **Migration testi**: prod benzeri veri hacminde migration süresi/lock ölçülmüyor | 🟡 | Aylık prod yedeğinden anonimleştirilmiş staging DB; migration'lar orada koşar. |
-| Frontend: `tsc -b`, `vite build`, lint CI'da yok | 🟢 | Referans §17 önerisi. |
-| Mobil sözleşme: 16 el yazımı Flutter dokümanı, OpenAPI prod'da kapalı | 🟡 | Bkz. §13.2. |
+| Frontend: `tsc -b`, `vite build`, lint CI'da yok | 🟢 | Referans dokümanı Bölüm 17 önerisi. |
+| Mobil sözleşme: 16 el yazımı Flutter dokümanı, OpenAPI prod'da kapalı | 🟡 | Bkz. Bölüm 13.2. |
 
 ---
 
@@ -540,10 +540,10 @@ Mevcut test kültürü güçlü (1.600+ test metodu, log-privacy testleri, concu
 ### 11.1 Güven ve güvenlik (Trust & Safety) — 🟠
 
 Moderasyon iş akışı (report → case → action → appeal) olgun. Eksik olan **otomatik ilk katman**:
-- **Fotoğraf moderasyonu:** NSFW/çıplaklık tespiti (AWS Rekognition, Hive, Sightengine; Bumble'ın açık kaynak "Private Detector" modeli) ve **CSAM hash eşleme**: Microsoft **PhotoDNA Cloud Service** (nitelikli kuruluşlara ücretsiz; görsel hash'lenir, saklanmaz) ve Google **CSAI Match / Content Safety API**. ABD'ye hizmet veren sağlayıcılar için NCMEC'e bildirim yükümlülüğü var (18 U.S.C. §2258A). Yükleme pipeline'ı (§6.6) bunun için doğru yer.
+- **Fotoğraf moderasyonu:** NSFW/çıplaklık tespiti (AWS Rekognition, Hive, Sightengine; Bumble'ın açık kaynak "Private Detector" modeli) ve **CSAM hash eşleme**: Microsoft **PhotoDNA Cloud Service** (nitelikli kuruluşlara ücretsiz; görsel hash'lenir, saklanmaz) ve Google **CSAI Match / Content Safety API**. ABD'ye hizmet veren sağlayıcılar için NCMEC'e bildirim yükümlülüğü var (18 U.S.C. 2258A). Yükleme pipeline'ı (Bölüm 6.6) bunun için doğru yer.
 - **Selfie/liveness doğrulama** ("fotoğraf doğrulandı" rozeti): Tinder Ekim 2025'te **Face Check**'i (video selfie liveness, onboarding'de zorunlu, yüz vektörüyle çoklu hesap tespiti) birçok pazarda zorunlu yaptı; bu artık sektör çıtası. Fake profil ve catfish'e karşı en etkili araç. Araç doğrulama (plaka/ruhsat) var, **kişi** doğrulama yok.
-- **Fake profil / scam sinyalleri:** Bumble'ın "Deception Detector"ı (2024) ve romance-scam istatistikleri (FTC 2023: 64 bin şikayet, 1,14 milyar $) bunun dating app'lerde birincil abuse vektörü olduğunu gösteriyor. Sinyaller: aynı cihaz/IP'den çoklu hesap, mesaj şablonu tekrarı, hızlı toplu beğeni, plaka tarama davranışı. E2EE nedeniyle içerik sınıflandırıcı (Bumble'ın "Rude Message Detector"ı gibi) **kullanılamaz**; yalnız metadata sinyalleri kalır. Bunlar için §5'teki event akışı gerekli; bugün sinyal yok.
-- **Cihaz attestation** (§6.3): Google **Play Integrity** (`deviceIntegrity`, `recentDeviceActivity` bot hacmi sinyali, `appAccessRisk`, Kasım 2025'te eklenen `deviceRecall` ile reinstall/reset sonrası tekrar eden kötüye kullanıcı tespiti; varsayılan 10.000 istek/gün) ve Apple **App Attest** (donanım anahtar attestation + istek başına assertion) + **DeviceCheck** (cihaz başına 2 bit, reinstall'da kalır — "deneme hakkı kullanıldı" için). Kayıt, giriş ve satın almada risk sinyali olarak.
+- **Fake profil / scam sinyalleri:** Bumble'ın "Deception Detector"ı (2024) ve romance-scam istatistikleri (FTC 2023: 64 bin şikayet, 1,14 milyar $) bunun dating app'lerde birincil abuse vektörü olduğunu gösteriyor. Sinyaller: aynı cihaz/IP'den çoklu hesap, mesaj şablonu tekrarı, hızlı toplu beğeni, plaka tarama davranışı. E2EE nedeniyle içerik sınıflandırıcı (Bumble'ın "Rude Message Detector"ı gibi) **kullanılamaz**; yalnız metadata sinyalleri kalır. Bunlar için Bölüm 5'teki event akışı gerekli; bugün sinyal yok.
+- **Cihaz attestation** (Bölüm 6.3): Google **Play Integrity** (`deviceIntegrity`, `recentDeviceActivity` bot hacmi sinyali, `appAccessRisk`, Kasım 2025'te eklenen `deviceRecall` ile reinstall/reset sonrası tekrar eden kötüye kullanıcı tespiti; varsayılan 10.000 istek/gün) ve Apple **App Attest** (donanım anahtar attestation + istek başına assertion) + **DeviceCheck** (cihaz başına 2 bit, reinstall'da kalır — "deneme hakkı kullanıldı" için). Kayıt, giriş ve satın almada risk sinyali olarak.
 - **Düzenleyici / mağaza:**
   - **Apple Guideline 1.2** (UGC): rahatsız edici içerik filtresi, **zamanında yanıtlanan** raporlama, engelleme, yayınlanmış iletişim bilgisi — ilk ikisi otomasyon olmadan ölçeklenmez. "Gerçek kişilerin nesneleştirilmesi (hot-or-not)" kategorisindeki uygulamalar kaldırılıyor; plaka üzerinden kişi beğenme ürünü bu sınıra **yakın**; inceleme notlarında konumlandırma önemli.
   - **Google Play**: sosyal/dating uygulamaları Child Safety Standards beyanı ve yaş kısıtlaması (18+) zorunlu.
@@ -555,25 +555,25 @@ Moderasyon iş akışı (report → case → action → appeal) olgun. Eksik ola
 ### 11.2 Ürün analitiği, deney ve öneri motoru — 🟠
 
 Dating app'in çekirdek döngüsü: **öneri kalitesi → eşleşme → sohbet → tutunma**. Bunu ölçmeden iyileştiremezsiniz. Bugün:
-- Sunucu tarafı event akışı yok (§5). İstemci tarafı analytics (Firebase Analytics?) referans dokümanda yok (**doğrulanmalı**). Funnel (plaka arama → profil bulundu → beğeni → eşleşme → ilk mesaj → yanıt), retention ve eşleşme kalitesi Postgres'teki **satır durumundan** hesaplanamaz; ham olay logu gerekir.
+- Sunucu tarafı event akışı yok (Bölüm 5). İstemci tarafı analytics (Firebase Analytics?) referans dokümanda yok (**doğrulanmalı**). Funnel (plaka arama → profil bulundu → beğeni → eşleşme → ilk mesaj → yanıt), retention ve eşleşme kalitesi Postgres'teki **satır durumundan** hesaplanamaz; ham olay logu gerekir.
 - Feature flag yok → yeni özellik "ya hep ya hiç" çıkıyor; A/B yok → öneri ağırlıkları (backoffice'te "öneri ağırlıkları" var) körlemesine ayarlanıyor.
 - Öneri motoru: ES geo sorgu + Redis snapshot. Bu, Tinder/Hinge'in "önceden hesaplanmış feed cache + index fallback" desenine zaten benziyor; iyi. Tinder'ın S2 geosharding'i on milyonlarca kullanıcıda gerekti (40–100 geoshard, shard = ayrı ES index'i); bugün gereksiz. Ama **ranking** (Tinder TinVec: swipe loglarından embedding; Hinge "Most Compatible": Gale-Shapley) için `SwipeMade(from, to, direction)`, `MatchCreated`, `MessageSent/Replied` olaylarının bir yerde birikmesi şart. Bumble'ın 2025 mimari tanımı da "retrieval → ranking → decisioning, gerçek zamanlı sinyallerle"; hepsi event akışına dayanıyor.
 
 Küçük ekip için minimum (maliyet sırasıyla):
 1. Firebase zaten var → **GA4/Firebase → BigQuery export** (standart hesaplarda ücretsiz, ham/örneklemesiz, günlük + intraday) istemci olayları için sıfır altyapı.
-2. Sunucu olayları: event envelope (§5.3 Aşama 1) → tek "event sink" tüketicisi → Postgres `analytics` şeması (başlangıç) veya **ClickHouse** → Metabase/Grafana funnel panoları. Alternatif: **PostHog** (self-host; ClickHouse tabanlı analytics + session replay + flag + deney tek üründe) veya **RudderStack** (open-source, warehouse-first).
+2. Sunucu olayları: event envelope (Bölüm 5.3 Aşama 1) → tek "event sink" tüketicisi → Postgres `analytics` şeması (başlangıç) veya **ClickHouse** → Metabase/Grafana funnel panoları. Alternatif: **PostHog** (self-host; ClickHouse tabanlı analytics + session replay + flag + deney tek üründe) veya **RudderStack** (open-source, warehouse-first).
 3. Feature flag / deney: **OpenFeature** (CNCF incubating, vendor-bağımsız SDK — Java, Kotlin, Swift) + **GrowthBook** (MIT, warehouse-native metrik) ya da Unleash; veya mevcut parametre kataloğuna `BOOLEAN`/`PERCENTAGE` tipi ekleyip kullanıcı-bucket'lı flag desteği vermek (kataloğun revizyon/snapshot modeli deney için zaten uygun). E2EE nedeniyle **içerik** olayı asla; yalnız metadata (`message_sent`, yanıt gecikmesi).
 
 ### 11.3 Uygulama içi satın alma — 🔴
 
-`MockStoreValidationService` her ortamda aktif (referans §22.1 #1). Somut risk: token'ı olan herkes `/subscriptions/verify` ile premium açar; gerçek bir makbuz/purchaseToken **hesaplar arasında replay** edilir (bir abonelik → sınırsız premium hesap); iade/iptal/süre dolumu işlenmediği için churn eden kullanıcı premium kalır.
+`MockStoreValidationService` her ortamda aktif (referans dokümanı Bölüm 22.1, madde 1). Somut risk: token'ı olan herkes `/subscriptions/verify` ile premium açar; gerçek bir makbuz/purchaseToken **hesaplar arasında replay** edilir (bir abonelik → sınırsız premium hesap); iade/iptal/süre dolumu işlenmediği için churn eden kullanıcı premium kalır.
 
 Doğru uygulama:
 - **Apple:** `verifyReceipt` **WWDC23'ten beri deprecated**. **App Store Server API** JWS imzalı transaction döner; sertifika zinciri Apple köküne + OCSP ile doğrulanır, ardından `appAppleId`, `bundleId`, `environment` kontrol edilir. Apple'ın **App Store Server Library** (Java sürümü var) JWS doğrulama ve JWT auth'u hazır veriyor. **App Store Server Notifications V2**: iç içe JWS (`signedPayload` → `signedTransactionInfo` + `signedRenewalInfo`), tipler `SUBSCRIBED`, `DID_RENEW`, `DID_CHANGE_RENEWAL_STATUS`, `EXPIRED`, `REFUND`, `REVOKE`; `notificationUUID` ile dedup; 200 dön ve asenkron işle (retry 1s→72s). Satın almada set edilen **`appAccountToken`** (UUID) tüm transaction/bildirimlerde gelir → hak, hesaba bununla bağlanır.
 - **Google:** `purchaseToken` **global benzersiz** → primary key; daha önce görülen token reddedilir. Doğrulama `purchases.subscriptionsv2:get`; `orderId` üzerine anahtar **kurulmaz** (promosyonlarda yok). Satın almada `obfuscatedAccountId` set edilir ve doğrulamada çağıranla eşleştirilir. **3 gün içinde acknowledge** edilmezse Google otomatik iade eder. `PENDING` durumunda hak verilmez. **RTDN** (Pub/Sub) yalnız "durum değişti" der; API çağrısı şart. Tipler: `PURCHASED`, `RENEWED`, `CANCELED`, `ON_HOLD`, `IN_GRACE_PERIOD`, `EXPIRED`, `REVOKED` + `voidedPurchaseNotification`.
 - İkisinde de: makbuz → **bir kez** bir hesaba bağlanır (`original_transaction_id` / `purchase_token` UNIQUE); sunucu bildirimleri ile abonelik durumu tek kaynak olur; istemcinin "verify" çağrısı yalnız tetikleyicidir. Mevcut `purchase_order` + `idempotent_operation` altyapısı bunun üstüne oturur.
 - Alternatif: **RevenueCat** (2,5k $ MTR'ye kadar ücretsiz, sonra %1) / **Adapty** (5k $'a kadar ücretsiz): iki mağazayı tek webhook'a indirger; küçük ekip için haftalar kazandırır.
-- Store bildirimleri **RabbitMQ'ya değil**, imzası doğrulanmış webhook → subscription-core outbox'ına girer (referans §12.1'deki "moderasyon olayları kuyruktan kabul edilmez" ilkesiyle aynı).
+- Store bildirimleri **RabbitMQ'ya değil**, imzası doğrulanmış webhook → subscription-core outbox'ına girer (referans dokümanı Bölüm 12.1'deki "moderasyon olayları kuyruktan kabul edilmez" ilkesiyle aynı).
 
 ### 11.4 Plaka tabanlı eşleşmenin gizlilik profili — 🟠
 
@@ -585,7 +585,7 @@ Plaka, KVKK ve GDPR'da **kişisel veri** (araç sahibine ulaşılabildiği için
 Ürünün doğası — "trafikte gördüğüm plakayı arayıp o kişiye ulaşmak" — **takip ve taciz** vektörü; emsaller de bunu gösteriyor: Bump.com (ABD, 2010) "her plakaya mesaj" ile "stalker'ca" diye eleştirildi; **Plaka.io** (Türkiye, 2018) sahibinin kaydı olmadan her plakaya yorum yazdırdı ve kadın sürücülere karşı taciz kanalı olarak anıldı. Bu ürünün var olan savunmaları iyi: gizli mod, plaka araması hak tüketiyor (rate limit doğal), araç/ruhsat doğrulama, engel/şikayet. Eksik olabilecekler (**doğrulanmalı**):
 - Plaka araması **yalnız karşı taraf opt-in** ise sonuç veriyor mu? Varsayılan görünürlük "kapalı" olmalı; kayıtlı olmayan ve gizli plakalar için **tek tip "sonuç yok"** (varlık oracle'ı olmasın).
 - Aynı hesabın/cihazın **çok sayıda farklı plakayı** araması (tarama davranışı) tespit ediliyor mu? Hız limiti + velocity alarmı + arama audit logu (moderasyon için).
-- Plaka, DB'de düz metin mi? `PhoneHashing` tuzsuz SHA-256 (referans §9.10) — plaka için de düşük entropili (TR plakası ~10^9 olasılık) → düz SHA-256 rainbow table'a açık; **HMAC + pepper** (arama için) + şifreli orijinal (gösterim için) şart (referans §9.10 kuralı zaten bunu söylüyor; uygulanıp uygulanmadığı doğrulanmalı).
+- Plaka, DB'de düz metin mi? `PhoneHashing` tuzsuz SHA-256 (referans dokümanı Bölüm 9.10) — plaka için de düşük entropili (TR plakası ~10^9 olasılık) → düz SHA-256 rainbow table'a açık; **HMAC + pepper** (arama için) + şifreli orijinal (gösterim için) şart (referans dokümanı Bölüm 9.10 kuralı zaten bunu söylüyor; uygulanıp uygulanmadığı doğrulanmalı).
 - Kimlik yalnız **karşılıklı beğenide** açılmalı; plaka araması tek başına profil detayı vermemeli.
 - Plaka aramasının hedefe bildirilmesi ("biri plakanı aradı") ve hedefin kaç kez arandığını görmesi — şeffaflık aynı zamanda caydırıcı.
 - KVKK: açık rıza + aydınlatma metni plakayı ayrıca saymalı; bu ürün için **DPIA** (veri koruma etki değerlendirmesi) yapılmış olmalı.
@@ -594,22 +594,22 @@ Plaka, KVKK ve GDPR'da **kişisel veri** (araç sahibine ulaşılabildiği için
 
 FCM + kampanya altyapısı var. E2EE nedeniyle push'ta içerik yok (doğru; FCM/APNs payload'ı okuyabilir — Signal'in boş bildirim + fetch modeli, Firebase'in kendi "opak data message + fetch" tavsiyesiyle uyumlu). Push yalnız `conversationId` + collapse key taşımalı; iOS'ta `mutable-content` + Notification Service Extension ile istemci yerelde çözer.
 
-Eksikler: sessiz saat / kullanıcı tercihi (var mı **doğrulanmalı**), bildirim yorgunluğu limiti (haftada 2–5 bildirimde kullanıcıların ~%46'sı opt-out ediyor — sektör anketleri; sosyal uygulamalarda Android opt-in ~%49, iOS ~%50), üç katman (işlemsel her zaman / davranışsal / promosyon opt-in), kullanıcı başına frekans tavanı, teslim/açılma oranı metriği (§8).
+Eksikler: sessiz saat / kullanıcı tercihi (var mı **doğrulanmalı**), bildirim yorgunluğu limiti (haftada 2–5 bildirimde kullanıcıların ~%46'sı opt-out ediyor — sektör anketleri; sosyal uygulamalarda Android opt-in ~%49, iOS ~%50), üç katman (işlemsel her zaman / davranışsal / promosyon opt-in), kullanıcı başına frekans tavanı, teslim/açılma oranı metriği (Bölüm 8).
 
 ---
 
 ## 12. Build, Deploy ve Operasyon
 
-Referans §18'deki tespitler doğru; burada **sıra** ve **neden**:
+Referans dokümanı Bölüm 18'deki tespitler doğru; burada **sıra** ve **neden**:
 
-1. 🔴 **Yedekleme** (§4.1-b) — her şeyden önce.
-2. 🔴 **Alertmanager** (§8) — `restart: on-failure:5` sonrası ölü servis fark edilmiyor. Docker'ın production rehberi `restart: always` önerir.
+1. 🔴 **Yedekleme** (Bölüm 4.1 (b)) — her şeyden önce.
+2. 🔴 **Alertmanager** (Bölüm 8) — `restart: on-failure:5` sonrası ölü servis fark edilmiyor. Docker'ın production rehberi `restart: always` önerir.
 3. 🟠 **CI'da image build → GHCR → digest ile deploy.** "Build once, push to registry, promote" ilkesi; tag'ler değişebilir işaretçi, `@sha256:` değişmez. Prod'da build bitince: rollback = önceki digest'i deploy (saniyeler), "hangi commit prod'da" sorusu digest ile kesin, prod CPU'su build'e gitmez. Image: **Jib** (pom'da hazır; daemon'suz, tekrarlanabilir katmanlar, varsayılan non-root) veya Spring Boot layered jar / Buildpacks (`spring-boot:build-image`). Deploy = `docker compose pull && docker compose up -d <svc>`.
 4. 🟠 **Staging ortamı.** `release` → test, `main` → hiçbir yere. Prod deploy'u elle mi? (**doğrulanmalı**). `main` → prod, onay kapısıyla (GitHub environment protection).
 5. 🟠 **Non-root container, `HEALTHCHECK` + `start_period`, `.dockerignore`.**
-6. 🟡 **Compose'da kalın** (Docker dokümanı tek host'u desteklenen "en basit" production seçeneği sayar), ama ikinci host planıyla (§7.4). Tek host'ta sıfır-kesinti için: önde proxy (Traefik/nginx) + **`docker-rollout`** (servisi ×2 ölçekle, healthy olunca eskisini kaldır) veya iki compose projesiyle blue/green. Kubernetes bu ekip boyutunda erken (Tinder'da ~200 serviste değdi); k3s/Swarm ancak ≥3 host olunca.
+6. 🟡 **Compose'da kalın** (Docker dokümanı tek host'u desteklenen "en basit" production seçeneği sayar), ama ikinci host planıyla (Bölüm 7.4). Tek host'ta sıfır-kesinti için: önde proxy (Traefik/nginx) + **`docker-rollout`** (servisi ×2 ölçekle, healthy olunca eskisini kaldır) veya iki compose projesiyle blue/green. Kubernetes bu ekip boyutunda erken (Tinder'da ~200 serviste değdi); k3s/Swarm ancak ≥3 host olunca.
 7. 🟡 **Image imzalama + SBOM:** cosign keyless (GitHub OIDC) veya GitHub `actions/attest-build-provenance`; Syft ile SPDX SBOM — tedarik zinciri; düşük maliyet.
-8. 🟢 **Dependabot/Renovate** — §9'daki borcun birikmesini engeller.
+8. 🟢 **Dependabot/Renovate** — Bölüm 9'daki borcun birikmesini engeller.
 
 ---
 
@@ -617,7 +617,7 @@ Referans §18'deki tespitler doğru; burada **sıra** ve **neden**:
 
 ### 13.1 Backoffice web — 🟢
 
-Referans §17 önerileri yeterli (ESLint/Prettier/tsc CI, TanStack Query, rol matrisi tek dosya, route splitting). Mimari düzeyde tek not: **rol claim'i JWT'de** (≤900 sn gecikme) — admin yetkisi düşürüldüğünde anında etki gerekiyorsa `sv` artırma (zaten şifre değişiminde var) rol değişimine de bağlanmalı.
+Referans dokümanı Bölüm 17 önerileri yeterli (ESLint/Prettier/tsc CI, TanStack Query, rol matrisi tek dosya, route splitting). Mimari düzeyde tek not: **rol claim'i JWT'de** (≤900 sn gecikme) — admin yetkisi düşürüldüğünde anında etki gerekiyorsa `sv` artırma (zaten şifre değişiminde var) rol değişimine de bağlanmalı.
 
 ### 13.2 Mobil sözleşme: 16 el yazımı doküman yerine OpenAPI — 🟡
 
@@ -631,7 +631,7 @@ Referans §17 önerileri yeterli (ESLint/Prettier/tsc CI, TanStack Query, rol ma
 
 Bu katman projenin en özgün yanı ve iyi kurulmuş. Üç geliştirme:
 1. **Kural → makine:** Dokümandaki kuralların çoğu (controller→repository yasağı, core→core yasağı, `@Valid` zorunluluğu, `log.error` öncesi throw) ArchUnit/Checkstyle/ErrorProne ile **CI'da** zorlanabilir. AI ajanı kuralı unutsa test yakalar; skill'ler "ne yapmalı"yı, testler "yapıldı mı"yı taşır.
-2. **Push hook'u** kırık (referans §19.4) ve `.claude/skills` elle kopya — symlink + `bash -n` testi.
+2. **Push hook'u** kırık (referans dokümanı Bölüm 19.4) ve `.claude/skills` elle kopya — symlink + `bash -n` testi.
 3. **Skill'lerin ürettiği kararlar** (APPROVE/REQUEST CHANGES) hiçbir yerde kayıt altında değil; PR template'ine "çalıştırılan skill'ler ve sonuçları" bölümü eklenirse review izi oluşur.
 
 ---
@@ -639,61 +639,61 @@ Bu katman projenin en özgün yanı ve iyi kurulmuş. Üç geliştirme:
 ## 15. Yol Haritası
 
 ### Şimdi (0–4 hafta) — düşük maliyet, yüksek risk azaltma
-- [ ] 🔴 PostgreSQL yedek (WAL-G → Spaces) + sürekli WAL arşivi + **restore provası**; Redis AOF; S3 versioning. (§4.1-b)
-- [ ] 🔴 Alertmanager (veya Grafana alerting) + bildirim kanalı; container restart ve `*_STUCK` alarmı. (§8)
-- [ ] 🔴 `MockStoreValidationService` → `@Profile("local|test")`; prod'da gerçek doğrulama yoksa satın alma **kapalı**. (§11.3)
-- [ ] 🔴 Seed migration'ları prod location'ından çıkar (referans §22.1 #2).
-- [ ] 🔴 Config Server CVE'leri için acil önlem: secret'ları Config Server'dan çıkar (compose `secrets:` + config tree), config-server'a yalnız gerekli servislerden erişim (compose network/ACL), `optional:` → fail-fast; kalıcı çözüm §9.3 upgrade. (§6.4, §9.2)
-- [ ] 🔴 Gateway'de `gateway` actuator ucunun kapalı olduğunu doğrula (CVE-2025-41243). (§9.2)
-- [ ] 🟠 Servis başına DB rolü + GRANT. (§4.1-a)
-- [ ] 🟠 CI'da gerçek-PG testleri (`PLATE_*_PG_TESTS` env + `services:` bloğu ile bugün; Testcontainers `@ServiceConnection` sonra). (§10)
-- [ ] 🟠 `.dockerignore` `.env*`; gitleaks CI; secret fallback'lerini kaldır. (§6.4)
-- [ ] 🟠 EXIF/GPS: yüklenen fotoğrafın yeniden kodlandığını doğrula; değilse acil. Profil fotoğrafı bucket'ının public olup olmadığını netleştir. (§6.6)
-- [ ] 🟠 Ban → `sv` artır (referans §22.1 #9) — tek satır.
-- [ ] 🟠 RabbitMQ consumer'ları: `defaultRequeueRejected=false`, prefetch, stateful retry + backoff, DLQ. (§5.3-0)
-- [ ] 🟠 Redis eviction politikasını kontrol et; güvenlik key'leri `noeviction` instance'ında olmalı. (§4.4)
-- [ ] 🟠 Konum: `LocationFuzzer` deterministik grid'e; ES sorgusunun ham koordinat kullanmadığını doğrula. (§6.8)
+- [ ] 🔴 PostgreSQL yedek (WAL-G → Spaces) + sürekli WAL arşivi + **restore provası**; Redis AOF; S3 versioning. (Bölüm 4.1 (b))
+- [ ] 🔴 Alertmanager (veya Grafana alerting) + bildirim kanalı; container restart ve `*_STUCK` alarmı. (Bölüm 8)
+- [ ] 🔴 `MockStoreValidationService` → `@Profile("local|test")`; prod'da gerçek doğrulama yoksa satın alma **kapalı**. (Bölüm 11.3)
+- [ ] 🔴 Seed migration'ları prod location'ından çıkar (referans dokümanı Bölüm 22.1, madde 2).
+- [ ] 🔴 Config Server CVE'leri için acil önlem: secret'ları Config Server'dan çıkar (compose `secrets:` + config tree), config-server'a yalnız gerekli servislerden erişim (compose network/ACL), `optional:` → fail-fast; kalıcı çözüm Bölüm 9.3 upgrade. (Bölüm 6.4, Bölüm 9.2)
+- [ ] 🔴 Gateway'de `gateway` actuator ucunun kapalı olduğunu doğrula (CVE-2025-41243). (Bölüm 9.2)
+- [ ] 🟠 Servis başına DB rolü + GRANT. (Bölüm 4.1 (a))
+- [ ] 🟠 CI'da gerçek-PG testleri (`PLATE_*_PG_TESTS` env + `services:` bloğu ile bugün; Testcontainers `@ServiceConnection` sonra). (Bölüm 10)
+- [ ] 🟠 `.dockerignore` `.env*`; gitleaks CI; secret fallback'lerini kaldır. (Bölüm 6.4)
+- [ ] 🟠 EXIF/GPS: yüklenen fotoğrafın yeniden kodlandığını doğrula; değilse acil. Profil fotoğrafı bucket'ının public olup olmadığını netleştir. (Bölüm 6.6)
+- [ ] 🟠 Ban → `sv` artır (referans dokümanı Bölüm 22.1, madde 9) — tek satır.
+- [ ] 🟠 RabbitMQ consumer'ları: `defaultRequeueRejected=false`, prefetch, stateful retry + backoff, DLQ. (Bölüm 5.3 Aşama 0)
+- [ ] 🟠 Redis eviction politikasını kontrol et; güvenlik key'leri `noeviction` instance'ında olmalı. (Bölüm 4.4)
+- [ ] 🟠 Konum: `LocationFuzzer` deterministik grid'e; ES sorgusunun ham koordinat kullanmadığını doğrula. (Bölüm 6.8)
 
 ### 3 ay
-- [ ] 🟠 Java 25 → Boot 3.5 + Cloud 2025.0 (basamak) → **Boot 4.0/4.1 + Cloud 2025.1**; RabbitMQ 4.3 (quorum queue); Promtail → Alloy + obs yığını güncelleme; Valkey 9. (§9)
-- [ ] 🟠 CI image build (Jib) → GHCR → digest deploy; cosign; non-root; healthcheck her serviste; `docker-rollout`; staging→prod onay kapısı. (§12)
-- [ ] 🟠 Asimetrik service-JWT (Ed25519, `iss=<servis>`, JWKS config, `kid`); replay guard'ı daralt veya kaldır. (§6.1)
-- [ ] 🟠 CloudEvents envelope + `domain.events` topic exchange; ilk tüketiciler: `account_standing` read-model (match, chat) ve analytics sink. (§5.3-1, §2.4)
-- [ ] 🟠 Legal onay → JWT claim + `sv`. (§2.4)
-- [ ] 🟠 Parametre kataloğu için bounded-staleness + disk snapshot + `parameter_staleness_seconds`. (§7.2)
-- [ ] 🟠 Timeout bütçesi; Resilience4j circuit breaker/bulkhead (TimeLimiter tuzağına dikkat); virtual threads Java 25'te. (§7.1)
-- [ ] 🟠 Fotoğraf işleme pipeline'ı (private quarantine → re-encode/EXIF strip → PhotoDNA/NSFW → private bucket + signed URL). (§6.6, §11.1)
-- [ ] 🟠 Gerçek mağaza doğrulaması (App Store Server API + Notifications V2, Play `subscriptionsv2` + RTDN) veya RevenueCat. (§11.3)
-- [ ] 🟠 Config Server'ı kaldır veya 5.0.x'e yükselt + fail-fast + drift testi. (§6.4)
-- [ ] 🟡 ArchUnit + enforcer `bannedDependencies`; `common-security` → 4 starter. (§10, §3.1)
-- [ ] 🟡 postgres/redis/rabbit exporter'ları; outbox yaş metriği; 3 SLO + burn-rate alarmı. (§8)
-- [ ] 🟡 KVKK/Apple 5.1.1 hesap silme saga'sı tasarımı + crypto-shredding kararı. (§6.7)
-- [ ] 🟡 Plaka görünürlüğü opt-in + varlık oracle'ı yok + HMAC-pepper depolama + arama audit'i; DPIA. (§11.4)
+- [ ] 🟠 Java 25 → Boot 3.5 + Cloud 2025.0 (basamak) → **Boot 4.0/4.1 + Cloud 2025.1**; RabbitMQ 4.3 (quorum queue); Promtail → Alloy + obs yığını güncelleme; Valkey 9. (Bölüm 9)
+- [ ] 🟠 CI image build (Jib) → GHCR → digest deploy; cosign; non-root; healthcheck her serviste; `docker-rollout`; staging→prod onay kapısı. (Bölüm 12)
+- [ ] 🟠 Asimetrik service-JWT (Ed25519, `iss=<servis>`, JWKS config, `kid`); replay guard'ı daralt veya kaldır. (Bölüm 6.1)
+- [ ] 🟠 CloudEvents envelope + `domain.events` topic exchange; ilk tüketiciler: `account_standing` read-model (match, chat) ve analytics sink. (Bölüm 5.3 Aşama 1, Bölüm 2.4)
+- [ ] 🟠 Legal onay → JWT claim + `sv`. (Bölüm 2.4)
+- [ ] 🟠 Parametre kataloğu için bounded-staleness + disk snapshot + `parameter_staleness_seconds`. (Bölüm 7.2)
+- [ ] 🟠 Timeout bütçesi; Resilience4j circuit breaker/bulkhead (TimeLimiter tuzağına dikkat); virtual threads Java 25'te. (Bölüm 7.1)
+- [ ] 🟠 Fotoğraf işleme pipeline'ı (private quarantine → re-encode/EXIF strip → PhotoDNA/NSFW → private bucket + signed URL). (Bölüm 6.6, Bölüm 11.1)
+- [ ] 🟠 Gerçek mağaza doğrulaması (App Store Server API + Notifications V2, Play `subscriptionsv2` + RTDN) veya RevenueCat. (Bölüm 11.3)
+- [ ] 🟠 Config Server'ı kaldır veya 5.0.x'e yükselt + fail-fast + drift testi. (Bölüm 6.4)
+- [ ] 🟡 ArchUnit + enforcer `bannedDependencies`; `common-security` → 4 starter. (Bölüm 10, Bölüm 3.1)
+- [ ] 🟡 postgres/redis/rabbit exporter'ları; outbox yaş metriği; 3 SLO + burn-rate alarmı. (Bölüm 8)
+- [ ] 🟡 KVKK/Apple 5.1.1 hesap silme saga'sı tasarımı + crypto-shredding kararı. (Bölüm 6.7)
+- [ ] 🟡 Plaka görünürlüğü opt-in + varlık oracle'ı yok + HMAC-pepper depolama + arama audit'i; DPIA. (Bölüm 11.4)
 
 ### 6–12 ay
-- [ ] 🟡 Mimari şekil kararı: hibrit konsolidasyon (§2.3-C, Spring Modulith ile) **veya** read-model'lerle mikroservis. Karar kriteri: ekip boyutu ve ikinci host ihtiyacı.
-- [ ] 🟡 Chat: `BYTEA` + `STORAGE EXTERNAL`, aylık partition (pg_partman), BRIN, retention, sohbet başına `seq`; ihtiyaç halinde ayrı Postgres instance. ScyllaDB eşiği belgelendi, izleniyor. (§4.2, §5.4)
-- [ ] 🟡 Elasticsearch kararı: PostGIS'e in **veya** OpenSearch 3 / ES 9 + recommendation için genişlet. (§4.3)
-- [ ] 🟡 E2EE: anahtar pinleme (TOFU) hemen; Signal Protocol/MLS'e geçiş planı; şikayet için message franking. (§6.2)
-- [ ] 🟡 Admin passkey/TOTP (Boot 4 sonrası); kullanıcı OTP için Play Integrity/App Attest + SMS pumping kesicisi. (§6.3)
-- [ ] 🟡 OpenAPI → Dart client; API versiyonlama. (§13.2)
-- [ ] 🟡 Feature flag (OpenFeature + GrowthBook/Unleash veya katalog genişletme) + ilk A/B (öneri ağırlıkları); Firebase → BigQuery export. (§11.2)
-- [ ] 🟡 Selfie/liveness doğrulama. (§11.1)
-- [ ] 🟡 Yük testi + kapasite planı + ikinci host. (§10, §7.4)
-- [ ] 🟡 RabbitMQ Streams ile replay/çoklu tüketici (§5.3-2). Debezium ve/veya Kafka **yalnız** §5.3-3 kriterleri oluşursa.
-- [ ] 🟡 Türkiye'de 1M günlük erişim eşiğine yaklaşılıyorsa 5651 hazırlığı (temsilci, veri lokasyonu). (§11.1)
+- [ ] 🟡 Mimari şekil kararı: hibrit konsolidasyon (Bölüm 2.3 seçenek C, Spring Modulith ile) **veya** read-model'lerle mikroservis. Karar kriteri: ekip boyutu ve ikinci host ihtiyacı.
+- [ ] 🟡 Chat: `BYTEA` + `STORAGE EXTERNAL`, aylık partition (pg_partman), BRIN, retention, sohbet başına `seq`; ihtiyaç halinde ayrı Postgres instance. ScyllaDB eşiği belgelendi, izleniyor. (Bölüm 4.2, Bölüm 5.4)
+- [ ] 🟡 Elasticsearch kararı: PostGIS'e in **veya** OpenSearch 3 / ES 9 + recommendation için genişlet. (Bölüm 4.3)
+- [ ] 🟡 E2EE: anahtar pinleme (TOFU) hemen; Signal Protocol/MLS'e geçiş planı; şikayet için message franking. (Bölüm 6.2)
+- [ ] 🟡 Admin passkey/TOTP (Boot 4 sonrası); kullanıcı OTP için Play Integrity/App Attest + SMS pumping kesicisi. (Bölüm 6.3)
+- [ ] 🟡 OpenAPI → Dart client; API versiyonlama. (Bölüm 13.2)
+- [ ] 🟡 Feature flag (OpenFeature + GrowthBook/Unleash veya katalog genişletme) + ilk A/B (öneri ağırlıkları); Firebase → BigQuery export. (Bölüm 11.2)
+- [ ] 🟡 Selfie/liveness doğrulama. (Bölüm 11.1)
+- [ ] 🟡 Yük testi + kapasite planı + ikinci host. (Bölüm 10, Bölüm 7.4)
+- [ ] 🟡 RabbitMQ Streams ile replay/çoklu tüketici (Bölüm 5.3 Aşama 2). Debezium ve/veya Kafka **yalnız** Bölüm 5.3 Aşama 3 kriterleri oluşursa.
+- [ ] 🟡 Türkiye'de 1M günlük erişim eşiğine yaklaşılıyorsa 5651 hazırlığı (temsilci, veri lokasyonu). (Bölüm 11.1)
 
 ### Yapmayın
-- ❌ **Polyrepo'ya geçmeyin.** Sorun pipeline'da. (§3)
-- ❌ **Kafka'yı bugün eklemeyin.** Tüketicisi olmayan event log, tek host'ta bakım yükü. Önce envelope + topic + read-model. (§5)
-- ❌ **Chat'i bugün ScyllaDB/Cassandra/MongoDB'ye taşımayın.** Önce partition + bytea + ayrı instance. (§4.2)
-- ❌ **Kubernetes'e geçmeyin** (tek host, tek ekip). (§12)
-- ❌ **Database-per-service'e (9 ayrı DB) geçmeyin.** Roller + gerektiğinde domain bazında instance ayırma yeter. (§4.1)
-- ❌ **Vault kurmayın** (compose secrets + config tree, sonra SOPS yeter; gerekirse OpenBao). (§6.4)
-- ❌ **RabbitMQ Delayed Message Exchange plugin'ini kullanmayın** (Eylül 2026'da arşivlendi; 4.3 native retry var). (§5.3-0)
-- ❌ **`libsignal_protocol_dart`'ı kapalı kaynak uygulamaya koymayın** (GPL-3.0). (§6.2)
-- ❌ **Merkezi saga orchestrator / Temporal eklemeyin.** Mevcut local saga tek adımlı ihtiyaca yetiyor; çok adımlı ihtiyaç doğarsa `LocalSagaStore`'u genelleştirin. (Referans §11.4)
-- ❌ Outbox/poller'ı **sekizinci kez** elle yazmayın; generic outbox veya Debezium. (§4.6)
+- ❌ **Polyrepo'ya geçmeyin.** Sorun pipeline'da. (Bölüm 3)
+- ❌ **Kafka'yı bugün eklemeyin.** Tüketicisi olmayan event log, tek host'ta bakım yükü. Önce envelope + topic + read-model. (Bölüm 5)
+- ❌ **Chat'i bugün ScyllaDB/Cassandra/MongoDB'ye taşımayın.** Önce partition + bytea + ayrı instance. (Bölüm 4.2)
+- ❌ **Kubernetes'e geçmeyin** (tek host, tek ekip). (Bölüm 12)
+- ❌ **Database-per-service'e (9 ayrı DB) geçmeyin.** Roller + gerektiğinde domain bazında instance ayırma yeter. (Bölüm 4.1)
+- ❌ **Vault kurmayın** (compose secrets + config tree, sonra SOPS yeter; gerekirse OpenBao). (Bölüm 6.4)
+- ❌ **RabbitMQ Delayed Message Exchange plugin'ini kullanmayın** (Eylül 2026'da arşivlendi; 4.3 native retry var). (Bölüm 5.3 Aşama 0)
+- ❌ **`libsignal_protocol_dart`'ı kapalı kaynak uygulamaya koymayın** (GPL-3.0). (Bölüm 6.2)
+- ❌ **Merkezi saga orchestrator / Temporal eklemeyin.** Mevcut local saga tek adımlı ihtiyaca yetiyor; çok adımlı ihtiyaç doğarsa `LocalSagaStore`'u genelleştirin. (Referans dokümanı Bölüm 11.4)
+- ❌ Outbox/poller'ı **sekizinci kez** elle yazmayın; generic outbox veya Debezium. (Bölüm 4.6)
 
 ---
 
