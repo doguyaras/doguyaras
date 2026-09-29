@@ -73,7 +73,7 @@ jobs:
       - name: test count guard (0 test = failure is per module; here the total must not silently shrink)
         run: |
           total=$(grep -ho 'tests="[0-9]*"' blueprint/skeleton-example/*/target/surefire-reports/TEST-*.xml | grep -o '[0-9]*' | paste -sd+ | bc)
-          echo "total tests: $total"; test "$total" -ge 50
+          echo "total tests: $total"; test "$total" -ge 180
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with: { name: surefire-reports, path: blueprint/skeleton-example/*/target/surefire-reports/ }
