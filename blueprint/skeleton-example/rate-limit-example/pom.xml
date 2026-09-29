@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>rate-limit-example</artifactId>
+  <!-- Redis uzerinde atomik fixed-window rate limit (referans Bolum 9.6, 9.3 fail politikasi, 22 anti-pattern:
+       JVM sayaci). Sayac yalniz Redis'te yasar; Lua script tek round-trip'te INCRBY + ilk vurusta EXPIRE yapar.
+       Servisler kendi sayacini yazmaz, bu modulu kullanir. -->
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-core</artifactId><version>${revision}</version></dependency>
+    <!-- Duz Lettuce (BOM surumu): Spring Data Redis soyutlamasi burada gereksiz; EVALSHA/SCRIPT LOAD dogrudan kullanilir -->
+    <dependency><groupId>io.lettuce</groupId><artifactId>lettuce-core</artifactId></dependency>
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-core</artifactId></dependency>
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId></dependency>
+    <!-- rate-limit.rules.<scope> baglamasi icin; servis zaten Boot uygulamasidir -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot</artifactId></dependency>
+    <!-- Servlet filtresi: API'yi kullanan servis Tomcat ile getirir, bu modul tasimaz -->
+    <dependency><groupId>jakarta.servlet</groupId><artifactId>jakarta.servlet-api</artifactId><scope>provided</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <!-- Prometheus adlandirmasini (rate_limit_fail_open_total{scope}) gercek scrape ciktisinda dogrulamak icin -->
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
