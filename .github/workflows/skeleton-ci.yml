@@ -25,12 +25,19 @@ jobs:
         if: github.event_name == 'pull_request'
         run: node blueprint/scripts/flyway-immutability.js check --base "origin/${{ github.base_ref }}"
       - name: hook dry-runs (bash -n + sample stdin)
+        # Hook'lar CLAUDE_PROJECT_DIR'i MUTLAK yol ister; flyway hook'u base'teki V dosyasina yazmayi engeller (exit 2),
+        # yeni V dosyasina izin verir (exit 0), yapilandirma hatasinda da engeller (fail-closed).
         run: |
           set -euo pipefail
+          export CLAUDE_PROJECT_DIR="$PWD/blueprint"
           for h in blueprint/.claude/hooks/*.sh; do bash -n "$h"; done
-          OUT=$(echo '{"tool_input":{"command":"git push"}}' | CLAUDE_PROJECT_DIR=blueprint blueprint/.claude/hooks/review-gate.sh)
+          OUT=$(echo '{"tool_input":{"command":"git push"}}' | blueprint/.claude/hooks/review-gate.sh)
           echo "$OUT" | grep -q '"permissionDecision":"ask"' || { echo "review-gate did not ask"; exit 1; }
-          echo '{"tool_input":{"file_path":"x/db/migration/V1__x.sql"}}' | CLAUDE_PROJECT_DIR=blueprint node blueprint/.claude/hooks/flyway-immutability.js; code=$?; echo "flyway hook exit $code"; test $code -ne 0
+          PROTECTED='{"tool_input":{"file_path":"'"$PWD"'/blueprint/skeleton-example/order-core/src/main/resources/db/migration/V1__init.sql"}}'
+          if echo "$PROTECTED" | node blueprint/.claude/hooks/flyway-immutability.js; then echo "hook allowed a base migration edit"; exit 1; fi
+          NEWFILE='{"tool_input":{"file_path":"'"$PWD"'/blueprint/skeleton-example/order-core/src/main/resources/db/migration/V99__new.sql"}}'
+          echo "$NEWFILE" | node blueprint/.claude/hooks/flyway-immutability.js
+          if echo "$PROTECTED" | CLAUDE_PROJECT_DIR=relative/path node blueprint/.claude/hooks/flyway-immutability.js; then echo "hook must fail closed on misconfiguration"; exit 1; fi
       - name: config lint (if present)
         run: test -f blueprint/scripts/config-lint.js && node --test blueprint/scripts/config-lint.test.js || echo "config-lint not present yet"
   skeleton:

@@ -104,6 +104,15 @@ test('check-file: base dosyasi korunur, yeni dosya korunmaz, migration disi dosy
   assert.equal(script.checkFile(abs, { baseRef: 'develop', cwd: repo }).protected, true);
 });
 
+test('proje koku repo kokunun alt klasoruyse (monorepo) base dosyasi yine korunur', () => {
+  // cwd = alt klasor; ls-tree pathspec'i cwd'ye gore olsaydi dosya "yok" sanilir ve yazma serbest kalirdi (fail-open)
+  const sub = path.join(repo, 'svc');
+  const r = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V1__init.sql'), { baseRef: 'develop', cwd: sub });
+  assert.equal(r.protected, true);
+  const n = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V9__new.sql'), { baseRef: 'develop', cwd: sub });
+  assert.equal(n.protected, false);
+});
+
 test('base yoksa: fail → hata; head → HEAD agacina gore', () => {
   assert.throws(() => script.check({ baseRef: 'no-such-branch', cwd: repo }));
   const r = script.checkFile('svc/src/main/resources/db/migration/V1__init.sql', {

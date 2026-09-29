@@ -97,7 +97,10 @@ function checkFile(filePath, { baseRef, onMissingBase = 'fail', cwd } = {}) {
   if (!isMigrationPath(rel)) return { protected: false, file: rel };
   const base = resolveBase(baseRef);
   const point = resolveComparePoint({ baseRef: base, onMissingBase, cwd });
-  const listed = git(['ls-tree', '-r', '--name-only', point, '--', rel], { cwd }).trim();
+  // ls-tree pathspec'i calisilan dizine goredir: proje koku repo kokunun alt klasoruyse (monorepo) yanlis yol
+  // aranir ve base dosyasi "yok" sanilir (fail-open). Bu yuzden git her zaman repo kokunde calistirilir.
+  const root = repoRoot(cwd);
+  const listed = git(['ls-tree', '-r', '--name-only', point, '--', rel], { cwd: root }).trim();
   return { protected: listed.length > 0, file: rel, base, point };
 }
 
