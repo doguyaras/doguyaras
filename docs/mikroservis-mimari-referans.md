@@ -1525,10 +1525,10 @@ CREATE TABLE <schema>.inbox_event (
   1. INSERT INTO inbox_event(handler, event_id) … ON CONFLICT DO NOTHING  → 0 satır ⇒ duplicate, hiçbir şey yapmadan çık (ack)
   2. iş değişikliği (read-model UPSERT / domain yazımı / outbox satırı)
 commit
-  3. broker ack — YALNIZ commit'ten sonra (manual ack; AUTO ack ile 2'den önce ack'lenen mesaj çökmede kaybolur)
+  3. broker ack — YALNIZ commit'ten sonra: Spring `AcknowledgeMode.MANUAL` + `ChannelAwareMessageListener`, `basicAck` inbox TX'i döndükten sonra (`AUTO` = container listener dönüşünde ack'ler, broker auto-ack değildir; `NONE` broker no-ack'tir ve mesajı kaybeder). Geçici hatada `basicReject(tag, true)` (Bölüm 12.3: yalnız reject sayaç artırır ve gecikmeli retry'ı tetikler); commit'ten önce ack'lenen mesaj çökmede kaybolur (mutasyonla doğrulandı)
 ```
 
-- Handler başarısız olursa TX rollback → inbox satırı da geri alınır → mesaj nack/requeue (stateful retry) ile yeniden gelir. `defaultRequeueRejected=false` + delivery-limit → DLQ (Bölüm 12.3).
+- Handler başarısız olursa TX rollback → inbox satırı da geri alınır → mesaj `basicReject(tag, requeue=true)` ile broker'a döner; QQ gecikmeli retry ile yeniden teslim eder, `x-delivery-limit` dolunca DLQ (Bölüm 12.3). Kalıcı hata `basicReject(tag, false)` → anında DLQ.
 - **Dedup kapsamı handler'dır**, tüketici servis değil: aynı `order.order.created` olayını hem read-model handler'ı hem bildirim handler'ı işliyorsa iki ayrı inbox satırı vardır.
 - İnbox'ta tutulan iş, yalnız tüketicinin **kendi DB'sindeki** etkiyi idempotent yapar. Handler dış bir sisteme yan etki üretiyorsa (SMS gönder) o etki inbox TX'i içinde yapılamaz; handler dış etkiyi **outbox** satırı olarak yazar (aynı TX), outbox handler'ı dış sisteme sağlayıcının idempotency anahtarıyla gider.
 - Üretici `id`'yi deterministik üretir (Bölüm 11.2); tüketici bunu inbox anahtarı olarak kullanır.
@@ -1674,8 +1674,8 @@ Config key'leri `operation-consistency.*` altında tutulur.
 | Bileşen | Desen |
 |---|---|
 | Sürüm | 4.3+ (community-destekli hat; 3.13 desteği 2024-09'da bitti). Mnesia yok (Khepri tek metadata store; `khepri_db` feature flag'i 4.3'e geçmeden **önce** açılır, aksi halde boot sırasında zorunlu göç); classic mirrored queue yok. |
-| Queue tipi | **Quorum queue** (`x-queue-type: quorum`), `delivery-limit` (varsayılan 20 → DLX), `dead-letter-strategy: at-least-once`, `x-delivery-count` başlığı |
-| Gecikmeli retry | QQ native `x-delayed-retry-type: failed` + `x-delayed-retry-min/max` (4.3; lineer backoff). **Delayed Message Exchange plugin'i kullanılmaz** (arşivlendi, Mnesia tabanlı). |
+| Queue tipi | **Quorum queue** (`x-queue-type: quorum`); `x-delivery-limit` (varsayılan 20; N = ilk teslim + N yeniden teslim, `x-delivery-count` > N olunca DLX); `x-dead-letter-strategy: at-least-once` (**ön koşul:** `x-overflow: reject-publish` + `x-dead-letter-exchange`, aksi halde bildirim reddedilir); `x-delivery-count` başlığı ilk teslimde **yoktur**, yalnız `delivery_failed=true` yeniden teslimlerinde 1,2,3… (gerçek 4.3.0'da doğrulandı) |
+| Gecikmeli retry | QQ native, **kuyruk argümanı** olarak: `x-delayed-retry-type: failed`, `x-delayed-retry-min`, `x-delayed-retry-max` (ms). 4.3.0'da aynı anahtarlar **policy olarak tanımlanamaz** (`delayed-retry-*` → "not recognised policy settings"; gerçek broker'da doğrulandı) — policy desteği gelene kadar Declarables ile kuyruk bildirimi. Gecikme lineer: `min(min·delivery_count, max)` (1 s, 2 s, 3 s ölçüldü); `failed` tipi yalnız `delivery_failed=true` ile geri verilen mesajı geciktirir (aşağıdaki reject/nack ayrımı). **Delayed Message Exchange plugin'i kullanılmaz** (arşivlendi, Mnesia tabanlı). |
 | Exchange/queue adları | komut: `<servis>.commands` / `<hedef>.<komut>.queue`; event: `domain.events` (topic) / `<tüketici>.<amaç>.queue`; DLX `<servis>.dlx`; DLQ `<queue>.dlq` |
 
 **Producer:**
@@ -1686,26 +1686,32 @@ spring.rabbitmq: { publisher-confirm-type: correlated, publisher-returns: true, 
 
 - `Jackson2JsonMessageConverter` + `RabbitTemplate.setMandatory(true)`.
 - Publisher, `CorrelationData` ekler ve trace header'larını enjekte eder. Broker ACK'i sınırlı süre beklenir (örn. 5 sn).
-- NACK, unroutable mesaj veya timeout durumunda exception fırlatılır ve outbox retry'ı devreye girer.
+- NACK veya timeout → exception → outbox retry. **Unroutable mandatory mesajda broker `basic.return` gönderir ve ardından yine pozitif ACK verir**: yalnız confirm'e bakmak olayı sessizce kaybeder; ACK gelse bile `CorrelationData.getReturned() != null` ise unroutable sayılır ve exception fırlatılır (4.3.0'da doğrulandı).
 - **Yayın her zaman outbox'tan yapılır.** Doğrudan `convertAndSend` kullanılmaz.
 
 **Consumer:**
 - `@RabbitListener(queues = …, containerFactory = …)`; container factory `spring.rabbitmq.listener.*` ile yapılandırılır (elle kurulan factory bu property'leri yok sayar).
-- **`defaultRequeueRejected=false`** — Spring AMQP varsayılanı `true`'dur ve iş hatası fırlatan mesaj "sonsuza kadar yeniden teslim edilebilir" (Spring dokümanının ifadesi).
-- Hata sınıflandırması:
-  - Kalıcı hata → `AmqpRejectAndDontRequeueException` → DLQ.
-  - Geçici hata (DB/ağ) → `RetryInterceptorBuilder.stateful()` + exponential backoff + `RepublishMessageRecoverer`/DLX; ya da QQ native delayed retry.
+- **`defaultRequeueRejected=false`** — Spring AMQP varsayılanı `true`'dur ve iş hatası fırlatan mesaj "sonsuza kadar yeniden teslim edilebilir" (Spring dokümanının ifadesi). Bu ayar yalnız container'ın kendi gönderdiği reject'leri (AUTO mod) yönetir; **MANUAL modda listener'ın verdiği bayrak esastır.**
+- **Ack modu:** `AcknowledgeMode.MANUAL` + `ChannelAwareMessageListener`; `basicAck` inbox TX'i commit olduktan **sonra** (Bölüm 11.3). (`AUTO`, container'ın listener dönüşünde ack'lemesidir, broker auto-ack değildir; `NONE` broker no-ack'tir ve mesajı kaybeder.)
+- **Hata sınıflandırması (4.3.0 AMQP 0-9-1'de doğrulanmış semantik):**
+  - Geçici hata (DB/ağ) → `channel.basicReject(tag, requeue=true)`. Yalnız **reject** `delivery_failed=true` sayılır: `x-delivery-count` artar, QQ native gecikmeli retry uygulanır, `x-delivery-limit` dolunca DLQ.
+  - `basic.nack requeue=true` (Spring'in `ImmediateRequeueAmqpException` / AUTO-mode requeue yolu `basicNack(tag, multiple, requeue)` gönderir) **düz requeue**'dur: sayaç artmaz, gecikme yok, limit dolmaz → milisaniyelik sıcak döngü (ölçüldü: +7/+24/+26 ms). Kullanılmaz.
+  - Kalıcı hata / zehirli mesaj (parse edilemeyen body, bilinmeyen şema) → `basicReject(tag, requeue=false)` → anında DLQ (at-least-once). Bilinmeyen `type` → ack + log (DLQ değil).
+  - `RetryInterceptorBuilder.stateful()` + `RepublishMessageRecoverer` uygulama içi alternatiftir; 4.3'te broker tarafı retry varken gereksizdir.
+- **Tüketici zaman aşımı:** quorum queue için `consumer-timeout` policy anahtarı (ms; ya da `x-consumer-timeout` consumer argümanı; global varsayılan 30 dk) `basic.consume` anında okunur — policy tüketici başlamadan **önce** kurulur. Süre dolunca QQ ack'lenmemiş mesajı geri alır ve tüketiciye `basic.cancel` gönderir (kanal kapanmaz); Spring container consumer'ı yeniden başlatır, mesaj `redelivered=true` ile gelir (5 sn policy ile doğrulandı). Inbox TX'i bu süreden kısa tutulur; uzun işler outbox satırına devredilir.
 - `prefetch` açıkça (10–50; Spring varsayılanı **250**) ve `concurrency` ayarlanır.
 - Idempotent handler: inbox `ON CONFLICT (event_id) DO NOTHING` (Bölüm 11.3).
 - DLQ için izleme (derinlik > 0 alarmı) ve replay aracı bulunur.
 
-**Kaçın:** Gecikmesiz requeue (`ImmediateRequeueAmqpException` ile DB kesintisinde sıcak döngü; QQ'da log/disk büyümesi). Consumer'ı prefetch'siz bırakmak.
+**Kaçın:** Gecikmesiz requeue (`ImmediateRequeueAmqpException` / `basic.nack requeue=true` ile DB kesintisinde sıcak döngü; QQ'da log/disk büyümesi). Consumer'ı prefetch'siz bırakmak. Commit'ten önce ack: mesaj çökmede kaybolur ve aynı tag'e ikinci ack/reject `PRECONDITION_FAILED unknown delivery tag` ile kanalı kapatır.
+
+**Çalışan hali (seviye 3, gerçek RabbitMQ 4.3.0 + PostgreSQL 18):** `blueprint/skeleton-example/broker-example` — `OutboxEventPublisher` (confirms + returns), `BrokerTopology` (QQ + DLX/DLQ + delayed retry argümanları + stream), manuel ack'li inbox listener, `BrokerBehaviourIT` 12 senaryo (uçtan uca 20 olay, unroutable, gecikmeli retry ölçümü, delivery-limit → DLQ, zehirli mesaj, commit sonrası ack, duplicate, broker `stop_app`/`start_app`, stream replay, consumer timeout, policy-red kanıtı, bilinmeyen tip). Aynı test CI'da `rabbitmq:4.3-management` servis container'ıyla koşar.
 
 **Kural:** Hassas veya güvenlik kritik olay tipleri (moderasyon kararı, ödeme durumu, mağaza bildirimi) kuyruk yerine yalnız imzası doğrulanmış bir internal HTTP uçtan veya webhook'tan kabul edilir. Bu tipler kuyruktan gelirse DLQ'ya düşer.
 
 ### 12.4 Replay ve Çoklu Tüketici: RabbitMQ Streams
 
-Aynı olayı birden çok bağımsız tüketicinin okuması ve **geçmişi baştan okuma** (yeni read-model kurma, bug sonrası yeniden işleme, analytics) gerekince, Kafka'ya geçmeden önce **RabbitMQ Streams**: append-only log, non-destructive read, broker'da offset, `max-age`/`max-length-bytes` retention, Spring `spring-rabbit-stream`. `domain.events`'in bir kopyası stream'e de yazılır; işlemsel tüketiciler queue'dan, analitik/replay tüketicileri stream'den okur. Stream'de TTL/öncelik/DLX yok; bunlar queue işidir.
+Aynı olayı birden çok bağımsız tüketicinin okuması ve **geçmişi baştan okuma** (yeni read-model kurma, bug sonrası yeniden işleme, analytics) gerekince, Kafka'ya geçmeden önce **RabbitMQ Streams**: append-only log, non-destructive read, broker'da offset, `max-age`/`max-length-bytes` retention. Stream (`x-queue-type: stream`, `x-max-age`) `domain.events`'e `#` ile bağlanır — üretici ikinci kez yazmaz, exchange kopyalar; işlemsel tüketiciler queue'dan, analitik/replay tüketicileri stream'den okur. Okuma iki yolla: `spring-rabbit-stream` (stream protokolü, 5552) ya da düz AMQP 0-9-1 `basicConsume(..., {x-stream-offset: first|last|next|<offset>|<timestamp>})` — 0-9-1'de prefetch (QoS) ve manuel ack **zorunludur**; ack yalnız kredi açar, mesaj stream'de kalır. Aynı offset'ten ikinci okuyucu aynı mesajları sırayla alır; queue tüketicileri etkilenmez (doğrulandı). Stream'de TTL/öncelik/DLX yok; bunlar queue işidir.
 
 ### 12.5 Kafka Ne Zaman?
 
@@ -1722,7 +1728,7 @@ Bölüm 12.2'deki envelope ve topic disiplini kurulmuşsa geçiş yalnız transp
 ### 12.6 Yeni Olay/Komut Checklist'i
 1. Komut mu event mi? (Bölüm 12.1) Adı belirle: `<servis>.<aggregate>.<olay>` / `<hedef>.<komut>`.
 2. Payload sınıfını `<domain>-api/event` altına yaz; CloudEvents attribute'larını `platform-messaging` doldurur.
-3. Consumer tarafında queue (quorum), DLQ, binding; `defaultRequeueRejected=false`, prefetch, retry politikası.
+3. Consumer tarafında quorum queue bildirimi: `x-delivery-limit`, `x-dead-letter-strategy=at-least-once` + `x-overflow=reject-publish`, DLX/DLQ, `x-delayed-retry-type/min/max`, binding; container MANUAL ack, prefetch, `defaultRequeueRejected=false`; listener kararı: geçici → `basicReject(tag,true)`, kalıcı/zehirli → `basicReject(tag,false)`, bilinmeyen tip → ack. `consumer-timeout` policy'si tüketici başlamadan önce.
 4. Listener + inbox satırı ve iş **aynı TX'te** (Bölüm 11.3) + (read-model ise) kaynak başına `source_revision` ve tam durum/değişiklik sözleşmesi (Bölüm 4.6).
 5. Üretici: domain transaction'ında `outbox_event` satırı (kind, aggregate, type, payload).
 6. Config key'leri (local + deploy). Şema evrimi notu (`type` versiyonu).
