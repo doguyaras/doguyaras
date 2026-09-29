@@ -102,7 +102,9 @@ public class ServiceJwtAutoConfiguration {
     public WebMvcConfigurer serviceJwtWebMvcConfigurer(DelegationPolicy delegationPolicy) {
         return new WebMvcConfigurer() {
             @Override public void addInterceptors(InterceptorRegistry registry) {
-                registry.addInterceptor(new DelegationInterceptor(delegationPolicy)).addPathPatterns("/internal/**");
+                // tum path'ler: @RequireOperation /internal disinda bir metoda konursa sessizce atlanmasin
+                // (anotasyonsuz handler'da interceptor zaten no-op; kimlik yoksa fail-closed 401)
+                registry.addInterceptor(new DelegationInterceptor(delegationPolicy));
             }
             @Override public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
                 resolvers.add(new CurrentAccountArgumentResolver());

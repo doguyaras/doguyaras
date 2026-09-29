@@ -65,6 +65,14 @@ public class SubscriptionInternalController {
         return echo(request);
     }
 
+    /** /internal DISINDA ama @RequireOperation tasiyan uc: interceptor tum path'lere kayitli olmali (fail-closed). */
+    @PostMapping("/v1/misplaced/reconcile")
+    @RequireOperation("subscription.reconcile")
+    public Map<String, Object> misplacedReconcile(HttpServletRequest request) {
+        hits.incrementAndGet();
+        return echo(request);
+    }
+
     @GetMapping("/v1/ping")
     public Map<String, Object> ping(HttpServletRequest request) {
         hits.incrementAndGet();

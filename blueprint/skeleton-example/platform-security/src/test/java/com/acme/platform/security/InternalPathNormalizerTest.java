@@ -16,13 +16,19 @@ class InternalPathNormalizerTest {
             "/internal/subscription/%2E%2E/admin", "/internal/%252e%252e/v1/ping", "/internal/./x",
             "/internal/x/.", "/internal/x/..", "/internal//x", "/internal/x%5C..%5Cy", "/internal/x%00y",
             "/internal/x;jsessionid=1", "/v1/../internal/x", "/v1/%2e%2e/internal/x", "/internal/%zz",
-            "/internal/x%2Fy", "/internal/.."})
+            "/internal/x%2Fy", "/internal/..",
+            // path parametresi ILK segmentte: Spring ';...' kismini atip /internal handler'ina yonlendirir
+            "/internal;x/admin/keys", "/internal;jsessionid=1/subscription/reconcile", "/internal;", "/internal;x",
+            "/internal%3Bx/admin/keys", "/internal;a/b;c/d", "/v1/..;/internal/x", "/v1;x/../internal/x",
+            // harf buyuklugu: case-insensitive eslestirme acik bir uygulamada internal'a ulasir, kanonik degil
+            "/INTERNAL/admin/keys", "/Internal;x/admin/keys"})
     void invalid(String raw) {
         assertThat(InternalPathNormalizer.inspect(raw).kind()).as(raw).isEqualTo(Kind.INVALID);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/v1/ping", "/", "/actuator/health", "/internalx/y", "/v1/internal/x", "/v1/..%2Fping", ""})
+    @ValueSource(strings = {"/v1/ping", "/", "/actuator/health", "/internalx/y", "/v1/internal/x", "/v1/..%2Fping", "",
+            "/v1/ping;jsessionid=1", "/v1;x/ping", "/internalx;y/z"})
     void publicPassThrough(String raw) {
         assertThat(InternalPathNormalizer.inspect(raw).kind()).as(raw).isEqualTo(Kind.PUBLIC);
     }

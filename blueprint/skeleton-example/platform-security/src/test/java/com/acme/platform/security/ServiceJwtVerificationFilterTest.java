@@ -136,14 +136,16 @@ class ServiceJwtVerificationFilterTest {
 
     @Test
     void multiAudienceContainingOurs_isStillRejected() throws Exception {
-        String token = validShape().signEd25519(fx.orderKey);
         // ayni claim'lerle ama aud=[ours, other]: tam esitlik sarti
         var claims = new com.nimbusds.jwt.JWTClaimsSet.Builder(validShape().claims())
                 .audience(java.util.List.of(AUDIENCE, "other-api")).build();
         var jwt = new com.nimbusds.jwt.SignedJWT(validShape().header(), claims);
         jwt.sign(new com.acme.platform.security.jwt.JdkEd25519Signer(fx.orderKey));
-        assertThat(token).isNotEqualTo(jwt.serialize());
+        assertThat(com.nimbusds.jwt.SignedJWT.parse(jwt.serialize()).getJWTClaimsSet().getAudience())
+                .containsExactly(AUDIENCE, "other-api");
         assert401(jwt.serialize());
+        // kontrol: tek aud'lu ayni sekil ayni anahtarla kabul edilir -> 401'in tek sebebi fazladan aud
+        mvc.perform(consume(accountA).header(HDR, validShape().signEd25519(fx.orderKey))).andExpect(status().isOk());
     }
 
     @Test
@@ -257,6 +259,29 @@ class ServiceJwtVerificationFilterTest {
         assertPathInvalid("/internal/subscription/%5C..%5Cadmin/keys");
         assertPathInvalid("/internal//subscription/reconcile");
         assertPathInvalid("/internal/subscription/..;/admin/keys");
+    }
+
+    @Test
+    void matrixParamOnFirstSegment_isRejected_withAndWithoutToken() throws Exception {
+        // Spring ';x' kismini atip bunlari /internal handler'larina yonlendirir: PUBLIC sayilirsa token'siz gecerdi
+        String[] raws = {"/internal;x/admin/keys", "/internal;jsessionid=1/admin/keys",
+                "/internal;jsessionid=1/subscription/accounts/" + accountA + "/balance",
+                "/internal;x/subscription/reconcile", "/INTERNAL/admin/keys", "/v1/..;/internal/admin/keys"};
+        for (String raw : raws) {
+            assertPathInvalid(raw);
+            mvc.perform(get(URI.create(raw)))                                // token'siz: yine 400, handler'a ulasmaz
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_PATH_INVALID));
+            assertThat(fx.controller.hits).as(raw).hasValue(0);
+        }
+        // kontrol: ayni handler gecerli token ile normal path'ten ulasilabilir (400'un sebebi path'tir)
+        mvc.perform(get("/internal/admin/keys").header(HDR, fx.gateway.mint(AUDIENCE, null)))
+                .andExpect(status().is(org.hamcrest.Matchers.not(400)));
+    }
+
+    @Test
+    void matrixParamOnPublicPath_isUntouched() throws Exception {
+        mvc.perform(get(URI.create("/v1/ping;jsessionid=1"))).andExpect(status().isOk());
     }
 
     @Test

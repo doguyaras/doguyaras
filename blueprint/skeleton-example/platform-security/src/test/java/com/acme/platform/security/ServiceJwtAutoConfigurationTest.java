@@ -83,6 +83,7 @@ class ServiceJwtAutoConfigurationTest {
     @Autowired ServiceJwtSigner ownSigner;
     @Autowired ServiceJwtVerifier verifier;
     @Autowired ServiceJwtKeyRegistry keyRegistry;
+    @Autowired SubscriptionInternalController controller;
 
     final ServiceJwtSigner order = new ServiceJwtSigner(ORDER_KEY, "order-service", CLOCK);
     final ServiceJwtSigner worker = new ServiceJwtSigner(WORKER_KEY, "subscription-worker", CLOCK);
@@ -108,6 +109,16 @@ class ServiceJwtAutoConfigurationTest {
     }
 
     @Test
+    void requireOperationOutsideInternal_isStillEnforced_failClosed() throws Exception {
+        // filtre /internal disina dokunmaz -> kimlik yok; interceptor yalniz /internal/** icin kayitli olsaydi 200 donerdi
+        int before = controller.hits.get();
+        mvc.perform(post("/v1/misplaced/reconcile"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.SERVICE_TOKEN_INVALID));
+        assertThat(controller.hits).hasValue(before);
+    }
+
+    @Test
     void signerBean_usesPrivateKeyFileAndConfiguredTtl() throws Exception {
         assertThat(ownSigner.serviceName()).isEqualTo("subscription-service");
         assertThat(ownSigner.kid()).isEqualTo("subscription-1");
@@ -116,7 +127,9 @@ class ServiceJwtAutoConfigurationTest {
         assertThat(claims.getExpirationTime().toInstant()).isEqualTo(CLOCK.instant().plus(Duration.ofSeconds(45)));
         // kendi anahtarimiz JWKS'te yok: kendi token'imizi kendimiz dogrulayamayiz (aud zaten baska)
         assertThat(keyRegistry.issuers()).containsExactlyInAnyOrder("order-service", "subscription-worker");
-        assertThat(verifier).isNotNull();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> verifier.verify(token))
+                .as("uygulamanin verifier bean'i kendi (kayitsiz kid, baska aud) token'ini reddeder")
+                .isInstanceOf(RuntimeException.class);
         assertThat(Set.copyOf(keyRegistry.issuers())).doesNotContain("subscription-service");
     }
 }

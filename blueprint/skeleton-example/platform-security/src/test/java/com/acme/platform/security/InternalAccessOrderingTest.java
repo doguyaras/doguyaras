@@ -23,7 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 /**
  * Bolum 9.5 "ilk eslesen kural kazanir": ayni iki kural, iki sira. Dar kural once yazilinca yalniz dar aktor gecer;
  * catch-all once yazilinca dar kurala hic bakilmaz ve catch-all'daki herkes (dar aktor haric!) gecer. Ikinci
- * konfigurasyon bilincli olarak yanlis: kural sirasinin kendisinin bir guvenlik kararı oldugunu gosterir.
+ * konfigurasyon bilincli olarak yanlis: kural sirasinin kendisinin bir guvenlik karari oldugunu gosterir.
  */
 class InternalAccessOrderingTest {
 
