@@ -65,7 +65,7 @@ Arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem kabul edilmez; "her 
 
 | Bileşen | Sürüm | Not |
 |---|---|---|
-| Java / Spring Boot / Spring Cloud | 25 / 4.x / 2025.1.x | OSS destek kontrolü: `docs/versions.md` (tarihli) |
+| Java / Spring Boot / Spring Cloud | 25 / 4.1.x / 2025.1.x (Boot 4.0+4.1) | OSS destek kontrolü: `docs/versions.md` (tarihli; referans Ek A/B) |
 | PostgreSQL | 18 | tek instance, şema+rol/servis, PgBouncer, WAL-G → S3 |
 | Valkey | 9 ×2 | `security` (noeviction+AOF, Sentinel) / `cache` (allkeys-lru) |
 | RabbitMQ | 4.3 | quorum queue; `domain.events` topic; streams: `domain.events.stream` |

@@ -52,6 +52,7 @@
 - Kimlik sorgulama uçlarında **varlık oracle'ı** yok: kayıtlı olmayan/gizli/engelli için tek tip "sonuç yok"; hız limiti, velocity alarmı, audit.
 - Konum: rastgele fuzzing **yetersiz**; kullanıcı başına deterministik grid/ofset (~1–3 km), aynı yuvarlanmış nokta geo sorgusu ve filtrelerde; mesafe aralık olarak; kesin mesafe sıralaması yok.
 - Kişisel veri dönen uçlar `Cache-Control: private, no-store`.
+- **SSRF:** kullanıcıdan gelen URL ile giden her istek (webhook, avatar/önizleme, içe aktarma) ayrı egress client'tan; `https` + host allowlist; DNS çözümü sonrası IP kontrolü (`InetAddressFilter.externalAddresses()` bean'i, Boot 4.1) ve redirect'te tekrar; kısa timeout + boyut sınırı. İç ağ, `169.254.169.254`, localhost, config-server/actuator portları hedef olamaz.
 - Arama index'i, cache, log, yedek aynı kurallara uyar.
 - Export (taşınabilirlik) keyset sayfalı internal uçlarla; **silme** silme saga'sı ile (tüm servisler, index, cache, object storage tüm versiyonlar, üçüncü taraflar); yasal saklama gerekenler anonimleştirilir; yedekler için crypto-shredding. KVKK 30 gün / GDPR 1 ay.
 - Uçtan uca şifreleme iddiası varsa Signal/MLS; değilse "sunucu okuyamaz" ile sınırlı ve sınırlamalar yazılı. İstemci karşı tarafın anahtarını pin'ler. Şikayet kanıtı **message franking** ile; sohbet anahtarı panele verilmez. Kanıt erişimi audit'li, `no-store`, retention'lı.
@@ -64,6 +65,7 @@
 
 ## 7. Veritabanı
 
+- Uygulama rolünde `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout` role bağlı (`ALTER ROLE … SET`); migration rolünde `statement_timeout` yok, `lock_timeout` kısa. PgBouncer transaction mode: `SET` yasak, `SET LOCAL`; `pg_advisory_xact_lock`. RLS kullanılıyorsa bağlam `SET LOCAL` ile, rol `BYPASSRLS` değil.
 - Servis başına **iki** DB rolü: `svc_<x>_migrate` (şema sahibi, DDL; yalnız Flyway) ve `svc_<x>` (uygulama; tablo/sequence DML, `ALTER DEFAULT PRIVILEGES` ile). Uygulama rolü DDL yapamaz, audit/append-only tablolarda UPDATE/DELETE yetkisi yoktur. Başka şemaya USAGE yok. Cross-schema erişim hatası "GRANT ekleyerek" çözülmez.
 - `spring.flyway.baseline-on-migrate` config'te **açık tutulmaz**; mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` prosedürüdür.
 - Audit tabloları `@Immutable` + DB'de `REVOKE UPDATE, DELETE` / trigger.
@@ -77,6 +79,7 @@
 ## 9. Tedarik Zinciri
 
 - Image CI'da build, cosign imzalı, digest ile deploy; non-root; base image Renovate ile güncel.
+- GitHub Actions: üçüncü taraf action'lar **commit SHA'ya pinli** (`uses: owner/action@<40-hex> # vX.Y.Z`); tag pin'i `REQUEST CHANGES`. Workflow `permissions` en dar; secret'lar yalnız gereken job'da.
 - gitleaks pre-commit + CI; Dependabot/GitHub Advisory alarmları; yaması yalnız ticari sürümde olan CVE = upgrade tetikleyicisi.
 - GPL lisanslı kütüphane kapalı kaynak uygulamaya bağlanmadan hukuki inceleme.
 

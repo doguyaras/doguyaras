@@ -44,6 +44,9 @@ Kontrol et:
 - Presigned URL kısa TTL; key sunucuda üretilmiş; HEAD/ETag doğrulaması.
 - Uçtan uca şifreleme varsa: iddia ile şema uyumlu (FS/MITM sınırları yazılı), anahtar pinleme, message franking; sohbet anahtarı panele verilmiyor.
 
+## SSRF / dışa giden istekler
+- Kullanıcı kaynaklı URL'yi sunucu çağırıyor mu (webhook, avatar, önizleme, import)? Ayrı egress client; `https` + host allowlist; DNS sonrası IP kontrolü (`InetAddressFilter` bean'i) ve redirect'te tekrar; timeout + boyut sınırı; iç ağ/metadata/localhost/actuator hedefi testle reddediliyor. Eksikse `HIGH`.
+
 ## Log, hata, secret
 - `security-rules.md` Bölüm 4 yasak listesi: hiçbir ham PII/secret/body/exception mesajı log'da yok. Log'a özel neden `safeLogReason`'da; `details`'te yalnız istemciye gösterilebilir bilgi.
 - Yeni secret: değeri hiçbir yerde yok; `/run/secrets` ile geliyor; `${ENV:literal}` fallback yok; SOPS dosyasına eklenmiş; `.dockerignore` kapsıyor.
@@ -58,6 +61,7 @@ Kontrol et:
 ## Tedarik zinciri
 - Yeni bağımlılık: lisans (GPL/AGPL/BSL) ve bilinen CVE kontrolü; sürüm OSS destekli.
 - Dockerfile non-root, `.dockerignore`, image CI'da build.
+- Workflow'larda action'lar commit SHA'ya pinli (tag pin'i `REQUEST CHANGES`); `permissions` en dar.
 
 Çıktı:
 1. **Risk seviyesi:** `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `OK`.

@@ -39,10 +39,11 @@ Kontrol et:
 - Seed/test verisi prod location'ında yok; bilinen parolalı admin yok.
 - Gateway: rate limit, timeout, CORS listesi, `gateway` actuator kapalı, trusted proxy.
 - Bağımlılık taraması (Dependabot/OSV) açık CRITICAL/HIGH yok veya kabul edilmiş risk yazılı.
+- CI workflow'larında tüm üçüncü taraf action'lar commit SHA'ya pinli; Renovate digest güncellemesi açık.
 
 ## Sürüm ve destek (Bölüm 25)
 - Java, Spring Boot, Spring Cloud, PostgreSQL, Redis/Valkey, RabbitMQ, arama motoru, Alloy/Loki/Tempo/Prometheus/Grafana, Node: **hepsi OSS destek içinde**; bitişe < 3 ay kalan için upgrade PR/plan var.
-- Yaması yalnız ticari sürümde olan bilinen CVE yok.
+- Yaması yalnız ticari sürümde olan bilinen CVE yok. Config Server kullanılıyorsa 2026 CVE'leri (22739/40982/47894) için düzeltilmiş sürümde ve native backend prod'da değil.
 - Lisans değişikliği (Redis, Elastic, BSL, GPL) gözden geçirilmiş.
 
 ## Uyum ve ürün

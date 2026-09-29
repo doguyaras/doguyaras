@@ -17,6 +17,8 @@
 >
 > **Sürüm notu:** Sürüm numaraları ve destek tarihleri **2026-09** itibarıyla geçerlidir. Yeni projeye başlarken Bölüm 25'teki kaynaklardan güncel OSS destek durumu kontrol edilir; destek dışı bir sürümle başlanmaz.
 >
+> **v2.3 (2026-09-29):** Sürüm/tarih/CVE iddiaları internet kaynaklarıyla doğrulandı (Ek B); düzeltmeler: Spring Cloud 2025.1.x Boot 4.0 **ve** 4.1'i kapsar (2026.0 → Boot 4.2), Node 24 LTS, Config Server için üçüncü CVE (2026-47894), gateway `trusted-proxies` property adı, RabbitMQ 4.3 `khepri_db` ön koşulu. Eklemeler: SSRF ve dışa giden istekler (9.11), rol bazlı PG zaman aşımları ve RLS opsiyonu (10.1), para tipi (10.3), outbox tablo sağlığı (11.2), claim-check (12.2), mutasyon testi (16), JDK 25 JVM ayarları (18.1), GitHub Actions SHA pinleme (18.3), Framework 7 API versiyonlama + Deprecation/Sunset header'ları (20), RFC 9457 notu (7.3), Boot 4.1 özellikleri (2.1).
+>
 > **Bu revizyon (v2.2):** Dış bir mimari değerlendirmenin (2026-09) bulguları işlendi: kural sınıfları (Bölüm 1.4), sıcak yolda gecikme bütçesi ve kritik akış kaydı (Bölüm 1.2), kaynak başına read-model revizyonu ve tam durum/değişiklik olay sözleşmesi (Bölüm 4.6), `AFTER_COMMIT` ≠ teslim garantisi (Bölüm 4.3), servis kimliği ≠ kullanıcı adına yetki ve delegasyon matrisi (Bölüm 9.2.1), migration/uygulama rol ayrımı ve `baseline-on-migrate` (Bölüm 10.1–10.2), tek outbox'ta iş türü izolasyonu, üretici sıralaması ve inbox atomikliği (Bölüm 11.2–11.3), değişiklik türüne göre rollout sözleşmesi ve uyumluluk matrisi (Bölüm 18.4), doğrulama kapsamı ve kanıt kaydı (Bölüm 19.6), generic outbox'la tutarlı kod şablonları (Bölüm 23.3–23.4), tarihli sürüm eki (Ek A).
 >
 > **Önceki revizyon (v2.1):** Gerçek bir projenin (9 servis, tek host, tek PostgreSQL) mimari değerlendirmesinden çıkan dersler işlendi: mimari şekil kararı (Bölüm 1.1), uygulama profilleri MVP/Büyüme/Ölçek (Bölüm 1.3), sıcak yolda senkron zincir yasağı ve read-model replikasyonu (Bölüm 4.6), dayanıklılık (Bölüm 4.7), domain event akışı ve Kafka karar kriterleri (Bölüm 12), asimetrik servis kimliği (Bölüm 9.2), güvenlik süreci (Bölüm 9.10), secret yönetimi (Bölüm 15.3), yedekleme/HA (Bölüm 10.5), Alloy/structured logging/SLO ve runbook/olay yönetimi (Bölüm 8), ölçek eşikleri (Bölüm 24), sürüm takibi (Bölüm 25), proje başlangıç checklist'i (Bölüm 21.0) ve **kopyalanabilir `blueprint/` klasörü** (AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, ArchUnit/ErrorCode/config-drift testleri — Bölüm 19).
@@ -54,6 +56,7 @@
 25. [Sürüm ve Destek Takibi](#25-sürüm-ve-destek-takibi)
 26. [Mevcut Bir Projeye Uygulama Protokolü](#26-mevcut-bir-projeye-uygulama-protokolü)
 - [Ek A — Sürüm Notları (tarihli anlık görüntü)](#ek-a--sürüm-notları-tarihli-anlık-görüntü)
+- [Ek B — Doğrulama Kaynakları](#ek-b--doğrulama-kaynakları-2026-09-29)
 
 Ek dosyalar: `blueprint/` (kopyalanabilir AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, test şablonları) · `docs/mikroservis-blueprint-dosyalari.md` (aynı içerik tek dosyada).
 
@@ -186,9 +189,9 @@ Kural: **Yalnız OSS desteği süren sürümle başlanır** (Bölüm 25). Aşağ
 
 | Katman | Seçim | Not |
 |---|---|---|
-| Dil | Java 25 LTS | Virtual thread pinning düzeltmeleri (JEP 491, JDK 24) bu sürümde; Spring Framework 7 için önerilen JDK |
-| Framework | Spring Boot 4.x (4.0/4.1) | BOM import ile (`spring-boot-dependencies`). Spring Framework 7, Jackson 3, Hibernate ORM 7, modüler starter'lar (`spring-boot-starter-webmvc`, `-flyway`, `-<tech>-test`). 3.x hattının OSS desteği Haziran 2026'da bitti. |
-| Cloud | Spring Cloud 2025.1.x (Boot 4.0) / 2026.0.x (Boot 4.1) | BOM import. Gateway artefaktı `spring-cloud-starter-gateway-server-webflux`, property prefix'i `spring.cloud.gateway.server.webflux.*`. |
+| Dil | Java 25 LTS (2025-09) | Virtual thread pinning düzeltmesi (JEP 491, JDK 24) dahil; **Scoped Values** final (JEP 506) — istek bağlamı için `ThreadLocal` yerine tercih edilir (virtual thread'lerde ucuz ve sızmaz); Compact Object Headers final (JEP 519, heap %10–20 küçülür); AOT cache + method profilleri (JEP 514/515) açılış süresini kısaltır (Bölüm 18.1). Structured Concurrency hâlâ preview: production'da kullanılmaz. |
+| Framework | Spring Boot 4.x (4.1 önerilir; 4.0 OSS 2026-12-31'de biter) | BOM import ile (`spring-boot-dependencies`). Spring Framework 7, Jackson 3, Hibernate ORM 7, modüler starter'lar (`spring-boot-starter-webmvc`, `-flyway`, `-<tech>-test`). 4.1 ile gelenler ve bu dokümanda kullanımı: `InetAddressFilter` (SSRF; Bölüm 9.11), `spring.datasource.connection-fetch=lazy` (bağlantı yalnız ilk SQL'de alınır; havuz baskısı düşer), `@Async` bağlam yayılımı, `spring-boot-starter-opentelemetry` iyileştirmeleri, Spring gRPC starter (bu referansta iç iletişim HTTP kalır). 3.x hattının OSS desteği 2026-06-30'da bitti. |
+| Cloud | Spring Cloud **2025.1.x** (Oakwood; Boot 4.0 **ve** 4.1 — 4.1 uyumu 2025.1.2'den itibaren) | BOM import. 2026.0.x (Paddington) Boot 4.2 hattını hedefler ve 2026-09'da milestone aşamasındadır; GA olmadan kullanılmaz. Gateway artefaktı `spring-cloud-starter-gateway-server-webflux`, property prefix'i `spring.cloud.gateway.server.webflux.*`. |
 | Build | Maven ≥ 3.9 (multi-module) + gitflow-incremental-builder veya Maven Build Cache Extension | Affected-module CI (Bölüm 3.2). `${revision}` ile CI-friendly versiyon. |
 | Web | Spring MVC + virtual threads (`spring.threads.virtual.enabled=true`) | Core servisler |
 | Gateway | Spring Cloud Gateway Server WebFlux | `RequestRateLimiter` (Redis token bucket) gateway'de |
@@ -217,7 +220,7 @@ Kural: **Yalnız OSS desteği süren sürümle başlanır** (Bölüm 25). Aşağ
 
 ### 2.2 Frontend (yönetim paneli)
 
-React 19, TypeScript 5 (strict), Vite, MUI 7, react-router, react-hook-form, TanStack Query (server state), notistack, recharts, native `fetch` wrapper, Vitest + Testing Library, ESLint (typescript-eslint, react-hooks) + Prettier, Node 22 LTS.
+React 19, TypeScript 5 (strict), Vite, MUI 7, react-router, react-hook-form, TanStack Query (server state), notistack, recharts, native `fetch` wrapper, Vitest + Testing Library, ESLint (typescript-eslint, react-hooks) + Prettier, Node **24 LTS** (Active LTS; 22 bakım modunda, EOL 2027-04-30).
 
 ### 2.3 Operasyon
 
@@ -741,6 +744,8 @@ Tablo README'de tek yerde tutulur. Bir unit test tüm enum'ların çakışmadı�
 
 Her yanıta `X-Trace-Id` header'ı eklenir. `traceId` aktif span'den alınır.
 
+**RFC 9457 (Problem Details) notu:** Spring `ProblemDetail` (`application/problem+json`) standarttır ve dış/ortak API'lerde tercih edilebilir; bu referans mobil istemci ve panelin **tek** zarfı için kendi `ErrorResponse`'unu kullanır. Karar ADR'ye yazılır; ikisi karıştırılmaz (filtre redleri dahil tek biçim).
+
 **Kaçın:** Standart MVC hatalarının 500'e düşmesi. Handler'ı `ResponseEntityExceptionHandler`'dan türetin veya bu tipleri açıkça eşleyin.
 
 ### 7.4 `safeLogReason` Ayrımı (Katı Kural)
@@ -861,7 +866,7 @@ Her testten sonra appender ayrılır ve logger seviyesi geri yüklenir (Bölüm 
 
 ### 8.6 Tracing
 
-- `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp`
+- Boot 4: **`spring-boot-starter-opentelemetry`** (OTel API + Micrometer tracing bridge + metrik ve trace için OTLP exporter'lar; ayarlar `management.*` altında, `otel.*` değil). Ayrı ayrı `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` eklemek 3.x kalıntısıdır.
 - `propagation.type: W3C`, `spring.reactor.context-propagation: auto`, HTTP client micrometer entegrasyonu açık
 - **Sampling:** Uygulama %100 head sampling ile Alloy/OTel Collector'a gönderir; Collector **tail sampling** yapar: hatalı ve yavaş (p99 üstü) izlerin tamamı, kalanın %10'u (`tailsampling` processor; `decision_wait` 30 sn; bir izin tüm span'leri aynı collector'a gelmeli). Boot varsayılanı (%10 head) düşük trafikte yeterli olsa da hata izlerini kaybettirir.
 - **Asenkron sınırlar:** Outbox satırında `traceparent` ve `tracestate` kolonları tutulur. Poller trace'e bu değerlerden devam eder. MQ header'larına inject edilir. Redis zarfında trace metadata **HMAC kapsamına dahildir**. WebSocket handshake ve STOMP frame'leri için interceptor bulunur.
@@ -1014,7 +1019,7 @@ spring.cloud.gateway:
 - **Gateway'de rate limit vardır:** `RequestRateLimiter` (Redis token bucket: `replenishRate`, `burstCapacity`, `KeyResolver` = IP veya `sub`). Kimliksiz istek seli auth servisine ulaşmadan kesilir; downstream limitler iş kuralı içindir.
 - İstek başına toplam timeout bütçesi gateway'de tanımlıdır (Bölüm 4.7).
 - `/internal` kontrolü `StripPrefix` **sonrası** path üzerinde de yapılır.
-- Gateway `X-Forwarded-*` header'larını yalnız güvenilen proxy'den kabul eder (trusted-proxy ayarı; CVE-2025-41235).
+- Gateway `X-Forwarded-*`/`Forwarded` header'larını yalnız güvenilen proxy'den kabul eder: `spring.cloud.gateway.server.webflux.trusted-proxies` (Java regex, örn. `10\.0\.0\..*`); CVE-2025-41235 sonrası düzeltilmiş sürümlerde bu ayar olmadan forwarded header işlevi **kapalıdır** (bilinçli).
 
 ### 9.4 `ServiceJwtVerificationFilter`
 
@@ -1217,6 +1222,15 @@ Güvenlik bir review skill'i değil, süreçtir. Asgari döngü:
 
 **Kural:** Kimlik, ödeme, mesajlaşma, dosya yükleme ve moderasyon alanlarındaki değişiklikler tehdit modeli olmadan tasarlanmaz; `proj-security-review` bunu ister.
 
+### 9.11 SSRF ve Dışa Giden İstekler
+
+Kullanıcıdan gelen bir URL'yi sunucunun çağırdığı her yer (webhook adresi, avatar/önizleme URL'si, OIDC discovery, dosya içe aktarma) SSRF yüzeyidir: iç ağ (`10/8`, `172.16/12`, `192.168/16`), link-local metadata (`169.254.169.254`), localhost, config-server ve actuator portları hedef olur.
+
+- **Zorunlu güvence:** kullanıcı kaynaklı URL ile giden her istek (1) şema `https` ve host allowlist/denylist, (2) **DNS çözümü sonrası** IP kontrolü (DNS rebinding'e karşı; Boot 4.1 `InetAddressFilter` bunu client seviyesinde yapar: `InetAddressFilter.externalAddresses()` bean'i tüm auto-configured `RestClient`/`WebClient`'lara uygulanır), (3) redirect takibinde de aynı kontrol, (4) kısa timeout ve boyut sınırı, (5) ayrı bir egress client (iç servis client'ıyla aynı bean değil).
+- Webhook hedefleri kayıt anında doğrulanır (challenge) ve değişince yeniden; gönderim outbox `kind=HTTP` lane'inden, imzalı (HMAC) ve yeniden denemeli.
+- Config Server ve actuator portları yalnız iç ağda; SSRF'e açık servislerden erişilemez (Bölüm 15.2).
+- Test: iç IP'ye, metadata adresine ve DNS ile iç IP'ye çözülen host'a giden istek reddediliyor.
+
 ---
 
 ## 10. Veri Katmanı: PostgreSQL, Flyway, JPA
@@ -1249,6 +1263,19 @@ ALTER DEFAULT PRIVILEGES FOR ROLE svc_order_migrate IN SCHEMA "order"
 ```
 
   Kesin GRANT listesi uygulamanın **doğrulanmış** erişim ihtiyacından çıkarılır (örn. `pg_stat_statements` ile gözlenen ifadeler); "her ihtimale karşı" yetki verilmez. Spring: `spring.datasource` uygulama rolü, `spring.flyway.user/password` migration rolü.
+
+  **Rol bazlı zaman aşımları** (başlangıç ayarı; global `postgresql.conf` yerine role bağlanır, migration rolü ayrı tutulur):
+
+```sql
+ALTER ROLE svc_order SET statement_timeout = '10s';                    -- kaçak sorgu
+ALTER ROLE svc_order SET lock_timeout = '3s';                          -- kilit kuyruğu birikmesin
+ALTER ROLE svc_order SET idle_in_transaction_session_timeout = '60s'; -- açık unutulan TX kilit/bloat üretmesin
+ALTER ROLE svc_order_migrate SET lock_timeout = '10s';                 -- DDL kilidi beklerken üretimi kilitlemesin; statement_timeout yok (backfill)
+```
+
+  Uzun raporlama/export sorguları ayrı rol veya `SET LOCAL statement_timeout` ile; sıcak yol sorguları 10 sn'ye yaklaşıyorsa sorun timeout değil sorgudur.
+
+  **Row Level Security (opsiyon, varsayılan değil):** hesap sahipliği için ikinci savunma hattı olarak `ENABLE ROW LEVEL SECURITY` + `current_setting('app.account_id')` policy'si kullanılabilir; kural: bağlam **`SET LOCAL`** ile TX içinde verilir (`SET` PgBouncer transaction mode'da bir sonraki isteğe sızar), uygulama rolü `BYPASSRLS` değildir, view'ların sahibi superuser değildir, policy'siz tablo = herkese kapalı. Uygulama katmanındaki ownership kontrolü (Bölüm 9.7) kalkmaz; RLS onu tamamlar.
 
   Microsoft Azure Architecture Center ve AWS Prescriptive Guidance aynı fiziksel sunucuyu paylaşmayı kabul eder; sorun şema/tablo paylaşımıdır. Rol ayrımı ileride şemayı ayrı instance'a taşımayı da kolaylaştırır (Bölüm 24).
 - **Zorlama — testle (ikincil):**
@@ -1313,6 +1340,7 @@ CREATE UNIQUE INDEX uq_order_item_one_open ON <schema>.order_item (order_id) WHE
 |---|---|
 | ID | **UUIDv7** (zaman sıralı); tek üretim yöntemi: `platform-core`'daki generator (`uuid-creator` `getTimeOrderedEpoch()`) veya Hibernate 7 `@UuidGenerator(style = VERSION_7)` + PostgreSQL 18 `DEFAULT uuidv7()`. **Neden:** UUIDv4 rastgele insert'lerle B-tree sayfa bölünmesi ve WAL şişmesi yaratır (ölçümler: v7 ile index ~%26 küçük, insert belirgin hızlı); v7 ile `created_at DESC, id DESC` keyset sıralaması id ile doğal olarak uyuşur. `@PrePersist` ve elle atama yasak. |
 | Zaman | `Instant` ↔ `TIMESTAMPTZ`, `hibernate.jdbc.time_zone: UTC`, `jackson.time-zone: UTC` |
+| Para | `BigDecimal` ↔ `NUMERIC(19,4)` **veya** en küçük birim `BIGINT` (kuruş) + `currency CHAR(3)`; `double`/`float` asla; yuvarlama kuralı (`RoundingMode`) domain'de tek yerde |
 | Auditing | Tek yöntem (Spring Data `@CreatedDate/@LastModifiedDate`) |
 | Eşzamanlılık | Eşzamanlı güncellenen aggregate'te `@Version`; çakışma 409 döner |
 | Kısmi update | Kilitsiz okuyup yazan akışlar araya giren güncellemeyi ezmesin diye `@DynamicUpdate` |
@@ -1360,7 +1388,7 @@ Bu bölüm **ilk sprint** işidir; "sonra bakarız" denen tek konu değildir.
 | Restore provası | **Aylık**, otomatik: yedek ayrı bir container'a restore edilir, Flyway `validate` + smoke test koşar, sonucu alarm/rapor. Test edilmemiş yedek, yedek değildir. |
 | RPO/RTO | README'de yazılı (örn. RPO 5 dk, RTO 1 sa). Arşiv gecikmesi (`archive lag`) alarmı. |
 | HA | Tek compose host'unda araç ne olursa olsun HA **yoktur**. Seçenekler: managed PostgreSQL (standby + otomatik failover + PITR + dahili PgBouncer; küçük ekip için önerilen) veya ikinci host + streaming replica. Patroni ≥3 DCS node ister; tek host'ta anlamsız. |
-| Bağlantı bütçesi | Her PG bağlantısı bir OS process'i. HikariCP rehberi: havuz ≈ `(çekirdek × 2) + disk`; "daha az bağlantı daha hızlı". N servis × instance × havuz hesabı README'de. **PgBouncer** transaction mode (`default_pool_size` 20; 1.21+ prepared statement destekler) `max_connections`'ı korur. |
+| Bağlantı bütçesi | Her PG bağlantısı bir OS process'i. HikariCP rehberi: havuz ≈ `(çekirdek × 2) + disk`; "daha az bağlantı daha hızlı". N servis × instance × havuz hesabı README'de. **PgBouncer** transaction mode (`default_pool_size` 20) `max_connections`'ı korur. Protokol seviyesi prepared statement'lar 1.21+ ile transaction mode'da desteklenir (`max_prepared_statements`; 1.24.1'den beri varsayılan 200; SQL `PREPARE` desteklenmez). Transaction mode kuralları: oturum durumu yok (`SET` yerine `SET LOCAL`, advisory lock yalnız `pg_advisory_xact_lock`, `LISTEN/NOTIFY` yok), Hikari `connection-init-sql`/`schema` gibi oturuma bağlı ayarlar kullanılmaz. Boot 4.1 `spring.datasource.connection-fetch=lazy` ile bağlantı yalnız ilk SQL'de alınır. |
 | Gözlem | `pg_stat_statements` açık; postgres-exporter (bağlantı, replication slot, bloat, uzun transaction). |
 | Büyüyen tablolar | Outbox, audit, log, olay tabloları için retention ve gerekirse **partition** politikası tanımlıdır (Bölüm 10.6). |
 | Redis/Valkey | Güvenlik instance'ı AOF (`appendfsync everysec`); cache instance'ı kaybedilebilir. Sentinel veya managed. |
@@ -1437,6 +1465,7 @@ CREATE INDEX idx_outbox_event_claim ON <schema>.outbox_event (kind, status, next
 - `id` deterministik gerekiyorsa (`UUID.nameUUIDFromBytes(kaynak:hedef:faz)`) yazıcı sağlar; tüketici inbox bu id ile dedup yapar.
 - **Üretici tarafı sıralama:** Tüketicideki single-active-consumer tek başına sırayı garanti etmez; sıra **yayın anında** bozulabilir (iki poller instance'ı aynı aggregate'in iki satırını paralel claim eder, yeniden deneme eski olayı sonraya atar). Sıra gereken `aggregate_id` için: claim sorgusu aynı aggregate'in satırlarını **tek worker'a** verir ve `created_at` sırasıyla işler; bir satır başarısız olursa aynı aggregate'in sonraki satırları **beklet**ilir (`next_retry_at` ileri alınır, retry sayılmaz). Sıra gerekmeyen olaylarda bu kısıt uygulanmaz (throughput). Tüketici tarafında ayrıca `source_revision` karşılaştırması (Bölüm 4.6) sıra hatasını tolere eder.
 - **`claim_token` yalnız poller'ın kendi yazma yarışını çözer** (kirası dolmuş eski worker sonucu ezemez). Uzak hedefe aynı işin iki kez ulaşmasını **engellemez**: hedef idempotent olmak zorundadır (inbox / `Idempotency-Key` / deterministik `id`).
+- **Tablo sağlığı:** outbox/inbox yüksek insert+delete churn'ü üretir; varsayılan autovacuum ölçeği (`%20`) yetmez → tablo başına `autovacuum_vacuum_scale_factor = 0.01`, `autovacuum_vacuum_cost_delay` düşük; `n_dead_tup` ve tablo boyutu alarmda. Günde milyon satırı geçince `created_at` partition + `DROP PARTITION` (Bölüm 10.6). İşlenen satırı silmek yerine arşiv tablosuna taşımak yalnız denetim ihtiyacı varsa.
 - **Publisher confirm ≠ tüketici işledi.** Confirm yalnız broker'ın mesajı kalıcı aldığını söyler. "İş tamamlandı" bilgisi gerekiyorsa tüketici kendi olayını yayınlar (`notification.delivered`), üretici onu tüketir; senkron RPC'ye dönülmez.
 
 **CDC alternatifi (Debezium):** Polling publisher, Kafka/Connect yoksa "saner default"tır (Richardson) ve 1 sn poll ile ~500 ms p50 gecikme verir. **Debezium Server** (Kafka Connect gerektirmez; Kafka, RabbitMQ streams, Redis Streams, NATS, HTTP sink'leri) ile poller'lar kalkar ve gecikme ~50–200 ms'ye iner; bedeli `wal_level=logical` + replication slot yönetimidir: connector durursa veya yakalanan tablo boştayken diğer tablolar yazarsa **WAL disk'i doldurur** → `heartbeat.interval.ms` + `heartbeat.action.query`, `max_slot_wal_keep_size` ve slot lag alarmı şart. Eşik: Bölüm 24.
@@ -1636,13 +1665,14 @@ Config key'leri `operation-consistency.*` altında tutulur.
 - Alan silme/yeniden adlandırma/tip değiştirme **kırıcıdır**: yeni `type` (veya `type` içinde `.v2`) açılır; üretici bir süre **iki olayı birden** yayınlar; tüketiciler geçince eski kapatılır.
 - Tüketici bilmediği alanı yok sayar (`FAIL_ON_UNKNOWN_PROPERTIES=false`), bilmediği `type`'ı loglayıp ack'ler.
 - Payload sınıfları `<domain>-api` modülünün `event` paketinde; şema registry (Apicurio, Apache-2.0) yalnız çok ekipli ortamda.
+- **Boyut:** olay payload'ı küçük tutulur (hedef < 64 KB; RabbitMQ `max_message_size` varsayılanı 16 MB ama kuyruk belleği ve tüketici gecikmesi büyür). Büyük içerik (rapor, görsel, toplu liste) **claim-check**: içerik object storage/DB'ye yazılır, olay yalnız referans (`dataref`, CloudEvents `data` yerine) ve özet taşır; tüketici referansı çözer. Referansın yaşam süresi olayın yeniden işlenme penceresinden uzun olmalıdır.
 - **Rollout:** olay değişikliği tek bir "tüketici önce" kuralıyla yönetilmez; değişiklik türüne göre sözleşme ve uyumluluk matrisi **Bölüm 18.4**'te (opsiyonel alan ekleme: sıra serbest; yeni `type`/kırıcı değişiklik: tüketici önce + çift yayın; yeni tüketici: kuyruk/binding önce).
 
 ### 12.3 RabbitMQ 4.x Konfigürasyonu
 
 | Bileşen | Desen |
 |---|---|
-| Sürüm | 4.3+ (community-destekli hat; 3.13 desteği 2024-09'da bitti). Mnesia yok (Khepri); classic mirrored queue yok. |
+| Sürüm | 4.3+ (community-destekli hat; 3.13 desteği 2024-09'da bitti). Mnesia yok (Khepri tek metadata store; `khepri_db` feature flag'i 4.3'e geçmeden **önce** açılır, aksi halde boot sırasında zorunlu göç); classic mirrored queue yok. |
 | Queue tipi | **Quorum queue** (`x-queue-type: quorum`), `delivery-limit` (varsayılan 20 → DLX), `dead-letter-strategy: at-least-once`, `x-delivery-count` başlığı |
 | Gecikmeli retry | QQ native `x-delayed-retry-type: failed` + `x-delayed-retry-min/max` (4.3; lineer backoff). **Delayed Message Exchange plugin'i kullanılmaz** (arşivlendi, Mnesia tabanlı). |
 | Exchange/queue adları | komut: `<servis>.commands` / `<hedef>.<komut>.queue`; event: `domain.events` (topic) / `<tüketici>.<amaç>.queue`; DLX `<servis>.dlx`; DLQ `<queue>.dlq` |
@@ -1817,7 +1847,7 @@ server.shutdown: graceful
 springdoc: { api-docs.enabled: false, swagger-ui.enabled: false }
 ```
 
-**Config Server ne zaman?** Onlarca servis, birden fazla ortam ve merkezi refresh (`/actuator/refresh`, Bus) ihtiyacı varsa. Kullanılıyorsa: (1) **secret taşımaz** — Spring Cloud Config'in güvenlik dokümanı "uygulama adını bilen her kimliği doğrulanmış istemci başka uygulamanın config'ini isteyebilir" der; (2) `optional:` **yok**, `spring.cloud.config.fail-fast=true` + retry — aksi halde sunucu düşükken servis **sessiz kısmi config** ile açılır; (3) native backend production için değil (dokümanın kendi ifadesi: "başlangıç ve test için"), git backend + TLS; (4) güncel sürüm (4.1.x native backend'de 2026'da CRITICAL kimlik doğrulamasız CVE'ler aldı); (5) config-server port'u yalnız iç ağda ve SSRF'e açık servislerden erişilemez.
+**Config Server ne zaman?** Onlarca servis, birden fazla ortam ve merkezi refresh (`/actuator/refresh`, Bus) ihtiyacı varsa. Kullanılıyorsa: (1) **secret taşımaz** — Spring Cloud Config'in güvenlik dokümanı "uygulama adını bilen her kimliği doğrulanmış istemci başka uygulamanın config'ini isteyebilir" der; (2) `optional:` **yok**, `spring.cloud.config.fail-fast=true` + retry — aksi halde sunucu düşükken servis **sessiz kısmi config** ile açılır; (3) native backend production için değil (dokümanın kendi ifadesi: "başlangıç ve test için"), git backend + TLS; (4) güncel sürüm — Config Server 2026'da üç kez delindi: CVE-2026-22739 (Mart, native backend profil ile path traversal + git backend SSRF, CVSS 8.6), CVE-2026-40982 (Mayıs, kimlik doğrulamasız directory traversal, CVSS 9.8; düzeltme 4.3.3 / 5.0.3), CVE-2026-47894 (Ağustos, native backend'de wildcard ile repo dışı dosya okuma; 5.0.0–5.0.4 ve 4.3.0–4.3.4 etkilenir). Native backend hiçbir ortamda production'a çıkmaz; Config Server bağımlılığı Renovate ile günler içinde güncellenir; (5) config-server port'u yalnız iç ağda ve SSRF'e açık servislerden erişilemez.
 
 Ortak `application.yml` (config reposunda):
 
@@ -1900,6 +1930,7 @@ services:
 | Tutarlılık / sınır | Enum↔seed↔registry↔frontend eşleşmesi. Migration'larda başka schema adı yok. Client'ta yanlış modül DTO'su yok. Hata kodu çakışması yok. |
 | Statik config | yml ve alarm kuralı dosyalarını okuyup doğrulayan testler. Local ↔ deploy config drift testi. Hook komutlarının örnek girdiyle testi. |
 | Dayanıklılık | Her HTTP client için "hedef yanıt vermiyor" testi: timeout bütçesi, circuit açılması, tanımlı hata (Bölüm 4.7). |
+| Mutasyon | Kritik modüllerde (outbox, saga, güvenlik filtreleri, para hesabı) **PIT** (`pitest-maven` + `pitest-junit5-plugin`; plugin yoksa 0 test bulur ve sessiz geçebilir) ile testlerin gerçekten yakaladığı doğrulanır; hedef mutasyon skoru README'de (başlangıç ≥ %80 kritik paketlerde). CI'da haftalık; PR gate'te değil (süre). `skeleton-example`'daki elle mutasyonlar bu pratiğin küçük hali. |
 | Yük | k6/Gatling senaryoları staging'de (haftalık ve release öncesi): p99 ve hata oranı SLO'ya karşı; sonuç kapasite planına (Bölüm 24) yazılır. |
 | Contract (servisler arası) | Monorepo'da derleme zamanı tip kontrolü yeter; Pact'in kendi karşılaştırması bile "iki tarafı aynı ekip aynı repoda yazıyorsa az katkı" der. Polyrepo'ya geçilirse Pact/Spring Cloud Contract. |
 | İstemci contract | CI'da her servisin `/v3/api-docs` çıktısı üretilir, birleştirilir, `openapi-diff` ile breaking change yakalanır, `openapi-generator` ile istemci client'ı (örn. `dart-dio`, `typescript-fetch`) üretilir (Bölüm 20). |
@@ -1972,8 +2003,10 @@ COPY --from=extract /app/extracted/spring-boot-loader/ ./
 COPY --from=extract /app/extracted/snapshot-dependencies/ ./
 COPY --from=extract /app/extracted/application/ ./
 HEALTHCHECK --interval=15s --timeout=3s --start-period=60s CMD wget -qO- http://127.0.0.1:8081/actuator/health/readiness || exit 1
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-XX:+UseCompactObjectHeaders", "-XX:AOTCache=/app/app.aot", "-jar", "app.jar"]
 ```
+
+JDK 25 notları: `-XX:+UseCompactObjectHeaders` (JEP 519, final) heap'i %10–20 küçültür; AOT cache (JEP 514/515) build'de bir **training run** ile üretilir (`-XX:AOTCacheOutput=app.aot`, temsilî istek trafiğiyle) ve image'a konur, açılış %15–40 kısalır — cache JDK sürümüne ve classpath'e bağlıdır, image her build'de yeniden üretir. `docker-rollout` sırasında iki container'ın aynı anda yaşayacağı bellek `MaxRAMPercentage` hesabına katılır.
 
 **Kurallar:**
 - `.dockerignore`: `.git`, `**/target`, `node_modules`, `.env*`, `secrets/`.
@@ -1998,7 +2031,7 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
 
 | Workflow | İçerik |
 |---|---|
-| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks, config drift, OpenAPI diff, hook testleri. |
+| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@<sha> # v5.0.0`); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks, config drift, OpenAPI diff, hook testleri. |
 | `migration-immutability` | PR tetikler (`edited` dahil). Head SHA ve `fetch-depth: 0` ile checkout; `node scripts/<migration>-immutability.js check --base origin/$BASE_REF`; script'in kendi testleri. |
 | `build-images` | `develop`/`release`/`main` push. Değişen servislerin image'ları Jib ile build → GHCR push → cosign imza + SBOM. Çıktı: `<servis>@sha256:…` listesi (artifact). |
 | `deploy` | `release` → staging (otomatik), `main` → production (**GitHub environment protection** ile onay). Sunucuya SSH: yalnız `docker compose pull` + `docker-rollout`. Registry, digest ve imza doğrulaması. |
@@ -2214,7 +2247,7 @@ Bu dokümanın ve `blueprint/`'in **iki farklı doğrulama seviyesi** vardır; i
 | Push öncesi | İlgili review skill'leri çalıştırılır |
 | Doğrulama | Değişiklik izole bir DB'ye karşı servis gerçekten ayağa kaldırılarak doğrulanır |
 | API sözleşmesi (tek kaynak) | **OpenAPI üretilir, elle yazılmaz.** CI her servisin `/v3/api-docs` çıktısını alır, tek `<proje>-api.yaml`'a birleştirir, `openapi-diff` ile breaking change'i PR'da işaretler, `openapi-generator` ile istemci client paketini üretir (Flutter: `dart-dio` stable; web: `typescript-fetch`). Postman/Bruno koleksiyonu OpenAPI'den türetilir; elle üçüncü kopya tutulmaz. |
-| API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Kırıcı değişiklik yeni versiyon; eski versiyon sunset tarihiyle en az N ay yaşar. |
+| API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Spring Framework 7 versiyonlamayı **birinci sınıf** destekler: `@GetMapping(version = "1.1")`, `ApiVersionConfigurer` (path/header/query/media type'tan çözümleme), `SemanticApiVersionParser`; RestClient/HTTP Service Client ve MockMvc tarafında da aynı sürüm desteği. Kırıcı değişiklik yeni versiyon; eski versiyon **`Deprecation` (RFC 9745) + `Sunset` (RFC 8594) + `Link rel="deprecation"`** header'larıyla en az N ay yaşar, sunset sonrası 410. |
 | İstemci handoff | İstemciyi etkileyen her değişiklik için versiyonlu entegrasyon dokümanı yazılır (şablon aşağıda) — endpoint/alan listesi OpenAPI'den gelir, doküman **davranış, ekran akışı ve hata kodu → ekran** eşlemesine odaklanır |
 | Mimari plan | Büyük alanlar için modül içi `docs/` planı; kodla farkları periyodik güncellenir |
 | **ADR** (Architecture Decision Record) | Mimari şekil, veri ayrımı, yeni altyapı bileşeni, versiyonlama, güvenlik modeli gibi geri alması pahalı her karar `docs/adr/NNNN-<baslik>.md` olarak yazılır (şablon: `blueprint/docs/adr/0000-template.md`): bağlam, seçenekler, karar, sonuçlar, **yeniden değerlendirme eşiği** (Bölüm 24). ADR'siz mimari değişiklik PR'ı `REQUEST CHANGES`. |
@@ -2869,13 +2902,52 @@ Her faz sonunda: uyum raporu güncellenir, ilgili review skill'leri çalıştır
 
 | Bileşen | Kaynak | Not (2026-09) |
 |---|---|---|
-| Spring Boot / Framework / Security / Cloud | `spring.io/support-policy`, proje sayfalarındaki destek tabloları, `endoflife.date/spring-boot` | Boot 3.x OSS desteği bitti (3.5: 2026-06); 4.0.x 2026-12'ye, 4.1.x sonrasına kadar. Spring Cloud OSS: 2025.1.x (Boot 4.0), 2026.0.x (Boot 4.1). Her minor ≥13 ay; major'ın son minor'u ticari desteğe geçer. |
+| Spring Boot / Framework / Security / Cloud | `spring.io/support-policy`, proje sayfalarındaki destek tabloları, `endoflife.date/spring-boot` | Boot 3.x OSS desteği bitti (3.5: **2026-06-30**, son OSS yaması 3.5.16); **4.0.x OSS: 2026-12-31**, **4.1.x OSS: 2027-07-31** (ticari 2028-07-31); 4.1.0 çıkışı 2026-06-10. Spring Cloud OSS: **2025.1.x Boot 4.0 + 4.1** (2025.1.2 ile 4.1 uyumu; 2025.1.3 Ağustos 2026); 2026.0.x → Boot 4.2 (milestone). Spring Modulith 2.x (Boot 4; 2.1.1 Ağustos 2026). Her minor ≥13 ay; major'ın son minor'u ticari desteğe geçer. |
 | Java | `endoflife.date/oracle-jdk`, Adoptium/Temurin | 25 LTS (2025-09); 21 LTS hâlâ destekli; LTS dışı sürümler üretimde kullanılmaz |
 | PostgreSQL | `postgresql.org/support/versioning` | 5 yıl; 15 → 2027-11, 14 → 2026-11; 18 güncel |
 | Redis / Valkey | GitHub releases; lisans: `LICENSE.txt` | Redis 7.x bakımsız; 8.x AGPL/RSALv2/SSPL; Valkey 9.x BSD |
-| RabbitMQ | `rabbitmq.com/release-information`, `endoflife.date/rabbitmq` | Community-destekli tek seri en yeni minor; eski minor'lar aylar içinde düşer |
-| Elasticsearch / OpenSearch | `elastic.co/support/eol`, OpenSearch releases | ES 8.x bakım sonu 2027-01; lisans dalına göre farklı |
+| RabbitMQ | `rabbitmq.com/release-information`, `endoflife.date/rabbitmq` | 4.3 (2026-04): Mnesia tamamen kaldırıldı, **`khepri_db` feature flag'i 4.3'e yükseltmeden önce açılır**; QQ native delayed retry ve consumer timeout policy ile. Community-destekli tek seri en yeni minor |
+| Elasticsearch / OpenSearch | `elastic.co/support/eol`, OpenSearch releases | ES 8.x bakım sonu 2027-01-15, destek sonu 2027-07-15; 9.5.x güncel. OpenSearch 3.8 (2026-08) güncel; lisans dalına göre farklı |
 | Grafana yığını | GitHub releases; Promtail EOL (2026-03-02) | Alloy, Loki, Tempo, Prometheus minor'ları birlikte güncellenir |
-| Testcontainers, ArchUnit, Resilience4j, Debezium | GitHub releases | Testcontainers 2.x artefakt adları değişti |
-| Node / React / Vite / MUI | `endoflife.date/nodejs`, proje sayfaları | Node LTS dışı sürüm CI/Dockerfile'da kullanılmaz |
+| Testcontainers, ArchUnit, Resilience4j, Debezium | GitHub releases | Testcontainers 2.x artefakt adları `testcontainers-` önekli, eski koordinatlar 1.21.4'te dondu; Debezium 3.6 (2026-07, Kafka Connect 4.3); HikariCP 7.x (Java 11+); PIT 1.30 + `pitest-junit5-plugin` |
+| Node / React / Vite / MUI | `endoflife.date/nodejs`, proje sayfaları | Node 24 Active LTS (bakım 2026-10-20, EOL 2028-04-30); 22 bakımda (EOL 2027-04-30); LTS dışı sürüm CI/Dockerfile'da kullanılmaz |
 | CVE'ler | `spring.io/security`, GitHub Advisory DB (Dependabot alerts), `osv.dev` | Yaması yalnız ticari sürümde olan CVE = upgrade tetikleyicisi |
+
+---
+
+## Ek B — Doğrulama Kaynakları (2026-09-29)
+
+Bu ekteki tarih ve sürüm iddiaları aşağıdaki kaynaklardan doğrulandı; kaynağı olmayan iddia dokümanda "doğrulanmadı" diye işaretlidir. Çeyreklik kontrolde bu liste yenilenir.
+
+| İddia | Kaynak |
+|---|---|
+| Spring Boot 4.1.0 2026-06-10; 4.1 OSS 2027-07-31; 4.0 OSS 2026-12-31; 3.5 OSS 2026-06-30 | spring.io/blog (2026-06-10), herodevs.com Spring Boot EOL tablosu, versionlog.com/spring-boot/4.1 |
+| Spring Cloud 2025.1.2 Boot 4.1 uyumu; 2026.0.0-M1 Boot 4.2 tabanlı | spring.io/blog 2026-06-11 ve 2026-09-24 |
+| Config Server CVE-2026-22739 / 40982 / 47894 | spring.io/security/cve-2026-22739, -40982, -47894 |
+| Gateway CVE-2025-41235 ve `trusted-proxies` | spring.io/security/cve-2025-41235; docs.spring.io Gateway HttpHeadersFilters |
+| Spring Framework 7 API versiyonlama, `@Retryable`/`@ConcurrencyLimit` | docs.spring.io webmvc-versioning; spring.io/blog 2025-09-09 ve 2025-09-16 |
+| Boot 4.1 `InetAddressFilter`, `connection-fetch=lazy`, gRPC | github.com/spring-projects/spring-boot Spring Boot 4.1 Release Notes; infoq.com 2026-06 |
+| `spring-boot-starter-opentelemetry` | spring.io/blog 2025-11-18 |
+| Spring Modulith 2.0 GA (2025-11-21), 2.1.1/2.2 M1 (2026-08) | spring.io/blog |
+| Spring Security 7 (passkeys, OTT, DPoP 6.5+) | docs.spring.io/spring-security whats-new |
+| OpenFeign feature-complete (2022.0.0'dan beri) | docs.spring.io/spring-cloud-openfeign |
+| Java 25 LTS, JEP 491/506/514/515/519 | openjdk.org/jeps, inside.java 2025-10 |
+| PostgreSQL 18 (2025-09-25): `uuidv7()`, AIO, skip scan, OAuth | postgresql.org/docs/release/18.0 |
+| PgBouncer prepared statements 1.21+, `max_prepared_statements` varsayılan 200 (1.24.1) | pgbouncer.org/faq, pganalyze.com |
+| PostgreSQL zaman aşımı parametreleri | postgresql.org/docs/current/runtime-config-client |
+| RabbitMQ 4.3 (2026-04-23): delayed retry, consumer timeout policy, Mnesia kaldırıldı | rabbitmq.com/blog/2026/04/23/rabbitmq-4.3-release; rabbitmq.com/docs/quorum-queues |
+| Kafka 4.2 (2026-02-17) share groups GA | kafka.apache.org/blog 4.2.0 announcement |
+| Valkey 9.0 (2025-09) | valkey.io/blog/introducing-valkey-9 |
+| Redis 8 AGPLv3 (2025-05-01) | redis.io/blog/agplv3 |
+| Testcontainers 2.x artefakt önekleri; eski koordinatlar 1.21.4 | github.com/testcontainers/testcontainers-java releases; docs.openrewrite.org testcontainers2migration |
+| Promtail EOL 2026-03-02 | grafana.com/docs/loki send-data/promtail |
+| Flyway `baselineOnMigrate` uyarısı | documentation.red-gate.com flyway-baseline-on-migrate-setting |
+| Debezium Server sink'leri (RabbitMQ AMQP + stream, Redis Streams, NATS, HTTP); Debezium 3.6 | debezium.io/documentation debezium-server; debezium.io/blog 2026-07-01 |
+| OWASP ASVS 5.0 (2025-05) | owasp.org ASVS |
+| Elasticsearch 8.x bakım sonu 2027-01-15 / destek 2027-07-15; OpenSearch 3.8 | elastic.co/support/eol; opensearch.org |
+| Node 24 Active LTS (EOL 2028-04-30), 22 EOL 2027-04-30 | nodejs.org/en/about/eol |
+| tj-actions/changed-files CVE-2025-30066; GitHub SHA pinning policy (2025-08-15) | wiz.io blog; github.blog/changelog 2025-08-15 |
+| RFC 9745 Deprecation header, RFC 8594 Sunset | rfc-editor.org/info/rfc9745 |
+| PIT 1.30 (2026-08), JUnit 5 plugin | pitest.org, github.com/hcoles/pitest |
+| `docker-rollout` (wowu) aktif | github.com/wowu/docker-rollout |
+| Hibernate `@UuidGenerator(style = VERSION_7)` (6.5+) | docs.hibernate.org UuidVersion7Strategy |

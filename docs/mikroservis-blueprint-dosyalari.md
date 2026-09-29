@@ -428,7 +428,7 @@ Arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem kabul edilmez; "her 
 
 | Bileşen | Sürüm | Not |
 |---|---|---|
-| Java / Spring Boot / Spring Cloud | 25 / 4.x / 2025.1.x | OSS destek kontrolü: `docs/versions.md` (tarihli) |
+| Java / Spring Boot / Spring Cloud | 25 / 4.1.x / 2025.1.x (Boot 4.0+4.1) | OSS destek kontrolü: `docs/versions.md` (tarihli; referans Ek A/B) |
 | PostgreSQL | 18 | tek instance, şema+rol/servis, PgBouncer, WAL-G → S3 |
 | Valkey | 9 ×2 | `security` (noeviction+AOF, Sentinel) / `cache` (allkeys-lru) |
 | RabbitMQ | 4.3 | quorum queue; `domain.events` topic; streams: `domain.events.stream` |
@@ -510,6 +510,7 @@ Secret değerleri, üretim host adları, CI token'ları, kişisel veri örnekler
 - Kimlik sorgulama uçlarında **varlık oracle'ı** yok: kayıtlı olmayan/gizli/engelli için tek tip "sonuç yok"; hız limiti, velocity alarmı, audit.
 - Konum: rastgele fuzzing **yetersiz**; kullanıcı başına deterministik grid/ofset (~1–3 km), aynı yuvarlanmış nokta geo sorgusu ve filtrelerde; mesafe aralık olarak; kesin mesafe sıralaması yok.
 - Kişisel veri dönen uçlar `Cache-Control: private, no-store`.
+- **SSRF:** kullanıcıdan gelen URL ile giden her istek (webhook, avatar/önizleme, içe aktarma) ayrı egress client'tan; `https` + host allowlist; DNS çözümü sonrası IP kontrolü (`InetAddressFilter.externalAddresses()` bean'i, Boot 4.1) ve redirect'te tekrar; kısa timeout + boyut sınırı. İç ağ, `169.254.169.254`, localhost, config-server/actuator portları hedef olamaz.
 - Arama index'i, cache, log, yedek aynı kurallara uyar.
 - Export (taşınabilirlik) keyset sayfalı internal uçlarla; **silme** silme saga'sı ile (tüm servisler, index, cache, object storage tüm versiyonlar, üçüncü taraflar); yasal saklama gerekenler anonimleştirilir; yedekler için crypto-shredding. KVKK 30 gün / GDPR 1 ay.
 - Uçtan uca şifreleme iddiası varsa Signal/MLS; değilse "sunucu okuyamaz" ile sınırlı ve sınırlamalar yazılı. İstemci karşı tarafın anahtarını pin'ler. Şikayet kanıtı **message franking** ile; sohbet anahtarı panele verilmez. Kanıt erişimi audit'li, `no-store`, retention'lı.
@@ -522,6 +523,7 @@ Secret değerleri, üretim host adları, CI token'ları, kişisel veri örnekler
 
 ### 7. Veritabanı
 
+- Uygulama rolünde `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout` role bağlı (`ALTER ROLE … SET`); migration rolünde `statement_timeout` yok, `lock_timeout` kısa. PgBouncer transaction mode: `SET` yasak, `SET LOCAL`; `pg_advisory_xact_lock`. RLS kullanılıyorsa bağlam `SET LOCAL` ile, rol `BYPASSRLS` değil.
 - Servis başına **iki** DB rolü: `svc_<x>_migrate` (şema sahibi, DDL; yalnız Flyway) ve `svc_<x>` (uygulama; tablo/sequence DML, `ALTER DEFAULT PRIVILEGES` ile). Uygulama rolü DDL yapamaz, audit/append-only tablolarda UPDATE/DELETE yetkisi yoktur. Başka şemaya USAGE yok. Cross-schema erişim hatası "GRANT ekleyerek" çözülmez.
 - `spring.flyway.baseline-on-migrate` config'te **açık tutulmaz**; mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` prosedürüdür.
 - Audit tabloları `@Immutable` + DB'de `REVOKE UPDATE, DELETE` / trigger.
@@ -535,6 +537,7 @@ Secret değerleri, üretim host adları, CI token'ları, kişisel veri örnekler
 ### 9. Tedarik Zinciri
 
 - Image CI'da build, cosign imzalı, digest ile deploy; non-root; base image Renovate ile güncel.
+- GitHub Actions: üçüncü taraf action'lar **commit SHA'ya pinli** (`uses: owner/action@<40-hex> # vX.Y.Z`); tag pin'i `REQUEST CHANGES`. Workflow `permissions` en dar; secret'lar yalnız gereken job'da.
 - gitleaks pre-commit + CI; Dependabot/GitHub Advisory alarmları; yaması yalnız ticari sürümde olan CVE = upgrade tetikleyicisi.
 - GPL lisanslı kütüphane kapalı kaynak uygulamaya bağlanmadan hukuki inceleme.
 
@@ -999,6 +1002,7 @@ Kontrol et:
 - `R__*` yalnız idempotent referans verisi/view; iş verisi veya parola içermiyor.
 - Seed/test verisi prod location'ında değil (`db/seed-<env>`, yalnız local/test profili).
 - Migration **migration rolüyle** (`svc_<x>_migrate`, şema sahibi) koşuyor; uygulama **ayrı rolle** (`svc_<x>`, yalnız DML) çalışıyor; `ALTER DEFAULT PRIVILEGES` uygulama rolüne yeni tablolarda DML veriyor; uygulama rolüne DDL/`OWNER` verilmemiş. `GRANT` başka şemaya erişim açmıyor (varsa `BLOCKER`). Kesin GRANT listesi gözlenen ihtiyaca dayalı ("her ihtimale karşı" yok).
+- Uygulama rolünde `statement_timeout`/`lock_timeout`/`idle_in_transaction_session_timeout` role bağlı; migration rolünde `lock_timeout` kısa, `statement_timeout` yok. Yeni yüksek churn tablo (outbox/inbox/log) için tablo bazlı autovacuum ayarı (`autovacuum_vacuum_scale_factor`) veya partition.
 - `spring.flyway.baseline-on-migrate: true` config'te kalıcı olarak yok (varsa `HIGH`); mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` adımı.
 
 ### Modül sahipliği
@@ -1377,10 +1381,11 @@ Kontrol et:
 - Seed/test verisi prod location'ında yok; bilinen parolalı admin yok.
 - Gateway: rate limit, timeout, CORS listesi, `gateway` actuator kapalı, trusted proxy.
 - Bağımlılık taraması (Dependabot/OSV) açık CRITICAL/HIGH yok veya kabul edilmiş risk yazılı.
+- CI workflow'larında tüm üçüncü taraf action'lar commit SHA'ya pinli; Renovate digest güncellemesi açık.
 
 ### Sürüm ve destek (Bölüm 25)
 - Java, Spring Boot, Spring Cloud, PostgreSQL, Redis/Valkey, RabbitMQ, arama motoru, Alloy/Loki/Tempo/Prometheus/Grafana, Node: **hepsi OSS destek içinde**; bitişe < 3 ay kalan için upgrade PR/plan var.
-- Yaması yalnız ticari sürümde olan bilinen CVE yok.
+- Yaması yalnız ticari sürümde olan bilinen CVE yok. Config Server kullanılıyorsa 2026 CVE'leri (22739/40982/47894) için düzeltilmiş sürümde ve native backend prod'da değil.
 - Lisans değişikliği (Redis, Elastic, BSL, GPL) gözden geçirilmiş.
 
 ### Uyum ve ürün
@@ -1510,6 +1515,9 @@ Kontrol et:
 - Presigned URL kısa TTL; key sunucuda üretilmiş; HEAD/ETag doğrulaması.
 - Uçtan uca şifreleme varsa: iddia ile şema uyumlu (FS/MITM sınırları yazılı), anahtar pinleme, message franking; sohbet anahtarı panele verilmiyor.
 
+### SSRF / dışa giden istekler
+- Kullanıcı kaynaklı URL'yi sunucu çağırıyor mu (webhook, avatar, önizleme, import)? Ayrı egress client; `https` + host allowlist; DNS sonrası IP kontrolü (`InetAddressFilter` bean'i) ve redirect'te tekrar; timeout + boyut sınırı; iç ağ/metadata/localhost/actuator hedefi testle reddediliyor. Eksikse `HIGH`.
+
 ### Log, hata, secret
 - `security-rules.md` Bölüm 4 yasak listesi: hiçbir ham PII/secret/body/exception mesajı log'da yok. Log'a özel neden `safeLogReason`'da; `details`'te yalnız istemciye gösterilebilir bilgi.
 - Yeni secret: değeri hiçbir yerde yok; `/run/secrets` ile geliyor; `${ENV:literal}` fallback yok; SOPS dosyasına eklenmiş; `.dockerignore` kapsıyor.
@@ -1524,6 +1532,7 @@ Kontrol et:
 ### Tedarik zinciri
 - Yeni bağımlılık: lisans (GPL/AGPL/BSL) ve bilinen CVE kontrolü; sürüm OSS destekli.
 - Dockerfile non-root, `.dockerignore`, image CI'da build.
+- Workflow'larda action'lar commit SHA'ya pinli (tag pin'i `REQUEST CHANGES`); `permissions` en dar.
 
 Çıktı:
 1. **Risk seviyesi:** `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `OK`.

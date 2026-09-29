@@ -15,6 +15,7 @@ Kontrol et:
 - `R__*` yalnız idempotent referans verisi/view; iş verisi veya parola içermiyor.
 - Seed/test verisi prod location'ında değil (`db/seed-<env>`, yalnız local/test profili).
 - Migration **migration rolüyle** (`svc_<x>_migrate`, şema sahibi) koşuyor; uygulama **ayrı rolle** (`svc_<x>`, yalnız DML) çalışıyor; `ALTER DEFAULT PRIVILEGES` uygulama rolüne yeni tablolarda DML veriyor; uygulama rolüne DDL/`OWNER` verilmemiş. `GRANT` başka şemaya erişim açmıyor (varsa `BLOCKER`). Kesin GRANT listesi gözlenen ihtiyaca dayalı ("her ihtimale karşı" yok).
+- Uygulama rolünde `statement_timeout`/`lock_timeout`/`idle_in_transaction_session_timeout` role bağlı; migration rolünde `lock_timeout` kısa, `statement_timeout` yok. Yeni yüksek churn tablo (outbox/inbox/log) için tablo bazlı autovacuum ayarı (`autovacuum_vacuum_scale_factor`) veya partition.
 - `spring.flyway.baseline-on-migrate: true` config'te kalıcı olarak yok (varsa `HIGH`); mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` adımı.
 
 ## Modül sahipliği
