@@ -51,7 +51,7 @@ import tools.jackson.databind.json.JsonMapper;
  * Resilience4j; tek gomulu PostgreSQL 18'de iki ayri schema. Test gateway rolundedir (act=gateway, sub=hesap).
  * Hata enjeksiyonu katilimcinin test-only /internal/test/chaos ucu ile yapilir (allowlist: yalniz "test" aktoru).
  *
- * Zaman: uygulamalar gercek saatle calisir (timeout/circuit/recovery gercek zamanda olcülur); asenkron sonuclar
+ * Zaman: uygulamalar gercek saatle calisir (timeout/circuit/recovery gercek zamanda olculur); asenkron sonuclar
  * sinirli poll ile beklenir (en fazla 15 sn), uygulama mantigi icin sabit sleep yoktur.
  */
 class OrderSubscriptionRuntimeIT {

@@ -39,7 +39,7 @@ resilience4j:
       subscription:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 4
-        minimum-number-of-calls: 4              # varsayilan 100: yazilmazsa kucuk pencerede circuit hic acilmaz
+        minimum-number-of-calls: 4              # varsayilan 100; COUNT_BASED pencerede boyuta kirpildigi olculdu (satir silinince test 3 yine gecti); pencere tipi degisirse diye acik yazilir
         failure-rate-threshold: 50
         wait-duration-in-open-state: 2s
         permitted-number-of-calls-in-half-open-state: 2
