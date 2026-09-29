@@ -1,0 +1,58 @@
+# OrderApp (saga koordinatoru). datasource, anahtar yollari ve hedef adresler ortamdan gelir (Bolum 15.3).
+spring:
+  application.name: order-service
+  datasource:
+    url: ${ORDER_DB_URL}
+    username: ${ORDER_DB_USER:order}
+    password: ${ORDER_DB_PASSWORD:}
+    hikari.maximum-pool-size: 10
+management:
+  tracing:
+    sampling.probability: 1.0            # Bolum 8.6: %100 head sampling, ornekleme Collector'da (tail)
+    propagation.type: W3C
+  otlp.metrics.export.enabled: false     # ornekte Collector yok; uretimde endpoint ortamdan verilir
+  tracing.export.otlp.enabled: false
+service-jwt:
+  audience: order-api
+  service-name: order-service
+  private-key-path: ${ORDER_SIGNING_KEY_PATH}
+  jwks-path: ${SERVICE_JWKS_PATH}
+  # order-service'in /internal ucu yok: bos allowlist = default-deny
+operation-consistency:
+  deadline-seconds: 15
+  lease-seconds: 60
+  max-backoff-seconds: 300
+  warn-after-minutes: 15
+  retention-days: 30
+  batch-size: 50
+  poll-millis: 5000
+clients:
+  subscription:
+    base-url: ${SUBSCRIPTION_BASE_URL}
+    audience: subscription-api
+    # Toplam butce: connect + read < gateway butcesi (Bolum 4.7 ornegi 3 sn). Consume tek, hizli bir DB yazimi.
+    connect-timeout: 500ms
+    read-timeout: 1500ms
+resilience4j:
+  circuitbreaker:
+    instances:
+      subscription:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 4
+        minimum-number-of-calls: 4              # varsayilan 100; COUNT_BASED pencerede boyuta kirpildigi olculdu (satir silinince test 3 yine gecti); pencere tipi degisirse diye acik yazilir
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 2s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: false
+        # Yalniz belirsiz/erisilemez sonuc hata sayilir; 403/409 is kararidir, bulkhead reddi bizim kendi korumamiz.
+        record-exceptions:
+          - com.acme.platform.messaging.saga.SagaParticipant$ParticipantUnavailableException
+        ignore-exceptions:
+          - io.github.resilience4j.bulkhead.BulkheadFullException
+          - com.acme.platform.messaging.saga.SagaParticipant$ParticipantForbiddenException
+          - com.acme.platform.messaging.saga.SagaParticipant$ParticipantConflictException
+  bulkhead:
+    instances:
+      subscription:
+        max-concurrent-calls: 8
+        max-wait-duration: 0ms                  # bekleme yok: dolu ise hemen UPSTREAM_UNAVAILABLE

@@ -1,0 +1,38 @@
+# SubscriptionApp (katilimci). datasource ve anahtar yollari ortamdan gelir (Bolum 15.3); burada literal secret yok.
+spring:
+  application.name: subscription-service
+  datasource:
+    url: ${SUBSCRIPTION_DB_URL}
+    username: ${SUBSCRIPTION_DB_USER:subscription}
+    password: ${SUBSCRIPTION_DB_PASSWORD:}
+    hikari.maximum-pool-size: 10
+management:
+  tracing:
+    sampling.probability: 1.0            # Bolum 8.6: uygulama %100 head sampling, ornekleme Collector'da (tail)
+    propagation.type: W3C
+  otlp.metrics.export.enabled: false     # ornekte Collector yok; uretimde endpoint ortamdan verilir
+  tracing.export.otlp.enabled: false
+service-jwt:
+  audience: subscription-api
+  service-name: subscription-service
+  jwks-path: ${SERVICE_JWKS_PATH}
+  internal-access:
+    # First-match: dar kurallar once (Bolum 9.5). Katilimci uclarinin tamami yalniz order-service'e acik.
+    - path: "/internal/subscription/accounts/*/operations/*/consume"
+      allowed-actors: [ order-service ]
+    - path: "/internal/subscription/accounts/*/operations/*/confirm"
+      allowed-actors: [ order-service ]
+    - path: "/internal/subscription/accounts/*/operations/*/compensate"
+      allowed-actors: [ order-service ]
+    - path: "/internal/subscription/accounts/*/operations/*"
+      allowed-actors: [ order-service ]
+    # Test-only chaos ucu: controller yalniz runtime.chaos.enabled=true iken var
+    - path: "/internal/test/**"
+      allowed-actors: [ test ]
+  delegation:
+    # Bolum 9.2.1 matrisi: order-service kota islemlerini YALNIZ sub == {accountId} ile yapar; arka plan token'i red.
+    - { actor: order-service, operation: subscription.consume, user-context: REQUIRED }
+    - { actor: order-service, operation: subscription.confirm, user-context: REQUIRED }
+    - { actor: order-service, operation: subscription.compensate, user-context: REQUIRED }
+    - { actor: order-service, operation: subscription.read, user-context: REQUIRED }
+runtime.chaos.enabled: false

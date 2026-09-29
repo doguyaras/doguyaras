@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>runtime-example</artifactId>
+  <!-- Seviye 3 runtime ornegi (referans Bolum 4.7, 6.8, 8.6, 9.2-9.5, 11.4-11.5): iki gercek Spring Boot uygulamasi
+       (OrderApp = saga koordinatoru, SubscriptionApp = katilimci) gercek HTTP + servis JWT + Resilience4j ile konusur.
+       Iki uygulama tek modulde durur ki test ayni JVM'de ikisini ayri context/port ile ayaga kaldirabilsin;
+       gercek projede her biri kendi *-core modulundedir. -->
+  <properties>
+    <resilience4j.version>2.4.0</resilience4j.version>
+    <!-- BOM import eden iskelette @PathVariable adlari icin -parameters elle acilir (platform-security ile ayni sebep) -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+  </properties>
+  <dependencyManagement><dependencies>
+    <!-- Gomulu PostgreSQL 18 (Docker olmayan ortamda gercek PG) -->
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>18.1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-core</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-security</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-messaging</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-restclient</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <!-- Bolum 8.6: Boot 4'te tek starter (OTel API + Micrometer tracing bridge + OTLP exporter) -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-opentelemetry</artifactId></dependency>
+    <!-- Bolum 4.7: hedef basina circuit breaker + semaphore bulkhead; Spring Cloud CircuitBreaker YOK (gizli 1 sn TimeLimiter tuzagi) -->
+    <dependency><groupId>io.github.resilience4j</groupId><artifactId>resilience4j-spring-boot4</artifactId><version>${resilience4j.version}</version></dependency>
+    <dependency><groupId>io.github.resilience4j</groupId><artifactId>resilience4j-circuitbreaker</artifactId><version>${resilience4j.version}</version></dependency>
+    <dependency><groupId>io.github.resilience4j</groupId><artifactId>resilience4j-bulkhead</artifactId><version>${resilience4j.version}</version></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
