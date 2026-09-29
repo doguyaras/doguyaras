@@ -61,11 +61,11 @@ function resolveComparePoint({ baseRef, onMissingBase = 'fail', cwd, explicit = 
   const candidates = explicit ? [baseRef] : [baseRef, ...FALLBACK_BASES.filter((b) => b !== baseRef)];
   for (const ref of candidates) {
     const point = mergeBaseOf(ref, cwd);
-    if (point) return { point, base: ref };
+    if (point) return { point, base: ref, fallback: false };
   }
   if (onMissingBase === 'head') {
     try {
-      return { point: git(['rev-parse', 'HEAD'], { cwd }).trim(), base: 'HEAD' };
+      return { point: git(['rev-parse', 'HEAD'], { cwd }).trim(), base: 'HEAD', fallback: true };
     } catch (e2) {
       throw new Error(`HEAD cozumlenemedi: ${e2.message}`);
     }
@@ -108,12 +108,12 @@ function checkFile(filePath, { baseRef, onMissingBase = 'fail', cwd } = {}) {
   const rel = toRepoRelative(filePath, cwd);
   if (!isMigrationPath(rel)) return { protected: false, file: rel };
   const explicit = Boolean(baseRef || process.env.FLYWAY_BASE_REF);
-  const { point, base } = resolveComparePoint({ baseRef: resolveBase(baseRef), onMissingBase, cwd, explicit });
+  const { point, base, fallback } = resolveComparePoint({ baseRef: resolveBase(baseRef), onMissingBase, cwd, explicit });
   // ls-tree pathspec'i calisilan dizine goredir: proje koku repo kokunun alt klasoruyse (monorepo) yanlis yol
   // aranir ve base dosyasi "yok" sanilir (fail-open). Bu yuzden git her zaman repo kokunde calistirilir.
   const root = repoRoot(cwd);
   const listed = git(['ls-tree', '-r', '--name-only', point, '--', rel], { cwd: root }).trim();
-  return { protected: listed.length > 0, file: rel, base, point };
+  return { protected: listed.length > 0, file: rel, base, point, fallback };
 }
 
 function parseArgs(argv) {

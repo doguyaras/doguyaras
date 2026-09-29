@@ -39,7 +39,7 @@ process.stdin.on('end', () => {
   try {
     const r = script.checkFile(filePath, { baseRef: process.env.FLYWAY_BASE_REF, onMissingBase: 'head', cwd: root });
     if (r.protected) {
-      const where = r.base === 'HEAD' ? 'HEAD agacinda (base branch bulunamadi, FLYWAY_BASE_REF ayarlanabilir)' : `base branch'te (${r.base})`;
+      const where = r.fallback ? 'HEAD agacinda (base branch bulunamadi, FLYWAY_BASE_REF ayarlanabilir)' : `base'te (${r.base})`;
       fail(`${r.file} ${where} mevcut bir Flyway migration'i; degistirilemez/silinemez. Degisikligi yeni bir V<sonraki>__*.sql dosyasiyla yap.`);
     }
     process.exit(0);
