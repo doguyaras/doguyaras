@@ -1034,7 +1034,7 @@ spring.cloud.gateway:
 ### 9.4 `ServiceJwtVerificationFilter`
 
 ```
-0. Path decode + normalize: filtre `/*`'a bağlı (yalnız `/internal/*` değil; `/v1/../internal/x` görülsün), `getRequestURI()` (ham; servlet path zaten decode edilmiş gelir) bir kez %XX decode + `URI.normalize`. /internal'a dokunan istekte (ham, decode edilmiş veya normalize edilmiş hali /internal ile başlıyorsa) kalan '%', '\', NUL, '//', ';', ham `%2F`, '.'/'..' segmenti → 400 `{"code":"INTERNAL_PATH_INVALID"}`; public kurallara ASLA geri düşülmez. Filtre DispatcherServlet'ten önce çalıştığı için 400/401/403 zarfını (`{code, message}`, token/kid sızdırmadan; 401'de `WWW-Authenticate: Bearer`) kendisi yazar.
+0. Path decode + normalize: filtre `/*`'a bağlı (yalnız `/internal/*` değil; `/v1/../internal/x` görülsün), `getRequestURI()` (ham; servlet path zaten decode edilmiş gelir) bir kez %XX decode + `URI.normalize`. /internal'a dokunup dokunmadığı Spring MVC'nin yönlendirme için gördüğü forma göre sorulur: her segmentteki `;...` path parametreleri atılır ve harf büyüklüğü yok sayılır; böylece `/internal;x/admin`, `/internal%3Bx/admin`, `/v1/..;/internal/x` ve `/INTERNAL/x` de internal sayılır (ilk sürümde `/internal;x/admin` public sayılıp token'sız geçiyordu; bağımsız inceleme yakaladı, test eklendi). Decode yalnız yüzde-kodlamaya göre yapılır (`URLDecoder` `+`'yı boşluğa çevirir, kullanılmaz). /internal'a dokunan istekte '%', '\', NUL, '//', ';', ham `%2F`, '.'/'..' segmenti → 400 `{"code":"INTERNAL_PATH_INVALID"}`; public kurallara ASLA geri düşülmez. Filtre DispatcherServlet'ten önce çalıştığı için 400/401/403 zarfını (`{code, message}`, token/kid sızdırmadan; 401'de `WWW-Authenticate: Bearer`) kendisi yazar.
 1. exclude-paths → doğrulama yok
 2. X-Service-Auth yok → 401
 3. typ / iss (bilinen imzalayıcı) / kid → JWKS'ten public key (yalnız o issuer'ın anahtarları) / imza (alg header'a bakılmaz, EdDSA sabit) / aud (**tam eşitlik**: tek elemanlı `[bu-servis]`; çoklu aud → 401) / exp+nbf (±30 sn, enjekte edilen `Clock`) → 401
@@ -1276,6 +1276,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE svc_order_migrate IN SCHEMA "order"
     GRANT USAGE, SELECT ON SEQUENCES TO svc_order;
 -- Append-only/audit tablolarında uygulama rolünden UPDATE/DELETE ayrıca REVOKE edilir (migration içinde).
 -- svc_order başka şemada USAGE yetkisine sahip değildir; cross-schema join çalışmaz; DDL yapamaz.
+-- DİKKAT: flyway_schema_history de migration rolü tarafından "order" şemasında yaratılır; yukarıdaki default privilege
+-- ona da DML verir (ele geçirilen uygulama history satırını silip sonraki deploy'u bozabilir). Flyway callback'i
+-- db/migration/afterMigrate.sql her migrate sonunda geri alır (idempotent, elle yapılan drift'i de onarır):
+--   REVOKE ALL ON "${flyway:defaultSchema}"."${flyway:table}" FROM svc_order;
+-- Alternatif: history tablosu uygulama rolünün USAGE yetkisi olmayan ayrı bir şemada (spring.flyway.default-schema).
 ```
 
   Kesin GRANT listesi uygulamanın **doğrulanmış** erişim ihtiyacından çıkarılır (örn. `pg_stat_statements` ile gözlenen ifadeler); "her ihtimale karşı" yetki verilmez. Spring: `spring.datasource` uygulama rolü, `spring.flyway.user/password` migration rolü.
@@ -2957,9 +2962,9 @@ Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu 
 | Gömülü PostgreSQL non-root CI runner'da, RabbitMQ 4.3 servis container'ı, test sayısı koruması, SHA-pinli action'lar (16, 18.3) | run 2 yeşil, 44 test, 27 sn | CI | Actions run 36547695286 |
 | Broker senaryoları ve kaos testi (`stop_app`/`start_app`) CI servis container'ında (`docker exec`) | run 36554502553 yeşil; ilk koşu (36552830835) iki sürüme bağlı varsayımı yakaladı: 4.3.6 policy ile gecikmeli retry'ı kabul eder, broker durunca `AmqpIOException` da gelir | CI | Actions run 36554502553 |
 | Sürüm/EOL/CVE iddiaları (2, Ek A) | 30+ kaynak | W | Ek B |
-| Servis JWT filtresi: EdDSA, kid rotasyonu, aud/iss/exp, path normalize, first-match allowlist, delegasyon matrisi (9.2–9.5) | *sprint koşuyor* | 1 | `platform-security` (bekleniyor) |
+| Servis JWT filtresi: EdDSA, kid rotasyonu, aud/iss/exp, alg-confusion, path normalize, first-match allowlist, delegasyon matrisi (9.2–9.5) | 94 test; ilk sürümde `/internal;x/...` bypass'ı bağımsız incelemede bulundu, düzeltildi ve teste bağlandı; ikinci inceleme ACCEPT | 1 | `platform-security` |
 | Read-model: kaynak başına revizyon, konumdan tazelik, delta boşluğu, deterministik rebuild (4.6) | 15 test, 6 mutasyon; ACCEPT | 2 | `platform-messaging/readmodel` (`ReadModelBehaviourIT`) |
-| DB rol ayrımı, default privileges, rol zaman aşımları, RLS SET LOCAL, `uuidv7()`, Flyway baseline güvenlik ağı, PgBouncer prepared statements (10.1–10.5) | *sprint koşuyor* | 2/3 | `db-security-example` (bekleniyor) |
+| DB rol ayrımı, default privileges, rol zaman aşımları, RLS SET LOCAL, `uuidv7()`, Flyway baseline güvenlik ağı, PgBouncer prepared statements (10.1–10.5) | 15 test gömülü PostgreSQL 18 + gerçek PgBouncer 1.22; uygulama rolünün `flyway_schema_history`'ye yazabilmesi bağımsız incelemede bulundu, `afterMigrate` REVOKE ile kapatıldı; ikinci inceleme ACCEPT | 2/3 | `db-security-example` |
 | Global handler, binding testi, log privacy, ECS log, API versiyonlama + Deprecation/Sunset, SSRF `InetAddressFilter`, lazy connection, `@Retryable`/`@ConcurrencyLimit` (6, 7.3, 8, 9.11, 20) | 20 test, 11/11 mutasyon; bağımsız doğrulama ACCEPT | 1 | `order-core` |
 | Parametre bounded-staleness, soğuk açılış, `freshGroupSince`, staleness metriği (14.3) | 23 test, 6/6 mutasyon; ACCEPT | 1 | `platform-parameters` |
 | Redis Lua fixed-window rate limit, TTL iyileşmesi, `NOSCRIPT`, fail-open/closed, kopuk bağlantı gecikmesi (9.6) | 15 test gerçek Redis 7 ile, 12/12 mutasyon; ACCEPT | 2 | `rate-limit-example` |
