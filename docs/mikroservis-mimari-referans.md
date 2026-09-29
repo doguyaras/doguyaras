@@ -2930,6 +2930,7 @@ Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu 
 | Inbox atomikliği ve handler kapsamlı dedup (11.3) | senaryo #22, #25 | 2 | `OutboxBehaviourIT` |
 | Local saga: begin/consume/success CAS, recovery, tombstone, yanıt kaybı, yarış, MANUAL_REVIEW, cleanup (11.4, 11.5) | 19 test, matris 1–20, 6 mutasyon yakalandı + 1 eşdeğer | 2 | `SagaBehaviourIT` |
 | Gömülü PostgreSQL non-root CI runner'da, RabbitMQ 4.3 servis container'ı, test sayısı koruması, SHA-pinli action'lar (16, 18.3) | run 2 yeşil, 44 test, 27 sn | CI | Actions run 36547695286 |
+| Broker senaryoları ve kaos testi (`stop_app`/`start_app`) CI servis container'ında (`docker exec`) | run 36554502553 yeşil; ilk koşu (36552830835) iki sürüme bağlı varsayımı yakaladı: 4.3.6 policy ile gecikmeli retry'ı kabul eder, broker durunca `AmqpIOException` da gelir | CI | Actions run 36554502553 |
 | Sürüm/EOL/CVE iddiaları (2, Ek A) | 30+ kaynak | W | Ek B |
 | Servis JWT filtresi: EdDSA, kid rotasyonu, aud/iss/exp, path normalize, first-match allowlist, delegasyon matrisi (9.2–9.5) | *sprint koşuyor* | 1 | `platform-security` (bekleniyor) |
 | Read-model: kaynak başına revizyon, konumdan tazelik, delta boşluğu, deterministik rebuild (4.6) | *sprint koşuyor* | 2 | `platform-messaging/readmodel` (bekleniyor) |
@@ -2941,7 +2942,7 @@ Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu 
 | OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 20) | *sprint koşuyor* | 1 | `contract-example` (bekleniyor) |
 | gitleaks + config-lint (15.3, 19.5) | *sprint koşuyor* | Y | `blueprint/scripts` (bekleniyor) |
 | İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart (4.7, 9.2.1, 11.4) | *sprint koşuyor* | 3 | `runtime-example` (bekleniyor) |
-| RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, broker down (12.3, 12.4) | *koşuyor* | 3 | `broker-example` (bekleniyor) |
+| RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, consumer-timeout, broker down (12.3, 12.4) | 12 senaryo PASS: yerelde 4.3.0, CI'da 4.3.6 (Actions run 36554502553); 6 mutasyon yakalandı, 1 eşdeğer mutasyon açıklandı | 3 | `broker-example/BrokerBehaviourIT` |
 | Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | *koşuyor* | S | nested-session raporu (bekleniyor) |
 | 12 review skill'i gerçek bir PR'da (19.3) | *koşuyor* | S | PR #1 (bekleniyor) |
 | **Kanıtı olmayanlar** | — | — | `docker-rollout` sıfır kesinti (Docker yok), deploy script/rollback provası, Debezium CDC, WebSocket/Redis fan-out, ScyllaDB/OpenSearch eşikleri, k6 yük testi, SOPS/OpenBao akışı, App Store/Play doğrulama, KVKK silme saga'sı uçtan uca. Bunlar projede yazılır; bu referans yalnız desenleri verir. |
