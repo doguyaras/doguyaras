@@ -4,7 +4,8 @@ CREATE TABLE "order".order_item (
   account_id  UUID NOT NULL,
   sku         TEXT NOT NULL,
   quantity    INT  NOT NULL CHECK (quantity > 0),
-  status      TEXT NOT NULL DEFAULT 'CREATED' CHECK (status IN ('CREATED','CANCELLED')),
+  status      TEXT NOT NULL DEFAULT 'CREATED' CHECK (status IN ('CREATED','CANCELLED','SHIPPED')),
+  channel     TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- Hesabin siparis listesi (keyset sayfalama: created_at DESC, id DESC) icin.
