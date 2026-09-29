@@ -3,18 +3,24 @@ name: proj-release-readiness-review
 description: Use this skill on release PRs (to release/main), before the first production deploy of a new service, and quarterly — to verify backups, alerting, SLOs, runbooks, capacity, version/EOL status, security posture and rollback readiness.
 ---
 
-Sürümün üretime çıkmaya hazır olup olmadığını mimari referans Bölüm 8, 10.5, 18, 21.0, 24 ve 25'e göre değerlendir. Bu skill kod kalitesine değil **operasyonel gerçeklere** bakar: yedek var mı, alarm gidiyor mu, geri dönüş kaç dakika. Her madde için kanıt (dosya, config, pano linki, tarih) istenir; kanıtsız madde `BLOCKED`. Sorun yoksa: **"Release hazırlık kontrolü geçti."**
+Sürümün üretime çıkmaya hazır olup olmadığını mimari referans Bölüm 8.7 (Metrik ve Gözlem Yığını: asgari alarm seti), 10.5 (Yedekleme, PITR, HA ve Kapasite), 18.4 (Değişiklik Türüne Göre Rollout Sözleşmesi), 19.6 (Doğrulama Kapsamı ve Kanıt Kaydı), 24 (Ölçek Eşikleri ve Evrim Yolu), 25 (Sürüm ve Destek Takibi) ve Ek A'ya göre değerlendir (Bölüm 21.0 bu listeyle aynıdır, ayrıca okuma). Bu skill kod kalitesine değil **operasyonel gerçeklere** bakar: yedek var mı, alarm gidiyor mu, geri dönüş kaç dakika. Her madde için kanıt (dosya, config, pano linki, tarih) istenir; kanıtsız madde `BLOCKED`. Sorun yoksa: **"Release hazırlık kontrolü geçti."**
+
+Kapsam: release PR'ı, ilk prod deploy veya çeyreklik kontrol. Feature PR'ında çağrılırsa yalnız diff'e bağlı maddeleri değerlendir (migration, rollout sözleşmesi, rollback, secret/config, PII, doküman); operasyonel maddeleri tek satırda topla: `repo dışı: BLOCKED (proje geneli, çeyreklik kontrolde)`. Diff: `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen dosyalar dahil. CI/compose/obs/runbooks bu repoda yoksa hangi repoda olduğunu kullanıcıya bir kez sor; cevap yoksa ilgili bölümü tek satırlık `BLOCKED` geç.
+
+Durum kuralı: repo/PR içinde ya da kullanıcıdan alınan kanıtla eksikliği GÖSTERİLEN madde `FAIL`; kanıt bulunamayan madde `BLOCKED`. Bölüm durumu maddelerinin en kötüsüdür (`FAIL` > `BLOCKED` > `PASS`); en az bir `FAIL` varsa nihai durum `FAIL`, yoksa en az bir `BLOCKED` varsa `BLOCKED`, ikisi de yoksa `PASS`. Her `FAIL` için `Kaynak: bu release / mevcut durum` yaz; mevcut durumdan gelen eksik release'i ancak bu release o yüzeye dokunuyorsa engeller, dokunmuyorsa `Kabul edilen riskler` veya takip maddesi olarak raporla. Kanıt kaynakları: release notu = PR gövdesi (yoksa `CHANGELOG.md` ya da `docs/releases/<sürüm>.md`); CI sonucu = PR check run'ları; pano linki, son yedek tarihi ve test alarmı tarihi repo dışındadır — kullanıcıdan iste, gelmezse `BLOCKED`.
+
+Koştur (proje kökünden; bu repoda `blueprint/`): `node scripts/flyway-immutability.js check --base <base>` (`OK`/`IHLAL`/`DOGRULANAMADI` satırını aynen yaz); `mvn -B verify` (ya da `docs/ai/review-checklist.md` Bölüm 2 makine kontrolleri); `gitleaks detect` (kurulu değilse `BLOCKED`). "CI test sayısı kontrolü" maddesi mekanizmayı sorar (failIfNoTests / sayım adımı); son koşu sonucu "Doğrulama kapsamı" altında ayrıca yazılır. Filtreli koşu (`-pl X -am -Dtest=...`) `failIfNoTests=true` modüllerde kırılır: tam modül koşusu kullan ya da pom'daki `failIfNoTests`'i `${failIfNoTests}` property'sine bağla.
 
 Kontrol et:
 
-## Veri ve yedek (yoksa `FAIL`)
+## Veri ve yedek
 - WAL arşivi + base backup çalışıyor (son başarılı yedek tarihi); retention; şifreli.
 - **Restore provası** son 30 gün içinde yapılmış ve kayıtlı (süre, doğrulama).
 - RPO/RTO README'de; HA durumu (managed/standby/yok) açıkça yazılı ve kabul edilmiş.
 - Redis security instance AOF; RabbitMQ definitions yedeği; object storage versioning.
 - Bu release'in migration'ları prod benzeri veri hacminde denenmiş (süre, lock).
 
-## Alarm ve gözlem (yoksa `FAIL`)
+## Alarm ve gözlem
 - Alertmanager/Grafana alerting bir kanala **gerçekten** bildirim gönderiyor (test alarmı tarihi).
 - Asgari alarm seti (referans 8.7): restart-loop, health DOWN, disk/RAM, WAL arşiv gecikmesi, Redis bellek/eviction, RabbitMQ queue/DLQ, `outbox_oldest_pending_age_seconds`, `*_STUCK`, SLO burn-rate.
 - Yeni servis/uç için scrape hedefi, log kaynağı, pano.
@@ -62,8 +68,8 @@ Kontrol et:
 - `docs/ai/repo-context.md` güncel; `docs/versions.md` tarihli.
 
 Çıktı:
-1. **Kontrol tablosu:** her başlık → `PASS` / `FAIL` / `BLOCKED` + kanıt (dosya/link/tarih).
+1. **Kontrol tablosu:** her `##` başlığı için bir satır (8 satır) → `PASS` / `FAIL` / `BLOCKED` + kanıt (dosya/link/tarih); kanıt sütununda yalnız belirleyici madde(ler).
 2. **Engelleyiciler:** `FAIL` olanlar ve düzeltme; `BLOCKED` olanlar ve istenen kanıt.
-3. **Kabul edilen riskler:** yazılı, sahipli, tarihli.
+3. **Kabul edilen riskler:** yazılı, sahipli, tarihli (kaynak: `docs/adr` ya da release notunda `Risk kabulü: <madde> · sahip · tarih · bitiş` satırı).
 4. **Bölüm 24 eşik durumu:** yaklaşılan eşikler ve planlanan adım.
-5. **Nihai durum:** `PASS` / `FAIL` / `BLOCKED`. Yedek, restore provası veya alarm kanalı eksikse durum `FAIL`.
+5. **Nihai durum:** `PASS` / `FAIL` / `BLOCKED`. Yedek, restore provası veya alarm kanalı eksikliği kanıtlanmışsa `FAIL`, kanıtsızsa `BLOCKED`. `PASS` ise "Release hazırlık kontrolü geçti." yaz; `FAIL`/`BLOCKED` ise bu cümleyi kullanma.

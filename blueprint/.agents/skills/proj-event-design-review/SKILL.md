@@ -3,7 +3,7 @@ name: proj-event-design-review
 description: Use this skill when adding or changing a domain event, a command, an outbox handler, a consumer, a read-model projection, an event schema, or RabbitMQ topology (exchange/queue/binding/DLQ).
 ---
 
-Olay tasarımını `docs/ai/operation-consistency.md` Bölüm 3–4 ve mimari referans Bölüm 12'ye göre incele. Temel sorular: **Bu bir komut mu, olay mı? Sahibi kim? Yarın üçüncü bir tüketici geldiğinde üretici değişmeden çalışır mı?** Sorun yoksa: **"Bu kapsamda event tasarım bulgusu yok."**
+Olay tasarımını `docs/ai/operation-consistency.md` Bölüm 3–4 ve mimari referans Bölüm 12'ye göre incele. Temel sorular: **Bu bir komut mu, olay mı? Sahibi kim? Yarın üçüncü bir tüketici geldiğinde üretici değişmeden çalışır mı?** Sorun yoksa: **"Bu kapsamda event tasarım bulgusu yok."** Önce: `AGENTS.md` Bölüm 8, `operation-consistency.md` Bölüm 3–4, referans Bölüm 12 ve 18.4. Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity: `BLOCKER` = zorunlu güvence ihlali → `BLOCK`; `HIGH` → `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez. Uygulanmayan checklist maddeleri (stream/replay, lane izolasyonu, delta boşluk tespiti) için `N/A` yaz; yalnız ilgili PR türünde değerlendir. Olay bileşeni (ör. `platform-messaging` ce-* eşlemesi, `OutboxHandler` gerçeklemesi) projede yoksa "net kanıt bulunamadı" yaz, bulgu üretme.
 
 Kontrol et:
 
@@ -14,10 +14,10 @@ Kontrol et:
 
 ## İsim ve envelope
 - `type` = `<servis>.<aggregate>.<olay>` (geçmiş zaman: `created`, `cancelled`, `changed`); routing key aynı.
-- CloudEvents attribute'ları: `id` (UUIDv7), `source`, `specversion`, `type`, `subject` (aggregate id), `time`, `dataschema`, `traceparent`. AMQP 0-9-1 header eşlemesi `platform-messaging`'den.
-- Payload sınıfı `<domain>-api/event`; `@NoArgsConstructor`; kopya yok. Payload **gerçeği** taşır (id'ler, durum, revision), tüketiciye "ne yapması gerektiğini" değil.
+- CloudEvents attribute'ları: `id` (UUIDv7), `source`, `specversion`, `type`, `subject` (aggregate id), `time`, `dataschema`, `traceparent`. AMQP 0-9-1 header eşlemesi `platform-messaging`'den (bileşen yoksa: "net kanıt bulunamadı" yaz, bulgu üretme).
+- Payload sınıfı `<domain>-api/event`; `record` veya `@NoArgsConstructor`; kopya yok. Payload **gerçeği** taşır (id'ler, durum, revision), tüketiciye "ne yapması gerektiğini" değil.
 - Payload'da PII/secret/şifreli içerik yok (mesaj olayı yalnız metadata).
-- `revision`/sıra numarası var ve **kapsamı** yazılı (aggregate başına / kaynak geneli); kaynaklar arası karşılaştırılmıyor.
+- `revision`/sıra numarası var ve **kapsamı** yazılı (aggregate başına / kaynak geneli); sabit literal (ör. `1`) değil, aggregate kolonundan/sequence'tan monoton artan; kaynaklar arası karşılaştırılmıyor.
 - **Olay sözleşmesi** yazılı: **tam durum** (snapshot; küçük revizyon atlanabilir) mi **değişiklik** (delta; hiçbir olay atlanamaz, sıra boşluğunda uygulama durur + uzlaştırma + alarm) mi. Delta olayı için boşluk tespiti (`source_seq` monoton) ve rebuild/`since` yolu var.
 
 ## Şema evrimi
@@ -33,7 +33,9 @@ Kontrol et:
 - Replay gerekiyorsa stream kopyası (`domain.events.stream`) ve retention.
 
 ## Üretici
-- Yayın yalnız outbox'tan (domain TX'i içinde satır); `convertAndSend` doğrudan yok.
+- **Zorunlu güvence:** yayın yalnız outbox'tan (domain TX'i içinde satır); `convertAndSend` doğrudan yok. Doğrudan yayın veya yutulan yayın hatası (`catch (Exception) { log }`) → `BLOCK`.
+- `OutboxRepository.append(...)` domain TX içinde çağrılıyorsa mekanizma doğrudur; envelope/revision/UUIDv7 eksiklerini ayrı madde yaz, mekanizmayı bulgu sayma.
+- Üretici domain TX içinde senkron uzak çağrı yapmıyor (geri alınabilir uzak mutasyon → olay/local saga); ayrıntısı `proj-resilience-review` / `proj-operation-consistency-review`.
 - Publisher confirm + mandatory; NACK/unroutable → outbox retry.
 - Aynı olay birden çok tabloya/outbox'a yazılmıyor (tek satır, çok tüketici).
 - **Üretici tarafı sıralama:** sıra gereken aggregate için claim aynı aggregate'i tek worker'a sırayla veriyor; başarısız satırın ardılları bekletiliyor. Sıra gerekmiyorsa bu kısıt yok (throughput).
@@ -49,12 +51,14 @@ Kontrol et:
 
 ## Gözlem ve test
 - Metrik/alarm: DLQ derinliği, `outbox_oldest_pending_age_seconds`, tüketici lag.
-- Testler: outbox satırı TX ile rollback; tüketici duplicate (tek etki); handler ortasında exception → inbox satırı yok; sıra bozuk olay; delta'da sıra boşluğu → dur + alarm; bilinmeyen tip; şema uyumluluğu (eski payload yeni tüketicide, yeni payload eski tüketicide); iki poller + sıralı satırlar; lane izolasyonu. Her `PASS` için kanıt kaydı (commit, komut, sonuç — `operation-consistency.md` Bölüm 9).
-- Analytics sink bu olayı alıyor mu (Bölüm 14.4)?
+- Testler: outbox satırı TX ile rollback; tüketici duplicate (tek etki); handler ortasında exception → inbox satırı yok; sıra bozuk olay; delta'da sıra boşluğu → dur + alarm; bilinmeyen tip; şema uyumluluğu (eski payload yeni tüketicide, yeni payload eski tüketicide); iki poller + sıralı satırlar; lane izolasyonu. Testi olmayan senaryo `BLOCKED` sayılır; reviewer var/yok + koştu/koşmadı yazar (kanıt kaydı `operation-consistency.md` Bölüm 9).
+- Analytics sink: yalnız repoda sink tanımı varsa kontrol et; yoksa bulgu üretme.
+- Koştur (proje kökünden; bu repoda `blueprint/`): `git grep -n "convertAndSend\|RabbitTemplate\|@RabbitListener" -- <servis>`; `git grep -n outbox_event -- <servis>/src/main/resources/db/migration` (yoksa outbox tablosu eksik); `grep -rn "record .*Event\|record .*Command" <domain>-api/event`; migration değiştiyse `node scripts/flyway-immutability.js check --base <base>`.
 
 Çıktı:
 1. **Sınıflandırma:** komut / olay / HTTP — doğru mu.
-2. **Olay tablosu:** `type · üretici · tüketiciler · routing key · queue · DLQ · replay (evet/hayır) · revision alanı`.
-3. **Bulgular:** `severity · dosya:satır/config · kanıt · düzeltme`.
-4. **Şema evrimi ve rollout notu:** uyumlu / kırıcı + plan; değişiklik türüne göre sıra (Bölüm 18.4) ve kırıcıysa uyumluluk matrisi.
+2. **Olay tablosu:** `type · üretici · tüketiciler (kaynak: repo-context Bölüm 2) · routing key · queue · DLQ · replay (evet/hayır) · revision alanı`.
+3. **Bulgular:** `severity (BLOCKER|HIGH|MEDIUM|LOW) · dosya:satır/config · kanıt · düzeltme`; kural sınıfını (zorunlu güvence / varsayılan tercih) etiketle.
+3a. **Devir:** event tasarımı dışındaki bulguları (migration, güvenlik logu, ArchUnit, config drift) Bulgular'a koyma; tek satır `→ proj-db-migration-review / proj-security-review / …` ile devret. Nihai karar yalnız event bulgularına dayanır.
+4. **Şema evrimi ve rollout notu:** uyumlu / kırıcı + plan; değişiklik türüne göre sıra (Bölüm 18.4) ve kırıcıysa uyumluluk matrisi; olay şeması ve DB şeması için ayrı satır/matris.
 5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`.

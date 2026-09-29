@@ -17,7 +17,7 @@
 | Yeni event/komut, envelope, tüketici, şema değişikliği | `proj-event-design-review` | |
 | Release PR (`release`/`main`'e) | `proj-release-readiness-review` | |
 
-## 2. Makine kontrolleri (CI'da; lokalde de çalıştırılır)
+## 2. Makine kontrolleri (CI'da; lokalde de çalıştırılır; komutlar proje kökünden çalışır, bu repoda `blueprint/`)
 
 ```bash
 mvn -B -ntp verify -pl <değişen modüller> -amd          # testler + ArchUnit + ErrorCode tekilliği + config drift
