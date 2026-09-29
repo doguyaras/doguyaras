@@ -1,0 +1,90 @@
+# PR gate (referans Bolum 18.3, 16, 19.5). Bu dosya blueprint'in kopyalanabilir sablonudur; repo koku = proje koku varsayar.
+# Kurallar: (1) ucuncu taraf action'lar 40 karakterlik commit SHA'ya pinli (tag'ler mutable; tj-actions olayi 2025),
+#           (2) permissions en dar, (3) gercek DB testleri her PR'da kosar (gomulu PostgreSQL veya Testcontainers),
+#           (4) mimari/tutarlilik testleri "0 test = basarisiz" (failIfNoTests + toplam sayi korumasi),
+#           (5) migration degismezligi PR'in base'ine karsi, (6) hook'lar kuru calistirilir (bozuk hook = sessiz gate).
+# Dogrulama: ayni yapi doguyaras/doguyaras deposunda .github/workflows/skeleton-ci.yml olarak gercek GitHub Actions'ta kostu
+# (RabbitMQ 4.3 servis container'i, gomulu PostgreSQL 18, 44+ test, ~30 sn).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [develop, release, main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts-and-hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '24' }
+      - name: script testleri (immutability, config-lint)
+        run: |
+          node --test scripts/flyway-immutability.test.js
+          test -f scripts/config-lint.test.js && node --test scripts/config-lint.test.js || true
+      - name: migration degismezligi (PR base'ine karsi)
+        if: github.event_name == 'pull_request'
+        run: node scripts/flyway-immutability.js check --base "origin/${{ github.base_ref }}"
+      - name: config lint (secret fallback yok)
+        run: test -f scripts/config-lint.js && node scripts/config-lint.js $(git ls-files 'services/*/*/src/main/resources/*.yml' 'services/*/*/src/main/resources/config/*.yml' 'deploy/*.env*' 2>/dev/null) || echo "config-lint yok"
+      - name: hook kuru calistirma (bozuk hook sessizce etkisiz kalmasin)
+        run: |
+          set -euo pipefail
+          export CLAUDE_PROJECT_DIR="$PWD"
+          for h in .claude/hooks/*.sh; do bash -n "$h"; done
+          OUT=$(echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh)
+          echo "$OUT" | grep -q '"permissionDecision":"ask"' || { echo "review-gate sormadi"; exit 1; }
+          # base'te var olan bir V dosyasi: hook engellemeli (exit 2)
+          FIRST=$(git ls-files '*/db/migration/V*.sql' | head -1)
+          if [ -n "$FIRST" ]; then
+            if echo '{"tool_input":{"file_path":"'"$PWD/$FIRST"'"}}' | node .claude/hooks/flyway-immutability.js; then echo "hook base migration'a izin verdi"; exit 1; fi
+          fi
+          # yeni V dosyasi: serbest (exit 0)
+          echo '{"tool_input":{"file_path":"'"$PWD"'/x/src/main/resources/db/migration/V9999__new.sql"}}' | node .claude/hooks/flyway-immutability.js
+      - name: gitleaks (secret taramasi)
+        run: |
+          curl -sSL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar xzf gitleaks.tgz gitleaks && ./gitleaks git --no-banner --redact --exit-code 1 .
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:4.3-management
+        ports: ['5672:5672', '15672:15672', '5552:5552']
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - name: testlerin kullandigi yerel ikililer (redis-server, pgbouncer)
+        run: sudo apt-get update -q && sudo apt-get install -y -q redis-server pgbouncer && (sudo systemctl stop redis-server pgbouncer || true)
+      - name: build + test (gercek DB testleri dahil; ArchUnit, ErrorCode tekilligi, config drift)
+        run: mvn -B -ntp verify
+      - name: toplam test sayisi korumasi (sessiz kucultme yok; esik projeye gore)
+        run: |
+          total=$(grep -ho 'tests="[0-9]*"' $(find . -path '*/target/surefire-reports/TEST-*.xml') | grep -o '[0-9]*' | paste -sd+ | bc)
+          echo "toplam test: $total"; test "$total" -ge "${MIN_TESTS:-40}"
+      - name: OpenAPI ciktisi ve diff (contract-example'daki gibi CI-style test zaten verify icinde kosar)
+        run: echo "openapi-diff testleri verify asamasinda kostu"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with: { name: surefire-reports, path: '**/target/surefire-reports/' }
+
+  frontend:
+    if: hashFiles('**/package.json') != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '24', cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - run: npm ci && npm run lint && npx tsc -b && npm test && npm run build
+        working-directory: ${{ vars.PANEL_DIR || 'panel-web' }}

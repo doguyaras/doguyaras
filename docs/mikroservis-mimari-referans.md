@@ -2031,10 +2031,12 @@ JDK 25 notları: `-XX:+UseCompactObjectHeaders` (JEP 519, final) heap'i %10–20
 
 | Workflow | İçerik |
 |---|---|
-| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@<sha> # v5.0.0`); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks, config drift, OpenAPI diff, hook testleri. |
+| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`; SHA'lar `git ls-remote --tags` ile alınır); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks, config drift, OpenAPI diff, hook testleri. |
 | `migration-immutability` | PR tetikler (`edited` dahil). Head SHA ve `fetch-depth: 0` ile checkout; `node scripts/<migration>-immutability.js check --base origin/$BASE_REF`; script'in kendi testleri. |
 | `build-images` | `develop`/`release`/`main` push. Değişen servislerin image'ları Jib ile build → GHCR push → cosign imza + SBOM. Çıktı: `<servis>@sha256:…` listesi (artifact). |
 | `deploy` | `release` → staging (otomatik), `main` → production (**GitHub environment protection** ile onay). Sunucuya SSH: yalnız `docker compose pull` + `docker-rollout`. Registry, digest ve imza doğrulaması. |
+
+**Doğrulanmış şablon:** `blueprint/.github/workflows/ci.yml` (kopyalanabilir) — aynı yapı bu deponun `.github/workflows/skeleton-ci.yml` dosyası olarak **gerçek GitHub Actions'ta koştu** (Ek B): `ubuntu-latest` runner'da gömülü PostgreSQL non-root `runner` kullanıcısıyla çalışır; `services:` bloğundaki `rabbitmq:4.3-management` container'ı (4.3.6, Erlang 27) 10 sn'de hazır olur; 4 modül + 44 test **27 sn**; hook kuru çalıştırması ilk denemede iki tasarım hatası yakaladı (`CLAUDE_PROJECT_DIR` göreli verilince hook fail-closed çalıştı ve `set -e` altında `code=$?` deseni hiç çalışmadı) — CI adımı hook'u gerçek dosya yollarıyla (korunan dosya → exit 2, yeni dosya → exit 0, bozuk yapılandırma → exit 2) doğrular.
 
 **Deploy script deseni** (`set -Eeuo pipefail` + `trap rollback ERR`):
 1. **Ön kontrol:** Disk ve RAM, altyapıya (DB, Redis, MQ) TCP erişimi, image imza doğrulaması (`cosign verify`).
@@ -2190,7 +2192,9 @@ Hook komutları **ayrı dosyalarda** yaşar; `settings.json` yalnız dosyayı ç
 
 **Kural:** Hook komutları örnek girdiyle test edilir (`bash -n` + sahte stdin ile CI'da). JSON içine gömülü shell komutlarında kaçış hatası kolay yapılır ve hook sessizce etkisiz kalabilir.
 
-**Immutability script'i doğrulanmış davranış** (`node --test scripts/flyway-immutability.test.js`, 12 test): base V dosyasını değiştirme/silme/`git mv` → ihlal; iç içe klasör korunur; branch'te eklenen V ve tüm R__ serbest; Windows ters bölü; `check-file` mutlak/göreli yol; base yokken `fail` → exit 3, `head` → HEAD ağacı; `-` ile başlayan ref reddi; CLI çıkış kodları 0/1/3.
+**Bulunan ve düzeltilen hata (2026-09-29):** `checkFile` `git ls-tree`'yi proje kökünde çalıştırıyordu; proje kökü repo kökünün **alt klasörüyse** (monorepo) ls-tree pathspec'i cwd'ye göre çözüldüğü için base dosyası "yok" sanılıyor ve yazma **serbest kalıyordu** (fail-open). Git her zaman `--show-toplevel` kökünde çalıştırılır; regresyon testi eklendi (13 test). Ders: hook'lar yalnız "repo kökü = proje kökü" senaryosuyla değil, alt klasör senaryosuyla da test edilir.
+
+**Immutability script'i doğrulanmış davranış** (`node --test scripts/flyway-immutability.test.js`, 13 test): base V dosyasını değiştirme/silme/`git mv` → ihlal; iç içe klasör korunur; branch'te eklenen V ve tüm R__ serbest; Windows ters bölü; `check-file` mutlak/göreli yol; base yokken `fail` → exit 3, `head` → HEAD ağacı; `-` ile başlayan ref reddi; CLI çıkış kodları 0/1/3.
 
 ### 19.5 Kural → Makine İlkesi
 
