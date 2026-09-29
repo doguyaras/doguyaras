@@ -14,12 +14,13 @@ Kontrol et:
 - Sürüm sıralı; `out-of-order`, `V9999`, "temp" adlı migration yok.
 - `R__*` yalnız idempotent referans verisi/view; iş verisi veya parola içermiyor.
 - Seed/test verisi prod location'ında değil (`db/seed-<env>`, yalnız local/test profili).
-- Migration servisin **kendi rolüyle** koşuyor; `GRANT` başka şemaya erişim açmıyor (varsa `BLOCKER`).
+- Migration **migration rolüyle** (`svc_<x>_migrate`, şema sahibi) koşuyor; uygulama **ayrı rolle** (`svc_<x>`, yalnız DML) çalışıyor; `ALTER DEFAULT PRIVILEGES` uygulama rolüne yeni tablolarda DML veriyor; uygulama rolüne DDL/`OWNER` verilmemiş. `GRANT` başka şemaya erişim açmıyor (varsa `BLOCKER`). Kesin GRANT listesi gözlenen ihtiyaca dayalı ("her ihtimale karşı" yok).
+- `spring.flyway.baseline-on-migrate: true` config'te kalıcı olarak yok (varsa `HIGH`); mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` adımı.
 
 ## Modül sahipliği
 - Dosyada yalnız kendi şeması; tam nitelikli adlar; başka şema adı geçmiyor (test de bunu kontrol eder).
 - Cross-schema FK yok; başka servisin kimliği düz UUID.
-- Read-model tablosu tüketicinin kendi şemasında ve `revision` kolonu var.
+- Read-model tablosu tüketicinin kendi şemasında; **kaynak başına** ayrı tablo ve `source_revision`; tek `revision` kolonlu birleşik tablo yok; `rm_consumer_position` var. Inbox tablosu `(handler, event_id)` PK.
 
 ## Mevcut veri ve expand/contract
 - Yeni `NOT NULL`, unique, FK öncesi mevcut veri kontrolü SQL'i verilmiş (`SELECT count(*) … WHERE … IS NULL`, duplicate sorgusu).

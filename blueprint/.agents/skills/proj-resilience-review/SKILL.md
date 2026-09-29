@@ -7,9 +7,10 @@ Dayanıklılığı mimari referans Bölüm 1.2, 4.6, 4.7, 7.2/14.3 ve `AGENTS.md
 
 Kontrol et:
 
-## Sıcak yol
-- Değişen akış sıcak yolda mı (`docs/ai/repo-context.md` Bölüm 3)? Uzak senkron çağrı sayısı **≤ 1** mi? Artıyorsa `REQUEST CHANGES`: read-model / JWT claim / asenkron alternatif ve maliyeti yazılır; tablo güncellenir.
-- Tek uzak çağrı yazma/rezervasyon türü mü (okuma değil)?
+## Sıcak yol (kritik akış kaydı)
+- Değişen akış sıcak yolda mı (`docs/ai/repo-context.md` Bölüm 3)? Kaydın **tüm alanları** dolu mu: gecikme bütçesi (p99), uzak senkron bağımlılıklar ve **her birinin gerekçesi**, karar başına kabul edilen veri eskiliği, bağımlılık düşünce davranış, yeniden değerlendirme ölçümü. Boş alan → `REQUEST CHANGES`.
+- Varsayılan tercih ≤1 uzak senkron çağrı, yazma/rezervasyon türünden. Aşılıyorsa: gerekçe + ADR var mı, toplam p99 bütçe içinde mi, alternatif (read-model / JWT claim / asenkron) ve **maliyeti** (replikasyon gecikmesi, rebuild, işletim) yazılmış mı? Gerekçeli ve bütçeli ikinci çağrı `APPROVE WITH NON-BLOCKING COMMENTS` olabilir; gerekçesiz olan `REQUEST CHANGES`.
+- Okuma amaçlı senkron çağrı: read-model ile karşılanabiliyorsa ve eskilik toleransı buna izin veriyorsa neden eklendi? Eskilik toleransı sıfırsa (ör. bakiye) senkron kabul edilebilir — yazılı olsun.
 - Availability aritmetiği: bağımlı bileşen sayısı × %99,9 → beklenen üst sınır; p99 toplamı hedefle karşılaştırılmış.
 
 ## Timeout bütçesi
@@ -27,7 +28,7 @@ Kontrol et:
 - Yeni bağımlılık için fail-open/fail-closed kararı yazılı ve README tablosuyla uyumlu (güvenlik → closed; iş → open + metrik).
 - Control-plane bağımlılığı (parametre, config, flag): bounded-staleness (son bilinen değer + disk snapshot + `*_staleness_seconds` metriği + T eşiği); "5 sn cache + 503" **yok**.
 - Redis güvenlik state'i ile cache ayrı instance; eviction politikası doğru.
-- Read-model "satır yok/eski" davranışı tanımlı.
+- Read-model "satır yok/eski" davranışı tanımlı; tazelik tüketim konumundan (`readmodel_lag_seconds{source}`) ölçülüyor, satır yaşından değil; karar başına T farklı olabilir (engel kararı ≠ profil görseli).
 
 ## Kapasite ve kaynak
 - Yeni thread pool/executor sınırlı ve isimli; virtual thread'lerle pinning riski (`synchronized` + IO) yok.
@@ -44,6 +45,6 @@ Kontrol et:
 Çıktı:
 1. **Bağımlılık tablosu:** her uzak çağrı → sıcak yol mu · timeout · CB/bulkhead · fail politikası · düşünce kullanıcı ne görür.
 2. **Bulgular:** `severity · dosya:satır/config key · kanıt · düzeltme`.
-3. **Sıcak yol sayısı:** önce/sonra; tablo güncellendi mi.
+3. **Kritik akış kaydı:** önce/sonra (bağımlılık sayısı, bütçe); kayıt güncellendi mi; varsayılan aşıldıysa ADR linki.
 4. **Eksik testler/alarmlar.**
-5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. Sıcak yolda ikinci senkron okuma → en az `REQUEST CHANGES`.
+5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. Kaydı eksik veya gerekçesiz ek senkron bağımlılık → en az `REQUEST CHANGES`.

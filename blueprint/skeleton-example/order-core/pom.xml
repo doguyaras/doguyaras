@@ -10,4 +10,9 @@
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
     <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><scope>test</scope></dependency>
   </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz: ArchUnit engine uyumsuzlugu gibi sessiz "yesil" durumlarini yakalar (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
 </project>

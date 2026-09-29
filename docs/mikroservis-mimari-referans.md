@@ -17,7 +17,9 @@
 >
 > **Sürüm notu:** Sürüm numaraları ve destek tarihleri **2026-09** itibarıyla geçerlidir. Yeni projeye başlarken Bölüm 25'teki kaynaklardan güncel OSS destek durumu kontrol edilir; destek dışı bir sürümle başlanmaz.
 >
-> **Bu revizyon (v2.1):** Gerçek bir projenin (9 servis, tek host, tek PostgreSQL) mimari değerlendirmesinden çıkan dersler işlendi: mimari şekil kararı (Bölüm 1.1), uygulama profilleri MVP/Büyüme/Ölçek (Bölüm 1.3), sıcak yolda senkron zincir yasağı ve read-model replikasyonu (Bölüm 4.6), dayanıklılık (Bölüm 4.7), domain event akışı ve Kafka karar kriterleri (Bölüm 12), asimetrik servis kimliği (Bölüm 9.2), güvenlik süreci (Bölüm 9.10), secret yönetimi (Bölüm 15.3), yedekleme/HA (Bölüm 10.5), Alloy/structured logging/SLO ve runbook/olay yönetimi (Bölüm 8), ölçek eşikleri (Bölüm 24), sürüm takibi (Bölüm 25), proje başlangıç checklist'i (Bölüm 21.0) ve **kopyalanabilir `blueprint/` klasörü** (AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, ArchUnit/ErrorCode/config-drift testleri — Bölüm 19).
+> **Bu revizyon (v2.2):** Dış bir mimari değerlendirmenin (2026-09) bulguları işlendi: kural sınıfları (Bölüm 1.4), sıcak yolda gecikme bütçesi ve kritik akış kaydı (Bölüm 1.2), kaynak başına read-model revizyonu ve tam durum/değişiklik olay sözleşmesi (Bölüm 4.6), `AFTER_COMMIT` ≠ teslim garantisi (Bölüm 4.3), servis kimliği ≠ kullanıcı adına yetki ve delegasyon matrisi (Bölüm 9.2.1), migration/uygulama rol ayrımı ve `baseline-on-migrate` (Bölüm 10.1–10.2), tek outbox'ta iş türü izolasyonu, üretici sıralaması ve inbox atomikliği (Bölüm 11.2–11.3), değişiklik türüne göre rollout sözleşmesi ve uyumluluk matrisi (Bölüm 18.4), doğrulama kapsamı ve kanıt kaydı (Bölüm 19.6), generic outbox'la tutarlı kod şablonları (Bölüm 23.3–23.4), tarihli sürüm eki (Ek A).
+>
+> **Önceki revizyon (v2.1):** Gerçek bir projenin (9 servis, tek host, tek PostgreSQL) mimari değerlendirmesinden çıkan dersler işlendi: mimari şekil kararı (Bölüm 1.1), uygulama profilleri MVP/Büyüme/Ölçek (Bölüm 1.3), sıcak yolda senkron zincir yasağı ve read-model replikasyonu (Bölüm 4.6), dayanıklılık (Bölüm 4.7), domain event akışı ve Kafka karar kriterleri (Bölüm 12), asimetrik servis kimliği (Bölüm 9.2), güvenlik süreci (Bölüm 9.10), secret yönetimi (Bölüm 15.3), yedekleme/HA (Bölüm 10.5), Alloy/structured logging/SLO ve runbook/olay yönetimi (Bölüm 8), ölçek eşikleri (Bölüm 24), sürüm takibi (Bölüm 25), proje başlangıç checklist'i (Bölüm 21.0) ve **kopyalanabilir `blueprint/` klasörü** (AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, ArchUnit/ErrorCode/config-drift testleri — Bölüm 19).
 >
 > **Kapsam dışı (bilinçli):** çok bölgeli (multi-region) aktif-aktif mimari, platform/SRE ekibi olan 10+ ekipli organizasyonlar, service mesh, Spring dışı ekosistemler (desenler taşınır, şablonlar taşınmaz), veri ambarı/ML platformu tasarımı. Bunlar için Bölüm 24'teki eşikler tutunca ayrı ADR gerekir.
 
@@ -51,6 +53,7 @@
 24. [Ölçek Eşikleri ve Evrim Yolu](#24-ölçek-eşikleri-ve-evrim-yolu)
 25. [Sürüm ve Destek Takibi](#25-sürüm-ve-destek-takibi)
 26. [Mevcut Bir Projeye Uygulama Protokolü](#26-mevcut-bir-projeye-uygulama-protokolü)
+- [Ek A — Sürüm Notları (tarihli anlık görüntü)](#ek-a--sürüm-notları-tarihli-anlık-görüntü)
 
 Ek dosyalar: `blueprint/` (kopyalanabilir AGENTS.md, `docs/ai/*`, 12 skill, hook'lar, script'ler, test şablonları) · `docs/mikroservis-blueprint-dosyalari.md` (aynı içerik tek dosyada).
 
@@ -62,7 +65,7 @@ Ek dosyalar: `blueprint/` (kopyalanabilir AGENTS.md, `docs/ai/*`, 12 skill, hook
 |---|---|
 | Stil | Domain sınırları `*-api` (contract) + `*-core` (uygulama) modül çiftleriyle çizilir; tek Maven multi-module repo (monorepo). Bu sınırlar **hem modüler monolit hem mikroservis** olarak deploy edilebilir; hangisi olacağı Bölüm 1.1'deki karara bağlıdır. |
 | Giriş noktası | Spring Cloud Gateway (reaktif). Kullanıcı JWT'sini doğrular ve her istek için kısa ömürlü, **asimetrik imzalı** bir **service JWT** üretir (token exchange). |
-| Senkron iletişim | Servis-servis HTTP (OpenFeign veya Spring HTTP Service Clients). Gateway atlanır. Service JWT + actor allowlist ile korunur. **Sıcak yolda en fazla bir uzak senkron çağrı** (Bölüm 4.6). |
+| Senkron iletişim | Servis-servis HTTP (OpenFeign veya Spring HTTP Service Clients). Gateway atlanır. Service JWT + actor allowlist ile korunur. Sıcak yolda gecikme bütçesi ve bağımlılık listesi yazılı; varsayılan **en fazla bir uzak senkron çağrı** (Bölüm 1.2, 4.6). |
 | Asenkron iletişim | Tek generic transactional outbox → **domain event'leri** (RabbitMQ topic exchange) ve komutlar (queue). Diğer servislerin verisi **read-model** olarak replike edilir. Realtime için Redis pub/sub + history pull. |
 | Kimlik | Üç ayrı JWT yüzeyi var: **user**, **service**, **admin**. `/internal/**` uçları varsayılan olarak reddedilir (default-deny). Servis başına anahtar çifti, JWKS ile doğrulama. |
 | Veri | Tek PostgreSQL, **her servise ayrı schema ve ayrı DB rolü** (GRANT ile zorlanır). Cross-schema FK ve join yasak. Flyway ile servis başına migration, `ddl-auto: validate`. Yedek + PITR + restore provası ilk günden. |
@@ -80,7 +83,7 @@ Bu doküman "mikroservis referansı" ama ilk karar **kaç deploy birimi** olaca�
 
 | Şekil | Ne zaman | Nasıl |
 |---|---|---|
-| **A. Modüler monolit** | Ekip ≤ 5 kişi, tek host, ölçek profili homojen, ürün henüz kanıtlanmamış | Aynı `*-api`/`*-core` sınırları tek Spring Boot uygulamasında **Spring Modulith** modülleri olur. Şema/modül ayrımı, `ApplicationModules.verify()` + ArchUnit ile zorlanır. Servisler arası çağrı in-process; outbox yerine Modulith event publication registry. Gateway ve service JWT gereksiz. Bu dokümanın kalan bölümleri (sınırlar, outbox, idempotency, güvenlik, veri, log) **aynen** geçerli kalır. |
+| **A. Modüler monolit** | Ekip ≤ 5 kişi, tek host, ölçek profili homojen, ürün henüz kanıtlanmamış | Aynı `*-api`/`*-core` sınırları tek Spring Boot uygulamasında **Spring Modulith** modülleri olur. Şema/modül ayrımı, `ApplicationModules.verify()` + ArchUnit ile zorlanır. Servisler arası çağrı in-process; **modüller arası** olaylar için Modulith event publication registry (tamamlama tablosu = in-process outbox). Uygulama dışına giden her mesaj (notification sağlayıcısı, ayrı bir servis, analytics) yine `outbox_event` + RabbitMQ ile (Bölüm 11.2) — Modulith externalization da bu tabloyu kullanır. Gateway ve service JWT gereksiz. Bu dokümanın kalan bölümleri (sınırlar, outbox, idempotency, güvenlik, veri, log) **aynen** geçerli kalır. |
 | **B. Mikroservis** | Birden fazla ekip, ayrı release kadansı, farklı ölçek profilleri (örn. WebSocket yoğun bir servis), ayrı hata izolasyonu ihtiyacı | Bu dokümanın tamamı. Sıcak yolda senkron zincir **yok** (Bölüm 4.6); diğer servisin verisi event ile replike edilir. |
 | **C. Hibrit** (çoğu proje için önerilen başlangıç) | Küçük ekip ama ölçek profili farklı 1–2 alan var (realtime/chat, dış sağlayıcı entegrasyonu, yönetim paneli) | Senkron bağımlı çekirdek domain'ler (kimlik, kullanıcı, ana iş akışı, abonelik) **tek** uygulamada modül olarak; realtime, notification ve backoffice ayrı servis. Modül sınırları ilk günden korunduğu için ileride herhangi bir modül ayrı servise çıkarılabilir. |
 
@@ -97,10 +100,22 @@ Bu sinyaller B'de görülüyorsa ya sınırlar yanlıştır (birleştirin → C)
 
 ### 1.2 Sıcak Yol İlkesi
 
-Kullanıcıya doğrudan latency olarak yansıyan her istek ("sıcak yol") için:
-- **En fazla bir** uzak senkron çağrı (o da yazma/rezervasyon türünden olmalı; okuma değil).
-- Diğer servislerin verisine ihtiyaç varsa o veri **event ile replike edilmiş local read-model**'den okunur.
-- Yasal onay, hesap durumu gibi nadir değişen ve kullanıcıya bağlı bayraklar **JWT claim'i** olur; değişince oturum sürümü artırılır.
+Kullanıcıya doğrudan latency olarak yansıyan her istek ("sıcak yol") için **zorunlu güvence**: akışın gecikme bütçesi, uzak bağımlılıkları, karar verirken kabul edilen veri eskiliği ve bağımlılık düşünce davranışı **yazılıdır** (aşağıdaki kayıt). **Varsayılan tercih** (gerekçeli ADR ile değişebilir): en fazla bir uzak senkron çağrı, o da yazma/rezervasyon türünden; diğer servislerin verisi event ile replike edilmiş local read-model'den veya JWT claim'inden okunur.
+
+"Bir çağrı" mutlak sınır değildir: iki kontrollü, timeout bütçeli çağrı bazı akışlarda daha doğru olabilir. Veri çoğaltmanın da bedeli vardır (güncelleme gecikmesi, yeniden oluşturma, işletim); Microsoft'un CQRS rehberi eventual consistency ve ek karmaşıklığı açıkça değerlendirme konusu yapar. Karar her akış için ayrı verilir ve her **ek** senkron bağımlılık gerekçelendirilir.
+
+**Kritik akış kaydı** (her sıcak yol için `docs/ai/repo-context.md` sıcak yol tablosunda):
+
+| Alan | Örnek |
+|---|---|
+| Kullanıcının beklediği sonuç ve tamamlanma koşulu | "Sipariş kabul edildi; hak düşüldü" |
+| Gecikme bütçesi (p99) | 300 ms |
+| Uzak senkron bağımlılıklar ve her birinin gerekçesi | subscription.consume (hak tüketimi yazma; read-model ile yapılamaz) |
+| Karar için kabul edilen veri eskiliği | hesap durumu ≤ 60 sn, engel listesi ≤ 30 sn, yasal onay: token ömrü |
+| Bağımlılık erişilemezse davranış | subscription: 503 `UPSTREAM_UNAVAILABLE`; read-model satır yok: reddet (fail-closed) |
+| Yeniden değerlendirme ölçümü | p99 > bütçe 3 gün, read-model lag > eşik, hata oranı > SLO |
+
+- Yasal onay, hesap durumu gibi nadir değişen ve kullanıcıya bağlı bayraklar **JWT claim'i** olabilir; değişince oturum sürümü artırılır.
 - Her uzak çağrının timeout'u, üst istek bütçesinin altındadır; circuit breaker açıkken hızlı ve tanımlı bir hata döner.
 
 Availability aritmetiği: %99,9'luk 5 bileşene bağlı bir istek en iyi ihtimalle ≈ %99,5 (yılda ~44 saat kesinti); 2 bileşene bağlıysa ≈ %99,8. p99 latency ardışık çağrıların p99'larının toplamına yakınsar.
@@ -114,7 +129,7 @@ Bu doküman kapsamlıdır; hepsi ilk gün yapılmaz. Üç profil, hangi pratiği
 | Şekil | Modüler monolit (Spring Modulith) veya hibrit | Hibrit; farklı ölçek profilli modüller ayrı servis | Mikroservis; read-model'lerle tam asenkron |
 | Sınırlar | `*-api`/`*-core` ayrımı, ArchUnit, enforcer, şema+rol/modül — **ilk gün** | + read-model'ler, sıcak yol tablosu | + kontrat versiyonlama, polyrepo değerlendirmesi |
 | Veri | Tek Postgres, roller, **yedek + restore provası**, UUIDv7, retention politikası | + PgBouncer, managed/standby, partition'lı büyük tablolar, exporter'lar | + domain bazlı instance ayrımı, wide-column/arama motoru eşiğe göre |
-| Mesajlaşma | Generic outbox + RabbitMQ QQ; komut/olay ayrımı ilk günden (envelope ucuz) | + `domain.events` tüketicileri (analytics sink, read-model), streams | + Kafka/Redpanda eşiğe göre, Debezium |
+| Mesajlaşma | Şekil A: Modulith event registry (in-process) + dışa giden mesajlar için generic outbox; Şekil C/B: generic outbox + RabbitMQ QQ. Komut/olay ayrımı ilk günden (envelope ucuz) | + `domain.events` tüketicileri (analytics sink, read-model), streams | + Kafka/Redpanda eşiğe göre, Debezium |
 | Güvenlik | Asimetrik service JWT (monolitte gerek yok), secret'lar `/run/secrets`, gitleaks, mock guard'ları, rate limit, `sv` | + passkey admin 2FA, attestation, SOPS, silme saga'sı, DPIA, görsel pipeline | + mTLS/SPIRE, OpenBao, pentest döngüsü |
 | Dayanıklılık | Timeout'lar + circuit breaker (config, 1 gün) | + bulkhead, bounded-staleness, yük testi, kapasite planı | + tail sampling, çok host rollout |
 | Gözlem | Structured log → Alloy → Loki, Prometheus, **Alertmanager + kanal**, 5 temel alarm | + SLO/burn-rate, tracing tail sampling, runbook'lar, on-call | + SLO bazlı kapasite, çoklu ortam panoları |
@@ -140,7 +155,7 @@ Bu doküman kapsamlıdır; hepsi ilk gün yapılmaz. Üç profil, hangi pratiği
     ▼          ▼          ▼            ▼              ▼              ▼
   auth      <domain-a>  <domain-b>   notification    chat         backoffice
   (kimlik)  (iş)        (iş)         (SMS/push/mail)  (realtime)   (yönetim, parametre, audit)
-    ▲──── HTTP + service JWT (internal-access allowlist; sıcak yolda ≤1 çağrı) ────▲
+    ▲──── HTTP + service JWT (internal-access allowlist; sıcak yol bütçesi yazılı, varsayılan ≤1 çağrı) ────▲
     Outbox ──► domain.events (topic) ──► read-model'ler, analytics sink, notification
     Outbox ──► <servis>.commands (queue) ──► SMS/push/mail komutları
 
@@ -148,6 +163,18 @@ Bu doküman kapsamlıdır; hepsi ilk gün yapılmaz. Üç profil, hangi pratiği
           PostGIS (geo) · S3 (private + signed URL) · [opsiyonel] Config Server (secret'sız)
  Gözlem:  OTLP→Alloy→Tempo · /actuator/prometheus→Prometheus→Alertmanager · JSON stdout→Alloy→Loki · Grafana
 ```
+
+### 1.4 Kural Sınıfları ve Kural Şablonu
+
+Bu dokümandaki her ifade üç sınıftan birine girer; aynı kesinlikle okunmamalıdır:
+
+| Sınıf | Anlamı | Örnekler | Nasıl değişir |
+|---|---|---|---|
+| **Zorunlu güvence** | Her profilde, her akışta sağlanır; ihlali `BLOCK` | Yetkisiz veri erişimi engellenir; tekrar teslim çift iş üretmez; base migration değişmez; secret düz metin tutulmaz; yedek + restore provası | Değişmez |
+| **Varsayılan tercih** | Aksi gerekçelendirilmedikçe uygulanır | Polling outbox; modüler monolit/hibrit başlangıç; sıcak yolda ≤1 uzak çağrı; tek generic outbox; RabbitMQ-önce | Gerekçeli ADR ile |
+| **Başlangıç ayarı** | Ölçümle değiştirilecek sayılar | Batch 50, lease 120 sn, backoff `min(600, 30·2^n)`, timeout 2/5 sn, cache 5 sn, T (staleness) değerleri | Yük testi ve metrikle |
+
+Önemli kurallar mümkün olduğunca şu beş alanla yazılır: **Gerekçe** (hangi hatayı önler) · **Uygulanma koşulu** (profil/akış) · **İstisna** (hangi koşulda farklı karar) · **Doğrulama** (hangi test/işletim kanıtı) · **Yeniden değerlendirme** (hangi ölçüm kararı açar). Bir kural bu alanlardan "doğrulama"yı veremiyorsa kural değil dilektir (Bölüm 19.5).
 
 ---
 
@@ -347,7 +374,7 @@ Gerekirse teknik alt paketler eklenir: `websocket/`, `redis/`, `consumer/`, `pro
 | `Propagation.REQUIRES_NEW` | Ana işlem hata alsa da kalıcı olması gereken kayıt (auth olayı), retry başına taze transaction |
 | `noRollbackFor = XServiceException.class` | Hata dönerken yan etki kalıcı olmalı: token ailesi iptali, deneme sayacı |
 | `TransactionTemplate` | Uzak okuma transaction dışında kalsın; DB işi kısa ve kilitli olsun |
-| `TransactionSynchronization.afterCommit` / `@TransactionalEventListener(AFTER_COMMIT)` | Commit sonrası yan etki: Redis yayını, arama index'i, realtime |
+| `TransactionSynchronization.afterCommit` / `@TransactionalEventListener(AFTER_COMMIT)` | **Yalnız kaybı tolere edilen** commit-sonrası yan etkiler: realtime pub/sub bildirimi, cache invalidation. `AFTER_COMMIT` bir çalıştırma zamanıdır, teslim garantisi değildir: commit'ten hemen sonra süreç çökerse listener hiç çalışmaz. Kalıcı teslim gereken her iş (arama index'i güncelleme, bildirim, başka servise etki) **outbox** ile yapılır (Bölüm 11.2). |
 | Hatayı commit sonrası fırlatma | Transaction bir sonuç record'u döndürür, exception commit'ten sonra atılır. Böylece deneme sayacı rollback olmaz. |
 
 **Kural:** Uzak HTTP çağrısı DB transaction'ı, row lock veya advisory lock tutulurken **yapılmaz**. Kanonik biçim:
@@ -392,29 +419,51 @@ public class OrderApp { public static void main(String[] a) { SpringApplication.
 
 **Sorun:** "Sipariş ver" isteği önce hesabın aktif olup olmadığını (auth), yasal onayı (auth), engel durumunu (user) ve limitini (subscription) senkron soruyorsa 4 uzak çağrı + DB yazımı = 5 bileşenin çarpımı kadar availability ve toplam p99 latency. Microsoft'un mikroservis rehberi bunu açıkça anti-pattern sayar: "bir istemci isteğini karşılarken servisler arası senkron HTTP zinciri… bunun yerine veriyi event'lerle ilk servisin veritabanına replike edin". Chris Richardson'da adı **command-side replica** desenidir.
 
-**Çözüm:** Nadir değişen ve karar için gereken veri, sahibi tarafından **event** olarak yayınlanır; tüketici servis kendi şemasında bir projeksiyon tablosu tutar.
+**Çözüm:** Nadir değişen ve karar için gereken veri, sahibi tarafından **event** olarak yayınlanır; tüketici servis kendi şemasında **kaynak başına bir projeksiyon** tutar. Farklı kaynakların revizyonları karşılaştırılamaz (auth revizyonu 100 iken user revizyonu 20 olabilir); bu yüzden tek `revision` kolonlu birleşik tablo **yanlıştır**.
 
 ```sql
--- order şemasında; sahibi auth/user servisleri, tüketicisi order.
-CREATE TABLE "order".account_standing (
-    account_id   UUID PRIMARY KEY,
-    active       BOOLEAN NOT NULL,
-    legal_ok     BOOLEAN NOT NULL,
-    blocked_ids  UUID[]  NOT NULL DEFAULT '{}',
-    revision     BIGINT  NOT NULL,          -- kaynak servisin olay sırası; eski olay yeni satırı ezmez
-    updated_at   TIMESTAMPTZ NOT NULL
+-- order şemasında; her projeksiyonun TEK sahibi var; kaynak başına revizyon ve tüketim konumu ayrı tutulur.
+CREATE TABLE "order".rm_account_status (          -- sahibi: auth; olay: account.status.changed (TAM DURUM)
+    account_id      UUID PRIMARY KEY,
+    active          BOOLEAN NOT NULL,
+    legal_ok        BOOLEAN NOT NULL,
+    source_revision BIGINT NOT NULL,              -- auth'un bu hesap için olay sırası; küçük/eşit revizyon yok sayılır
+    source_time     TIMESTAMPTZ NOT NULL,         -- olayın kaynaktaki zamanı (son iş değişikliği)
+    applied_at      TIMESTAMPTZ NOT NULL          -- tüketicinin uyguladığı an
+);
+CREATE TABLE "order".rm_block_relation (          -- sahibi: user; olay: user.block.created / user.block.removed (DEĞİŞİKLİK)
+    blocker_id UUID NOT NULL, blocked_id UUID NOT NULL,
+    source_seq BIGINT NOT NULL,                   -- user'ın (blocker) başına monoton sırası; boşluk = eksik olay
+    PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE TABLE "order".rm_consumer_position (       -- tüketim konumu: tazelik buradan ölçülür, satırın yaşından değil
+    source TEXT PRIMARY KEY,                      -- 'auth', 'user'
+    last_seq BIGINT NOT NULL, last_event_time TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
 );
 ```
 
-**Kurallar:**
-- Tüketici `UPSERT … WHERE excluded.revision > account_standing.revision` ile yazar; sıra bozuk gelen olay yok sayılır.
-- Satır yoksa veya `updated_at` eşikten eskiyse (örn. 24 sa) **fail-closed**: kaynağa senkron sorulur (tek istisna) ya da istek reddedilir. Hangi seçenek olduğu domain başına yazılı olur.
-- Read-model **karar** verdirir ama **kaynak** değildir; başka servis bu tabloyu okumaz, API olarak dışa açılmaz.
-- Yeni bir tüketici servis, read-model'ini stream/replay ile (Bölüm 12.4) veya sahibin `/internal/.../export` ucundan keyset ile sıfırdan kurabilmelidir ("rebuild" yolu belgelenir).
-- **JWT claim alternatifi:** Kullanıcıya bağlı, nadir değişen bayraklar (`legal_ok`, `legal_rev`, `tier`) user JWT'de taşınır; değişince oturum sürümü (`sv`) artırılır → token yenilenir → claim güncellenir. Gateway ve servisler kaynağa hiç sormaz. Kural: claim'ler yetki **sinyali**dir, kaynak DB'yi değiştirmez.
-- Yazma niteliğindeki kontrol (hak tüketimi, stok rezervasyonu) read-model'den yapılamaz; o **tek** uzak senkron çağrı olarak kalır ve saga ile korunur (Bölüm 11.4).
+**Olay sözleşmesi (her read-model olayı için yazılı):**
 
-**Eşik:** Sıcak yoldaki her istek için "kaç uzak çağrı?" sayısı README'deki servis tablosuna yazılır; 1'i geçen akış mimari inceleme ister.
+| Alan | Seçenekler | Etkisi |
+|---|---|---|
+| **Tür** | **Tam durum** (snapshot: olay önceki durumu bütünüyle kapsar) / **Değişiklik** (delta: artış, tek engel ekleme) | Tam durum: "küçük revizyonu atla" güvenlidir. Delta: **hiçbir olay atlanamaz**; sıra boşluğunda uygulama durur ve kaynakla uzlaştırılır (rebuild veya `since` ucu). |
+| **Sıralama kapsamı** | aggregate (hesap) başına / kaynak geneli | Revizyon yalnız kapsamı içinde karşılaştırılır; kaynaklar arası karşılaştırma yok |
+| **Tekrar teslim** | idempotent uygulama (inbox `(handler, event_id)`) | Aynı olay iki kez gelirse tek etki |
+| **Eksik sıra** | delta'da: dur + uzlaştır; snapshot'ta: sonraki snapshot düzeltir | Alarm `readmodel_gap_total` |
+| **Silme ve eski olay replay'i** | tombstone olayı / rebuild'de eski olayların sırayla uygulanması | Replay sonunda mevcut durumla aynı sonuç (deterministik) |
+| **Rebuild** | stream replay (Bölüm 12.4) veya sahibin keyset `export` ucu | Yeni tüketici sıfırdan kurabilir |
+
+**Tazelik ve karar kuralları:**
+- Tazelik, satırın `applied_at`'ından değil **tüketim konumundan** ölçülür: `rm_consumer_position.updated_at` ve `readmodel_lag_seconds{source}` (kaynağın son yayınladığı seq ile tüketilen seq farkı). Bir hesabın durumu bir ay değişmemiş olabilir; eski `source_time` gecikme değildir.
+- Her karar için "**en fazla ne kadar eski bilgiyle verilebilir**" ayrı cevaplanır: profil görselinin gecikmesi ile engelleme kararının gecikmesi aynı risk değildir. Örnek: engel kararı lag ≤ 30 sn ister; aşılırsa fail-closed (kaynağa sor veya reddet); hesap aktiflik bayrağı lag ≤ 5 dk tolere eder.
+- Satır yoksa davranış yazılıdır (varsayılan: fail-closed).
+- Read-model **karar** verdirir ama **kaynak** değildir; dışa açılmaz; başka servis okumaz.
+- **JWT claim alternatifi:** Kullanıcıya bağlı, nadir değişen bayraklar (`legal_ok`, `legal_rev`, `tier`) user JWT'de taşınır; değişince oturum sürümü (`sv`) artırılır → token yenilenir → claim güncellenir. Kural: claim'ler yetki **sinyali**dir, kaynak DB'yi değiştirmez; token ömrü kadar eskilik kabul edilmiş demektir.
+- Yazma niteliğindeki kontrol (hak tüketimi, stok rezervasyonu) read-model'den yapılamaz; senkron kalır ve saga ile korunur (Bölüm 11.4).
+
+**Doğrulama:** delta olayı sıra boşluğunda uygulanmıyor; snapshot'ta küçük revizyon yok sayılıyor; duplicate tek etki; replay deterministik; lag metriği ve alarm var; "satır yok" davranışı test edilmiş.
+
+**Eşik:** Sıcak yoldaki her istek için kritik akış kaydı (Bölüm 1.2) README/`repo-context.md`'de; varsayılanı aşan her ek senkron bağımlılık ADR ister.
 
 ### 4.7 Dayanıklılık: Timeout, Circuit Breaker, Bulkhead
 
@@ -602,7 +651,7 @@ Sıra (Nygard, *Release It!*): önce **her hop'ta sert timeout**, sonra **bağı
 
 - Kişisel veri dönen uçlar `Cache-Control: private, no-store` döner.
 - Servisler arası okunan DTO'larda `@NoArgsConstructor` bulunur (Jackson).
-- Yeni enum değeri veya event tipi eklenirken **tüketici önce deploy edilir**.
+- Yeni enum değeri veya event tipi eklenirken **tüketici önce deploy edilir**; tam sözleşme Bölüm 18.4.
 - İstemciyi etkileyen her değişiklik versiyonlu bir entegrasyon dokümanı ile iletilir (Bölüm 20).
 
 ### 6.8 Servisler Arası HTTP Client Konvansiyonu
@@ -909,6 +958,27 @@ Olası nedenler ve düzeltme (sıralı) · Ne zaman eskalasyon · Kalıcı düze
 - Üç yüzey birbirinin yerine kabul edilmez: farklı `typ` claim'i **ve** farklı anahtar (RFC 8725 bölüm 3.11–3.12: karşılıklı dışlayıcı doğrulama kuralları).
 - Private key'ler compose `secrets:` / config tree ile mount edilir (Bölüm 15.3); config reposunda literal anahtar/secret bulunmaz (RFC 8725 bölüm 3.5: düşük entropili anahtar tek token'dan brute-force edilir).
 
+### 9.2.1 Servis Kimliği ≠ Kullanıcı Adına İşlem Yetkisi
+
+A servisi kendi anahtarıyla imzalayınca B, token'ın A'dan geldiğini doğrular. Bu, A'nın token'a koyduğu **herhangi bir** `sub` adına işlem yapmaya yetkili olduğunu kanıtlamaz. Kimlik (authentication) ile devredilen yetki (delegation) ayrı ele alınır; RFC 8693'ün *delegation* (aktör zinciri açık: `act`) ile *impersonation* (aktör gizli) ayrımı bu tasarımın temelidir — ev yapımı token biçimi RFC'ye otomatik uyumlu değildir, sadece aynı kavramları kullanır.
+
+**Zorunlu güvence:** Hedef servis üç şeyi birlikte kontrol eder: (1) çağıran kimliği (`iss`/`act`), (2) bu çağıranın bu **işlem** için allowlist'te olması, (3) `sub` varsa bu kullanıcının bu **kaynak** üzerindeki yetkisi (ownership) — ilk ikisi üçüncüyü atlatmaz.
+
+**Delegasyon matrisi** (`docs/ai/repo-context.md`'de tutulur; her internal uç için bir satır):
+
+| Çağıran (`act`) | Hedef işlem | Kullanıcı bağlamı (`sub`) | Kaynak yetkisi kontrolü | Bağlam kaynağı | Ele geçirilirse zarar |
+|---|---|---|---|---|---|
+| gateway | her public uç | zorunlu (user JWT'den) | hedef: ownership | kullanıcı isteği | tüm kullanıcı işlemleri → gateway en kritik bileşen |
+| order-service | `subscription: consume/confirm/compensate` | zorunlu; yalnız kendi sipariş akışındaki hesap | subscription: `operation_key` + hesap eşleşmesi | kullanıcı isteği (senkron) | yalnız hak tüketimi; başka işlem yok |
+| order-service (worker) | `notification: commands` | opsiyonel | – | arka plan (outbox) | spam gönderimi → rate limit |
+| backoffice-service | `user: moderate` | yok (admin adına; admin id ayrı claim) | user: admin rolü + audit | panel isteği | moderasyon kararları |
+
+Kurallar:
+- **Kullanıcı isteğiyle çalışan çağrı** (`sub` = isteği yapan) ile **arka plan işi** (`sub` yok veya `on_behalf_of` claim'i ayrı) token'da ayırt edilir; hedef, arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem kabul etmez.
+- Bir servis yalnız kendi akışında gördüğü `sub`'ı aktarabilir; "her kullanıcı adına her şey" allowlist satırı **yoktur**.
+- Zincirleme delegasyonda (`A → B → C`) `act` zinciri korunur; C, zincirin her halkasını allowlist'te arar.
+- Matris değişince `proj-security-review` ve `proj-architecture-boundary-review` çalışır; testler izinli/izinsiz aktör + yanlış `sub` + arka plan token'ıyla kullanıcı işlemi senaryolarını kapsar.
+
 **Replay koruması (`jti`) kararı:** RFC 9700 (OAuth 2.0 Security BCP) bearer token replay'ine karşı `jti` deposu yerine **sender-constrained** token (mTLS RFC 8705 / DPoP RFC 9449) + sıkı `aud` önerir. İç ağda TLS + 45 sn TTL + `aud` varken, her istekte Redis `SET NX` yapan bir replay guard ~45 sn'lik aynı-servis replay koruması satın alır; bedeli her çağrıda Redis RTT ve sert bir availability bağımlılığıdır. Karar: mTLS varsa replay guard **yok**; yoksa yalnız gateway → servis (dış kaynaklı) token'larda, **TTL sınırlı** bir depoda (asla boyut sınırlı — Spring Security'nin DPoP `jti` cache'i bu yüzden CVE aldı) ve fail politikası açıkça yazılmış olarak.
 
 **Sonraki adım (opsiyonel):** mTLS iç CA ile (step-ca; Spring Boot SSL bundle hot-reload, `server.ssl.client-auth=need`, kimlik = SAN) veya SPIFFE/SPIRE (compose'da çalışır; Docker workload attestor; `aud`-bound JWT-SVID ev yapımı service JWT'nin yerine geçer). Service mesh yalnız Kubernetes'te anlamlı.
@@ -1160,14 +1230,25 @@ Güvenlik bir review skill'i değil, süreçtir. Asgari döngü:
   - Cross-schema FK ve join yasaktır. Başka servise ait kimlikler FK olmadan düz UUID olarak tutulur.
   - Veri ihtiyacı API, event veya read-model (Bölüm 4.6) ile karşılanır.
   - Bu hem mimari hem de **yetki/veri sahipliği** riski olarak ele alınır.
-- **Zorlama — DB seviyesinde (birincil):** Sınır testle değil, GRANT ile korunur. Bir `nativeQuery` başka şemaya erişmeye kalkarsa çalışma zamanında hata alır:
+- **Zorlama — DB seviyesinde (birincil):** Sınır testle değil, GRANT ile korunur. Bir `nativeQuery` başka şemaya erişmeye kalkarsa çalışma zamanında hata alır. **Migration rolü ile uygulama rolü ayrıdır**: şema sahibi ve DDL yetkisi yalnız migration rolündedir; uygulama çalışma zamanında yalnız tablo/sequence/fonksiyon yetkisiyle çalışır. **Neden:** ele geçirilen uygulama süreci tablo düşürememeli, trigger/`REVOKE` kaldıramamalı, audit tablosunu değiştirememeli.
 
 ```sql
-CREATE ROLE svc_order LOGIN PASSWORD '<secret>';
-CREATE SCHEMA "order" AUTHORIZATION svc_order;          -- şema sahibi = servis rolü; Flyway bu rolle koşar
+-- Altyapı migration'ı (superuser / DBA rolüyle, bir kez):
+CREATE ROLE svc_order_migrate LOGIN PASSWORD '<secret>';   -- Flyway bu rolle koşar
+CREATE ROLE svc_order         LOGIN PASSWORD '<secret>';   -- uygulama bu rolle çalışır
+CREATE SCHEMA "order" AUTHORIZATION svc_order_migrate;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
--- svc_order başka şemada USAGE yetkisine sahip değildir; cross-schema join çalışmaz.
+GRANT USAGE ON SCHEMA "order" TO svc_order;
+-- Migration rolünün oluşturacağı nesnelerde uygulama rolünün yetkisi otomatik gelsin:
+ALTER DEFAULT PRIVILEGES FOR ROLE svc_order_migrate IN SCHEMA "order"
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO svc_order;
+ALTER DEFAULT PRIVILEGES FOR ROLE svc_order_migrate IN SCHEMA "order"
+    GRANT USAGE, SELECT ON SEQUENCES TO svc_order;
+-- Append-only/audit tablolarında uygulama rolünden UPDATE/DELETE ayrıca REVOKE edilir (migration içinde).
+-- svc_order başka şemada USAGE yetkisine sahip değildir; cross-schema join çalışmaz; DDL yapamaz.
 ```
+
+  Kesin GRANT listesi uygulamanın **doğrulanmış** erişim ihtiyacından çıkarılır (örn. `pg_stat_statements` ile gözlenen ifadeler); "her ihtimale karşı" yetki verilmez. Spring: `spring.datasource` uygulama rolü, `spring.flyway.user/password` migration rolü.
 
   Microsoft Azure Architecture Center ve AWS Prescriptive Guidance aynı fiziksel sunucuyu paylaşmayı kabul eder; sorun şema/tablo paylaşımıdır. Rol ayrımı ileride şemayı ayrı instance'a taşımayı da kolaylaştırır (Bölüm 24).
 - **Zorlama — testle (ikincil):**
@@ -1189,7 +1270,7 @@ REVOKE ALL ON SCHEMA public FROM PUBLIC;
 | Konum | `<servis>-core/src/main/resources/db/migration` |
 | İsim | `V<n>__<snake>.sql` (artan tamsayı), `R__<ad>.sql` |
 | İlk dosya | `V1__init_schema.sql`: `CREATE SCHEMA IF NOT EXISTS <schema>;` |
-| Ayar | `enabled: true`, `locations: classpath:db/migration`, `baseline-on-migrate: true`, `schemas: <schema>`, `clean-disabled: true` |
+| Ayar | `enabled: true`, `locations: classpath:db/migration`, `schemas: <schema>`, `clean-disabled: true`, `user/password` = migration rolü (uygulama datasource'undan ayrı). **`baseline-on-migrate` varsayılan olarak kapalıdır**: Flyway dokümanı bu ayarın, migration'ı yanlış (boş olmayan, yönetilmeyen) bir veritabanına uygulamayı önleyen kontrolü kaldırdığı konusunda uyarır. Mevcut bir DB'yi Flyway yönetimine alma, ayrı ve tek seferlik bir prosedürdür (`flyway baseline` komutu, belgelenmiş `baselineVersion`), config'te sürekli açık bir bayrak değil. |
 | JPA | `ddl-auto: validate`. Flyway ile `update`/`create` birlikte **kullanılmaz**. |
 | Değişmezlik | Base branch'teki `V*.sql` değiştirilmez, silinmez, yeniden adlandırılmaz; düzeltme yeni bir `V` dosyasıyla yapılır. Kural script + CI + AI hook ile zorlanır (Bölüm 19.4). |
 | Seed | Test ve demo verisi `db/seed-<env>` gibi ayrı bir location'da tutulur ve yalnız local/test profilinde eklenir. |
@@ -1340,6 +1421,8 @@ CREATE TABLE <schema>.outbox_event (
   payload         JSONB NOT NULL,                      -- CloudEvents "data"
   headers         JSONB NOT NULL DEFAULT '{}',         -- traceparent, tracestate, subject, dataschema, hedef (HTTP için)
   status          TEXT NOT NULL DEFAULT 'PENDING',     -- CHECK (status IN ('PENDING','PUBLISHING','DEAD'))
+  priority        SMALLINT NOT NULL DEFAULT 0,          -- yüksek önce; güvenlik kararları > iş olayları > toplu işler
+  dead_policy     TEXT NOT NULL DEFAULT 'DEAD_ON_PERMANENT', -- CHECK IN ('DEAD_ON_PERMANENT','NEVER_DEAD'); güvenlik yan etkisi NEVER_DEAD
   retry_count     INT  NOT NULL DEFAULT 0,
   next_retry_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   locked_until    TIMESTAMPTZ,
@@ -1348,15 +1431,17 @@ CREATE TABLE <schema>.outbox_event (
   expires_at      TIMESTAMPTZ,                         -- domain TTL'li mesajlarda (OTP)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_outbox_event_claim ON <schema>.outbox_event (status, next_retry_at, locked_until, created_at);
+CREATE INDEX idx_outbox_event_claim ON <schema>.outbox_event (kind, status, next_retry_at, priority DESC, created_at);
 ```
 
 - `id` deterministik gerekiyorsa (`UUID.nameUUIDFromBytes(kaynak:hedef:faz)`) yazıcı sağlar; tüketici inbox bu id ile dedup yapar.
-- Aynı `aggregate_id` için sıralama korunmalıysa poller aynı aggregate'in satırlarını `created_at` sırasıyla ve tek worker'da işler (claim sorgusu `aggregate_id`'ye göre gruplar) — ya da sıra gereksinimi olan olaylar RabbitMQ'da single-active-consumer queue'ya gider.
+- **Üretici tarafı sıralama:** Tüketicideki single-active-consumer tek başına sırayı garanti etmez; sıra **yayın anında** bozulabilir (iki poller instance'ı aynı aggregate'in iki satırını paralel claim eder, yeniden deneme eski olayı sonraya atar). Sıra gereken `aggregate_id` için: claim sorgusu aynı aggregate'in satırlarını **tek worker'a** verir ve `created_at` sırasıyla işler; bir satır başarısız olursa aynı aggregate'in sonraki satırları **beklet**ilir (`next_retry_at` ileri alınır, retry sayılmaz). Sıra gerekmeyen olaylarda bu kısıt uygulanmaz (throughput). Tüketici tarafında ayrıca `source_revision` karşılaştırması (Bölüm 4.6) sıra hatasını tolere eder.
+- **`claim_token` yalnız poller'ın kendi yazma yarışını çözer** (kirası dolmuş eski worker sonucu ezemez). Uzak hedefe aynı işin iki kez ulaşmasını **engellemez**: hedef idempotent olmak zorundadır (inbox / `Idempotency-Key` / deterministik `id`).
+- **Publisher confirm ≠ tüketici işledi.** Confirm yalnız broker'ın mesajı kalıcı aldığını söyler. "İş tamamlandı" bilgisi gerekiyorsa tüketici kendi olayını yayınlar (`notification.delivered`), üretici onu tüketir; senkron RPC'ye dönülmez.
 
 **CDC alternatifi (Debezium):** Polling publisher, Kafka/Connect yoksa "saner default"tır (Richardson) ve 1 sn poll ile ~500 ms p50 gecikme verir. **Debezium Server** (Kafka Connect gerektirmez; Kafka, RabbitMQ streams, Redis Streams, NATS, HTTP sink'leri) ile poller'lar kalkar ve gecikme ~50–200 ms'ye iner; bedeli `wal_level=logical` + replication slot yönetimidir: connector durursa veya yakalanan tablo boştayken diğer tablolar yazarsa **WAL disk'i doldurur** → `heartbeat.interval.ms` + `heartbeat.action.query`, `max_slot_wal_keep_size` ve slot lag alarmı şart. Eşik: Bölüm 24.
 
-**Poller sabitleri:**
+**Poller sabitleri** (başlangıç ayarı — Bölüm 1.4; yük testiyle değişir):
 
 | Sabit | Değer |
 |---|---|
@@ -1377,18 +1462,48 @@ CREATE INDEX idx_outbox_event_claim ON <schema>.outbox_event (status, next_retry
 
 **Payload:** Gereksiz PII veya secret taşınmaz. Hassas alan iletildikten sonra NULL'lanır.
 
-**Yeni outbox türleri:**
+**Tek outbox içinde iş türü izolasyonu ve öncelik:** Tek tablo, tek kuyruk anlamına gelmez. Yavaş bir HTTP hedefi (SMS sağlayıcısı) event yayınını, ya da 10 000 satırlık bir toplu bildirim tek bir güvenlik kararını **bekletemez**. Kurallar:
+- Poller `kind` (ve gerekirse `event_type` grubu) başına **ayrı claim döngüsü ve ayrı worker havuzu** çalıştırır (`<svc>.outbox.lanes: [EVENT, COMMAND, HTTP]`; her lane'in kendi batch/concurrency'si). Bir lane'in hatası diğerini etkilemez.
+- `priority SMALLINT NOT NULL DEFAULT 0` kolonu (yüksek önce) ve claim sıralaması `ORDER BY priority DESC, created_at` (index'e eklenir). Güvenlik kararları (ban, engel) en yüksek öncelik.
+- Toplu işler (kampanya bildirimi) ayrı bir `event_type` grubu / lane ile sınırlı concurrency'de; tek satırlık kritik işlerle aynı havuzu paylaşmaz.
+- Metrikler lane bazında: `outbox_oldest_pending_age_seconds{lane}`, `outbox_pending_total{lane}`.
 
-| Tür | Kullanım |
+**Durum senkronu desenleri:**
+
+| Desen | Kullanım |
 |---|---|
-| Sıra numaralı outbox | Durum senkronizasyonu (örn. hesap durumu). Karar DB sequence'ından sıra numarası alır, alıcı eski sırayı yok sayar. |
-| Superseded kontrolü | Göndermeden önce daha yeni bir kararın olup olmadığı kontrol edilir; varsa satır gönderilmeden silinir. |
+| Sıra numaralı outbox | Durum senkronizasyonu (örn. hesap durumu). Karar DB sequence'ından (aggregate başına monoton) sıra numarası alır; alıcı küçük/eşit sırayı yok sayar. |
+| Superseded kontrolü | Göndermeden önce daha yeni bir kararın olup olmadığı kontrol edilir; varsa satır gönderilmeden silinir. **Zorunlu güvence:** eski bir güvenlik kararı (engel kaldırıldı) yeniden deneme yüzünden yeni kararı (yeniden engellendi) asla ezmez — hem üretici (superseded) hem tüketici (`source_revision`) tarafında korunur. |
+
+Bölüm 23.3–23.4'teki kod şablonları bu generic tabloyu ve lane'li poller'ı gösterir.
 
 ### 11.3 Idempotent Consumer (Inbox)
 
-- Tüketici `INSERT … ON CONFLICT (event_id) DO NOTHING` çalıştırır; satır zaten varsa sessizce çıkar.
-- Üretici deterministik bir `eventId` üretir.
-- Hedef internal uçlar idempotenttir. Örneğin conflict sonrası "zaten uygulandı" yanıtı başarı olarak döner.
+At-least-once teslimde aynı mesaj birden çok kez gelir (yeniden teslim, tüketici çökmesi, poller yeniden denemesi). **Zorunlu güvence:** tekrar teslim çift iş üretmez. Bunun için **inbox satırı ile iş değişikliği aynı transaction'da** olmak zorundadır; aksi halde "inbox'a yazdı, işi yapmadan çöktü" (olay kaybı) veya "işi yaptı, inbox'a yazmadan çöktü" (çift iş) pencereleri açık kalır.
+
+```sql
+CREATE TABLE <schema>.inbox_event (
+  handler     TEXT NOT NULL,            -- 'OrderCreatedNotificationHandler'
+  event_id    UUID NOT NULL,            -- CloudEvents id
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (handler, event_id)       -- dedup kapsamı HANDLER; aynı olay farklı handler'larda ayrı işlenir
+);
+```
+
+```
+@Transactional  (tek TX)
+  1. INSERT INTO inbox_event(handler, event_id) … ON CONFLICT DO NOTHING  → 0 satır ⇒ duplicate, hiçbir şey yapmadan çık (ack)
+  2. iş değişikliği (read-model UPSERT / domain yazımı / outbox satırı)
+commit
+  3. broker ack — YALNIZ commit'ten sonra (manual ack; AUTO ack ile 2'den önce ack'lenen mesaj çökmede kaybolur)
+```
+
+- Handler başarısız olursa TX rollback → inbox satırı da geri alınır → mesaj nack/requeue (stateful retry) ile yeniden gelir. `defaultRequeueRejected=false` + delivery-limit → DLQ (Bölüm 12.3).
+- **Dedup kapsamı handler'dır**, tüketici servis değil: aynı `order.order.created` olayını hem read-model handler'ı hem bildirim handler'ı işliyorsa iki ayrı inbox satırı vardır.
+- İnbox'ta tutulan iş, yalnız tüketicinin **kendi DB'sindeki** etkiyi idempotent yapar. Handler dış bir sisteme yan etki üretiyorsa (SMS gönder) o etki inbox TX'i içinde yapılamaz; handler dış etkiyi **outbox** satırı olarak yazar (aynı TX), outbox handler'ı dış sisteme sağlayıcının idempotency anahtarıyla gider.
+- Üretici `id`'yi deterministik üretir (Bölüm 11.2); tüketici bunu inbox anahtarı olarak kullanır.
+- Retention: `received_at` üzerinden (örn. 30 gün; üretici yeniden yayın penceresinden uzun) partition/DELETE.
+- **Doğrulama (Bölüm 11.5):** aynı olay iki kez → tek etki; handler ortasında exception → inbox satırı yok ve yeniden teslimde iş yapılır; commit sonrası ack'ten önce çökme → yeniden teslimde duplicate olarak yutulur.
 
 ### 11.4 Local Saga (Geri Alınabilir Uzak Tüketim)
 
@@ -1480,13 +1595,17 @@ Config key'leri `operation-consistency.*` altında tutulur.
 - Hatalı girdi: eksik veya bozuk key; geçersiz JWT, yanlış actor, reuse edilmiş JTI.
 - Cleanup ve monitor; migration ve restart.
 
-**Kanıt seviyeleri:**
-1. Unit ve MVC testleri
-2. Gerçek PostgreSQL entegrasyonu
-3. Owner→participant runtime testi
-4. Release
+**Ek senaryolar (Bölüm 11.2–11.3, 4.6):** inbox satırı + iş aynı TX (handler ortasında exception → satır yok) · commit sonrası ack öncesi çökme → duplicate yutulur · iki poller instance'ı aynı aggregate'in sıralı iki satırı → tek worker, sıra korunur · bir lane'de takılı hedef diğer lane'i durdurmuyor · eski güvenlik kararı yeniden denemede yeni kararı ezmiyor (superseded + `source_revision`) · publisher confirm alınmış ama tüketici işlememiş → üretici "tamamlandı" saymıyor · delta olayında sıra boşluğu → uygulama durur, alarm · snapshot olayında küçük revizyon yok sayılır.
 
-**Sonuç:** `PASS` / `FAIL` / `BLOCKED`.
+**Çalışan örnek:** `blueprint/skeleton-example/platform-messaging/src/test/.../OutboxBehaviourIT.java` — outbox/inbox senaryolarının gerçek PostgreSQL üzerinde koşan hali (seviye 2). Saga senaryoları için henüz çalışan örnek yoktur.
+
+**Kanıt seviyeleri** (kayıt biçimi Bölüm 19.6):
+1. Unit ve MVC testleri
+2. Gerçek PostgreSQL entegrasyonu (Testcontainers; CI'da her PR)
+3. Owner→participant runtime testi (iki servis + broker ayakta; süreç öldürme, yeniden teslim)
+4. Release/staging (prod benzeri veri, restart provası)
+
+**Sonuç:** `PASS` / `FAIL` / `BLOCKED`. Testi olmayan senaryo `BLOCKED`'dır; "yazılı ama koşulmamış" `PASS` sayılmaz.
 
 ---
 
@@ -1515,7 +1634,7 @@ Config key'leri `operation-consistency.*` altında tutulur.
 - Alan silme/yeniden adlandırma/tip değiştirme **kırıcıdır**: yeni `type` (veya `type` içinde `.v2`) açılır; üretici bir süre **iki olayı birden** yayınlar; tüketiciler geçince eski kapatılır.
 - Tüketici bilmediği alanı yok sayar (`FAIL_ON_UNKNOWN_PROPERTIES=false`), bilmediği `type`'ı loglayıp ack'ler.
 - Payload sınıfları `<domain>-api` modülünün `event` paketinde; şema registry (Apicurio, Apache-2.0) yalnız çok ekipli ortamda.
-- **Deploy sırası:** tüketici önce (yeni alanı/tipi tanısın), üretici sonra.
+- **Rollout:** olay değişikliği tek bir "tüketici önce" kuralıyla yönetilmez; değişiklik türüne göre sözleşme ve uyumluluk matrisi **Bölüm 18.4**'te (opsiyonel alan ekleme: sıra serbest; yeni `type`/kırıcı değişiklik: tüketici önce + çift yayın; yeni tüketici: kuyruk/binding önce).
 
 ### 12.3 RabbitMQ 4.x Konfigürasyonu
 
@@ -1571,7 +1690,7 @@ Bölüm 12.2'deki envelope ve topic disiplini kurulmuşsa geçiş yalnız transp
 1. Komut mu event mi? (Bölüm 12.1) Adı belirle: `<servis>.<aggregate>.<olay>` / `<hedef>.<komut>`.
 2. Payload sınıfını `<domain>-api/event` altına yaz; CloudEvents attribute'larını `platform-messaging` doldurur.
 3. Consumer tarafında queue (quorum), DLQ, binding; `defaultRequeueRejected=false`, prefetch, retry politikası.
-4. Listener + inbox dedup + (read-model ise) `revision` ile UPSERT.
+4. Listener + inbox satırı ve iş **aynı TX'te** (Bölüm 11.3) + (read-model ise) kaynak başına `source_revision` ve tam durum/değişiklik sözleşmesi (Bölüm 4.6).
 5. Üretici: domain transaction'ında `outbox_event` satırı (kind, aggregate, type, payload).
 6. Config key'leri (local + deploy). Şema evrimi notu (`type` versiyonu).
 7. **Önce consumer'ı deploy et.**
@@ -1791,7 +1910,7 @@ services:
 - HTTP binding, controller metodunu doğrudan çağırarak kanıtlanmaz. Ayırt edilebilir sentetik değerler kullanılır ve geçersiz girdide servise hiç ulaşılmadığı (`verifyNoInteractions`) doğrulanır.
 - Feign interface'ini mock'lamak istek oluşumunu kanıtlamaz.
 - JWT doğrulaması tamamen mock'lanmaz. Yalnız dış yan etkiler (SMS, e-posta) mock'lanır.
-- Parametre kaynağı erişilemez, key yok veya değer bozuk olduğunda **hiç yan etki oluşmadığı** ve varsayılan değere düşülmediği kanıtlanır.
+- Parametre testleri Bölüm 14'ün iki ayrı kuralını ayrı ayrı kanıtlar: (a) **doğruluk hatası** (key yok, değer bozuk) → hiç yan etki yok, kod içi/yml default'a düşülmüyor (fail-closed); (b) **erişilemezlik** → son bilinen değer yalnız T süresi içinde ve yalnız kritik olmayan gruplarda kullanılıyor, `parameter_staleness_seconds` artıyor, T aşılınca kritik grup 503; `freshGroup` isteyen yazma akışında fallback yok. "Varsayılan değere düşülmez" kuralı **kod içi default**'u yasaklar, bounded-staleness'ı değil.
 - Test isimlendirmesinde tek stil seçilir; açıklamalar ekibin dilinde yazılır.
 - **CI'da çalışacaklar (PR gate):** değişen modüller ve bağımlılarının tüm testleri (gerçek DB testleri dahil), ArchUnit, `tsc` + lint, frontend build, migration immutability, config drift, secret taraması, OpenAPI diff. Staging'de ayrıca yük testi.
 
@@ -1885,10 +2004,33 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
 **Deploy script deseni** (`set -Eeuo pipefail` + `trap rollback ERR`):
 1. **Ön kontrol:** Disk ve RAM, altyapıya (DB, Redis, MQ) TCP erişimi, image imza doğrulaması (`cosign verify`).
 2. **Hazırlık:** Secret dosyaları üretilir (`chmod 600`), önceki digest listesi yedeklenir.
-3. **Rollout sırası:** contract/enum/event tipi ekleyen sahip servis → tüketiciler → auth → gateway. Her serviste `docker-rollout`, readiness bekleme, stabilite penceresi (hata oranı ve restart sayısı).
+3. **Rollout sırası:** değişiklik türüne göre Bölüm 18.4'teki sözleşme (release notunda yazılı); genel varsayılan: şema expand → tüketiciler → üreticiler → auth → gateway. Her serviste `docker-rollout`, readiness bekleme, stabilite penceresi (hata oranı ve restart sayısı).
 4. Frontend `dist` deploy, gözlem yığını güncellemesi, eski image temizliği.
-5. **Durum kaydı:** Mevcut ve önceki digest listesi saklanır. Hata olursa önceki digest'ler ile `docker compose up -d` (saniyeler), secret ve frontend geri yüklenir.
+5. **Durum kaydı:** Mevcut ve önceki digest listesi saklanır. Hata olursa önceki digest'ler ile `docker compose up -d` (saniyeler), secret ve frontend geri yüklenir. **Image rollback ≠ veri rollback** (Bölüm 18.4): eski image yeni şemayla çalışabilmeli (expand/contract); yeni image'ın yazdığı veri, yayınladığı olaylar ve tüketicilerde uyguladığı read-model satırları geri alınmaz.
 6. Deploy sonrası smoke test (health + 2–3 kritik uç) ve SLO panosu linki deploy çıktısına yazılır.
+
+### 18.4 Değişiklik Türüne Göre Rollout Sözleşmesi
+
+"Tüketici önce" tek başına yetersiz ve bazen yanlıştır: yeni bir tüketici için kuyruk ve binding üreticiden önce var olmalıdır; opsiyonel alan eklemede sıra serbesttir; kırıcı değişiklikte iki tarafın da iki sürümü bir süre birlikte çalışır. Her PR, etkilediği satırların sözleşmesini release notuna yazar.
+
+| Değişiklik türü | Sıra | Birlikte çalışması gereken sürümler | Geri dönüş |
+|---|---|---|---|
+| Olaya **opsiyonel alan** ekleme | Serbest (tüketici bilmediği alanı yok sayar) | eski üretici ↔ yeni tüketici (alan `null`/default), yeni üretici ↔ eski tüketici (alan yok sayılır) | Image rollback yeterli |
+| **Yeni olay `type`** (kırıcı değişiklik) | Tüketici önce (yeni type'ı tanır) → üretici çift yayın (eski + yeni) → tüketiciler yeni type'a geçer → eski type kapatılır (sunset tarihi) | çift yayın süresince her kombinasyon | Üretici rollback: yeni type kesilir, eski sürer. Tüketici rollback: eski type hâlâ yayında olmalı → sunset'ten önce |
+| **Yeni tüketici** (mevcut olay) | Kuyruk + binding (declare) önce → tüketici deploy → gerekiyorsa geçmiş için rebuild (stream/export) | – | Tüketici kaldırılır; kuyruk birikimini önlemek için binding de |
+| **Yeni internal uç** | Sağlayıcı önce (allowlist dahil) → çağıran | eski çağıran uçu kullanmaz | Çağıran rollback yeterli |
+| **Internal uç kırıcı değişikliği** | Sağlayıcı yeni sürümü **yanında** açar (`/v2` veya yeni alan) → çağıranlar geçer → eski kapatılır | iki sürüm birlikte | Çağıran rollback eski uçun hâlâ açık olmasına bağlı |
+| **Şema: kolon/tablo ekleme** | Migration (expand) → uygulama | eski image yeni şemayla çalışır (`ddl-auto: validate` yeni kolonu bilmese de geçer; yeni `NOT NULL` kolon `DEFAULT` ister) | Image rollback yeterli; şema kalır |
+| **Şema: kolon silme / tip değişimi** (contract) | Expand (yeni kolon) → uygulama iki kolonu da yazar → backfill → uygulama yalnız yeniye geçer → **sonraki release'te** contract | N ve N-1 image aynı şemayla | Contract'tan sonra rollback **yoktur**; bu yüzden ayrı release |
+| **Enum/parametre değeri** ekleme | Tüketen tüm servisler önce (bilinmeyen değeri tanısın) → üreten | eski tüketici bilinmeyen değeri reddedebilir → ekleme öncesi `from()` toleransı | Değer üretimi durdurulur |
+| **JWT claim ekleme/kaldırma** | Doğrulayan (tüketen) önce → basan | eski doğrulayan bilmediği claim'i yok sayar | Basan rollback yeterli; kaldırmada tersi |
+| **Allowlist / config** | Config değişikliği ilgili servis restart'ıyla; **kod ile aynı deploy'da** ise önce config | – | Config geri alınır (versiyonlu) |
+
+**Uyumluluk matrisi** her kırıcı değişiklik için PR'a yazılır (dört hücre): `yeni üretici → eski tüketici`, `eski üretici → yeni tüketici`, `yeni → yeni`, `eski → eski`. Bir hücre "çalışmaz" ise çift yayın veya feature flag ile kapatılır; "çalışmaz"ı kabul eden rollout planı `proj-release-readiness-review`'da `FAIL`.
+
+**Geri dönüş sınırı:** Rollback image'ı geri alır; **veriyi almaz**. Yeni sürümün yazdığı satırlar, yayınladığı olaylar (tüketiciler işledi), tüketicilere dağılmış read-model değişiklikleri ve dış sisteme gönderilmiş komutlar kalır. Bu yüzden: (1) yeni yazma biçimi eski image tarafından okunabilir olmalı (expand); (2) olay şeması geriye uyumlu; (3) geri alınamaz etkiler (SMS, ödeme) feature flag arkasında açılır ki kod rollback'i değil flag kapatır. Rollback provası staging'de "N+1 deploy → veri yaz → N'e dön → oku" adımıyla yapılır.
+
+**Doğrulama:** CI'da eski tüketici testleri yeni payload örneğiyle (fixture) koşar; `openapi-diff` ve olay şema testi; release notunda satır bazlı sözleşme; `proj-event-design-review` ve `proj-release-readiness-review` sözleşmeyi ister.
 
 ---
 
@@ -1913,8 +2055,9 @@ docs/adr/0000-template.md          ← ADR şablonu
 .claude/skills → ../.agents/skills ← symlink
 .claude/settings.json              ← 3 hook tanımı
 .claude/hooks/flyway-immutability.js  ← PreToolUse(Edit|Write|MultiEdit) adaptörü, fail-closed
-.claude/hooks/review-gate.sh          ← PreToolUse(Bash git push): son 1 saatte review skill'i? → "ask"
-.claude/hooks/review-stamp.sh         ← PostToolUse(Skill): damga
+.claude/hooks/review-gate.sh          ← PreToolUse(Bash git push): son 1 saatte, BU içerik üzerinde review skill'i? → "ask"
+.claude/hooks/review-stamp.sh         ← PostToolUse(Skill): damga = epoch + çalışma ağacı içerik hash'i
+.claude/hooks/tree-state.sh           ← ortak: git write-tree ile içerik kimliği (commit'ten bağımsız)
 scripts/flyway-immutability.js (+ .test.js)  ← kuralın tek kaynağı; CI + hook + elle; 12 testi var
 tests/ArchitectureRulesTest.java   ← ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
 tests/ErrorCodeUniquenessTest.java ← tüm ErrorCode enum'ları global tekil + blok içinde + mesaj formatı
@@ -1950,8 +2093,8 @@ skeleton-example/                  ← Boot 4.1.1 + ArchUnit 1.5.1 ile doğrulan
 
 | Skill | Kontrol ettiği | Karar formatı |
 |---|---|---|
-| `<proje>-resilience-review` **(yeni)** | Sıcak yol uzak çağrı sayısı (≤1), timeout bütçesi zinciri, circuit breaker/bulkhead (TimeLimiter tuzağı), senkron retry yok, fail politikası, control-plane bounded-staleness, Redis eviction, kapasite (thread/havuz), "hedef yanıt vermiyor" testi | Bağımlılık tablosu + `APPROVE…BLOCK`; sıcak yolda ikinci senkron okuma → en az `REQUEST CHANGES` |
-| `<proje>-event-design-review` **(yeni)** | Komut/olay ayrımı, "outbox üzerinden RPC" yasağı, CloudEvents envelope, `revision`, şema evrimi (kırıcı → yeni type + çift yayın), RabbitMQ 4.x topolojisi (QQ, DLQ, native retry), üretici (outbox'tan yayın), tüketici (`defaultRequeueRejected=false`, inbox, read-model UPSERT), analytics sink | Olay tablosu + `APPROVE…BLOCK` |
+| `<proje>-resilience-review` **(yeni)** | Kritik akış kaydı (gecikme bütçesi, bağımlılıklar, kabul edilen eskilik; varsayılan ≤1 uzak çağrı aşılıyorsa ADR), timeout bütçesi zinciri, circuit breaker/bulkhead (TimeLimiter tuzağı), senkron retry yok, fail politikası, control-plane bounded-staleness, Redis eviction, kapasite (thread/havuz), "hedef yanıt vermiyor" testi | Bağımlılık tablosu + `APPROVE…BLOCK`; sıcak yolda ikinci senkron okuma → en az `REQUEST CHANGES` |
+| `<proje>-event-design-review` **(yeni)** | Komut/olay ayrımı, "outbox üzerinden RPC" yasağı, CloudEvents envelope, `revision`, şema evrimi (kırıcı → yeni type + çift yayın), RabbitMQ 4.x topolojisi (QQ, DLQ, native retry), üretici (outbox'tan yayın, üretici tarafı sıralama), tüketici (`defaultRequeueRejected=false`, inbox + iş aynı TX, kaynak başına `source_revision`, tam durum/değişiklik sözleşmesi), rollout sözleşmesi (Bölüm 18.4), analytics sink | Olay tablosu + `APPROVE…BLOCK` |
 | `<proje>-release-readiness-review` **(yeni)** | Yedek + restore provası tarihi, alarm kanalı testi, asgari alarm seti, SLO/yük testi, kapasite, digest/imza/rollback, güvenlik duruşu, **sürüm/EOL**, silme akışı/DPIA, runbook/on-call, dokümantasyon | Kontrol tablosu + `PASS/FAIL/BLOCKED`; yedek/restore/alarm eksikse `FAIL` |
 | `<proje>-spring-code-review` | İnce controller, constructor injection, geniş catch yok, hedef başına tek client, throw öncesi log, Normal Flow Logging, tracing/async context, Multi-Instance Safety, dinamik parametre kuralları, **sıcak yolda okuma çağrısı yok** | 8 maddelik yapılandırılmış çıktı + `APPROVE…BLOCK` |
 | `<proje>-security-review` | Trust boundary, ownership/IDOR, OTP/token/abuse, WebSocket, input/query, object storage, log/secret (`safeLogReason` katı kuralı), tracing güvenliği, privacy | Risk `CRITICAL…OK`; bulgu başına severity, dosya, kanıt, exploit senaryosu, düzeltme, test; `APPROVE / APPROVE WITH NON-BLOCKING COMMENTS / REQUEST CHANGES / BLOCK` |
@@ -1997,8 +2140,8 @@ Kontrol et:
 | Olay | Matcher | Dosya | Amaç |
 |---|---|---|---|
 | `PreToolUse` | `Edit\|Write\|MultiEdit` | `.claude/hooks/flyway-immutability.js` | Base'teki migration'a yazmayı **engelle** (exit 2, fail-closed; bozuk girdi ve git hatasında da engeller; base yoksa HEAD ağacına göre korur) |
-| `PreToolUse` | `Bash` (komut `git push` içeriyorsa) | `.claude/hooks/review-gate.sh` | Son 1 saatte review skill'i çalışmadıysa kullanıcıya sor (`hookSpecificOutput.permissionDecision: "ask"`); push dışı komutlarda sessiz |
-| `PostToolUse` | `Skill` | `.claude/hooks/review-stamp.sh` | `*-review`, `*test-writer`, `*integration-doc` çalıştıysa `.claude/.last-review-check` damgası |
+| `PreToolUse` | `Bash` (komut `git push` içeriyorsa) | `.claude/hooks/review-gate.sh` | Son 1 saatte **ve bu çalışma ağacı içeriği üzerinde** review skill'i çalışmadıysa kullanıcıya sor (`hookSpecificOutput.permissionDecision: "ask"`); push dışı komutlarda sessiz |
+| `PostToolUse` | `Skill` | `.claude/hooks/review-stamp.sh` | `*-review`, `*test-writer`, `*integration-doc` çalıştıysa `.claude/.last-review-check` damgası: `<epoch> <tree-hash>`. Tree hash `tree-state.sh` ile (`git write-tree`, geçici index, ignore edilmeyen tüm dosyalar; damga dosyası hariç). Commit atmak içeriği değiştirmez → damga geçerli kalır; dosya değiştirmek → geçersiz |
 
 Hook komutları **ayrı dosyalarda** yaşar; `settings.json` yalnız dosyayı çağırır. **Neden:** JSON içine gömülü shell komutunda kaçış hatası hook'u sessizce etkisiz bırakır (bir projede push gate'i bu yüzden hiç çalışmamıştı). Her hook `bash -n` ve örnek stdin ile CI'da kuru çalıştırılır (`blueprint/README.md`).
 
@@ -2027,10 +2170,35 @@ Dokümandaki bir kural, AI ajanı veya geliştirici unutsa bile **bir şey kırm
 | Secret literal fallback yok | gitleaks + config lint (regex `\$\{[A-Z_]+:[^}]+\}` secret key'lerinde) |
 | Local ↔ deploy config drift | `scripts/config-drift-check` CI |
 | Hata kodu çakışması | unit test (tüm `ErrorCode` enum'ları) |
-| Sıcak yolda ≤1 uzak çağrı | README tablosu + review skill (otomatik: trace'te span sayısı testi) |
+| Sıcak yol: gecikme bütçesi ve bağımlılık listesi yazılı; varsayılan (≤1 uzak çağrı) aşılıyorsa ADR | kritik akış kaydı (`repo-context.md`) + review skill; otomatik: trace'te uzak span sayısı testi (kayıttaki listeyle eşit) + p99 yük testi eşiği |
 | Sürüm/EOL | Renovate + Bölüm 25 çeyreklik kontrol |
 
 `.claude/skills/` elle kopya değil, `.agents/skills/`'e **symlink** veya CI'da senkron kontrolü. PR şablonunda "çalıştırılan review skill'leri ve kararları" bölümü bulunur; review izi kalır.
+
+### 19.6 Doğrulama Kapsamı ve Kanıt Kaydı
+
+Bu dokümanın ve `blueprint/`'in **iki farklı doğrulama seviyesi** vardır; ikisi karıştırılmaz:
+
+| Seviye | Ne kanıtlar | Bu referansta durumu |
+|---|---|---|
+| **Yapısal** | Kurallar derlenir ve ihlal yakalanır: ArchUnit, enforcer, ErrorCode tekilliği, config drift, immutability script/hook | `skeleton-example` ile **doğrulandı** (pozitif build + 8 kasıtlı ihlal); tarih README'sinde |
+| **Davranışsal** | Sistem koşarken tutarlılık güvenceleri sağlanır: outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira dolar ve iş devralınır, saga recovery telafi eder, inbox atomik | Outbox/inbox kısmı `skeleton-example/platform-messaging` içinde **gerçek PostgreSQL 17.5 üzerinde doğrulandı** (seviye 2; `OutboxBehaviourIT`, 13 senaryo: #21, #22, #25, #27, #28, #29, #32 + iki poller/300 satır, SKIP LOCKED, backoff, DEAD politikası, öncelik, kira güvenlik payı; 5 kasıtlı regresyon yakalandı — `skeleton-example/README.md`). **Koşturulmayan:** saga recovery (seviye 2), owner→participant runtime (seviye 3), broker ile gerçek yeniden teslim (seviye 3). Projede P0'ın çıkış koşulu: bu üçü de `PASS` ve kanıt kaydı dolu |
+
+"Yapısal olarak doğrulanmış" bir kural davranışsal olarak da doğru olduğu anlamına gelmez (ArchUnit outbox'ın çift yayın yapmadığını söyleyemez). Doküman, blueprint README'si ve uyum raporu bu ayrımı açıkça yazar.
+
+**Kanıt kaydı** (PR şablonunda ve `proj-operation-consistency-review` doğrulama tablosunda her senaryo için):
+
+| Alan | Örnek |
+|---|---|
+| Senaryo | 22 — tüketici duplicate olay |
+| Kanıt seviyesi | 2 (gerçek PostgreSQL) |
+| Test / komut | `OrderCreatedHandlerIT#duplicateEventHasSingleEffect` · `mvn -pl services/order/order-core verify` |
+| Commit | `a1b2c3d` (test bu commit'te koştu) |
+| Ortam | CI job `ci / order-core (PR #123)`, Testcontainers PG 18 |
+| Sonuç | `PASS` (link: CI çalıştırması) |
+| Tarih | 2026-09-29 |
+
+**Review damgası kanıt değildir.** `review-gate` hook'unun damgası yalnız "bir review skill'i bu içerik üzerinde çalıştı" der; çalışma ağacının içerik hash'ine bağlıdır (`blueprint/.claude/hooks/review-stamp.sh` + `tree-state.sh`; içerik değişince damga geçersizdir, commit atmak bozmaz) ve **yerel** bir kolaylıktır; hook'lar atlanabilir, damga dosyası elle yazılabilir. Zorunlu güvence CI'dır: PR gate'teki testler, immutability, drift, secret taraması ve **test sayısı kontrolü** (0 test = başarısız; `skeleton-example` dersi 2). Bir PR "skill'ler çalıştı" damgasıyla değil, CI'nın yeşil ve kanıt kaydının dolu olmasıyla birleşir.
 
 ---
 
@@ -2082,7 +2250,7 @@ Dokümandaki bir kural, AI ajanı veya geliştirici unutsa bile **bir şey kırm
 
 **Karar ve yapı**
 - [ ] Mimari şekil kararı (Bölüm 1.1) yazılı: modüler monolit / hibrit / mikroservis; gerekçe ve yeniden değerlendirme eşiği (Bölüm 24).
-- [ ] Sıcak yol listesi ve her biri için "kaç uzak çağrı" hedefi (≤1).
+- [ ] Sıcak yol listesi ve her biri için kritik akış kaydı (Bölüm 1.2: gecikme bütçesi, bağımlılıklar ve gerekçeleri, kabul edilen eskilik, düşünce davranış).
 - [ ] Domain sınırları ve olay listesi (Bölüm 12.1) — hangi servis hangi olayı yayınlar, kim tüketir.
 - [ ] Teknoloji yığını yalnız OSS-destekli sürümlerle (Bölüm 25 kontrolü tarihli olarak README'de).
 - [ ] API versiyonlama kararı (`/v1`); OpenAPI üretimi ve istemci client generation CI'da.
@@ -2186,7 +2354,8 @@ Dokümandaki bir kural, AI ajanı veya geliştirici unutsa bile **bir şey kırm
 - [ ] Olay adı `<servis>.<aggregate>.<olay>`; payload sınıfı `<domain>-api/event`; CloudEvents attribute'ları platform'dan.
 - [ ] Üretici: domain TX'inde `outbox_event` (`kind=EVENT`, `aggregate_id` routing key).
 - [ ] Tüketici: kendi queue'su + DLQ, inbox dedup, bilinmeyen tip yok sayılır.
-- [ ] Read-model tablosu kendi şemasında; `revision` ile UPSERT; eskime eşiği ve fail-closed davranışı yazılı; rebuild yolu (stream replay veya sahibin export ucu) belgelendi.
+- [ ] Read-model tablosu kendi şemasında; **kaynak başına** `source_revision` ve tüketim konumu tablosu; olay sözleşmesi (tam durum / değişiklik) ve delta'da sıra boşluğu davranışı yazılı; karar başına kabul edilen eskilik (T) ve fail-closed davranışı yazılı; rebuild yolu (stream replay veya sahibin export ucu) belgelendi (Bölüm 4.6).
+- [ ] Rollout sözleşmesi satırı (Bölüm 18.4) ve kırıcıysa 4 hücreli uyumluluk matrisi PR'da.
 - [ ] `readmodel_lag_seconds` metriği + alarm.
 - [ ] Şema evrimi notu (`type` versiyonu); önce consumer deploy.
 - [ ] Analytics sink bu olayı alıyor mu? (Bölüm 14.4)
@@ -2350,86 +2519,107 @@ public class OrderController {
 }
 ```
 
-### 23.3 Outbox Claim Sorgusu
+### 23.3 Outbox Claim Sorgusu (generic `outbox_event`, `platform-messaging`)
+
+Bölüm 11.2'deki tek generic tabloya karşı çalışır; servisler bu repository'yi yazmaz, starter'dan alır. Lane (`kind`) parametreli olduğu için bir lane'in takılması diğerini bekletmez. **Çalışan, test edilmiş JDBC hali:** `blueprint/skeleton-example/platform-messaging` (`OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`); aşağıdaki JPA şablonu aynı sorguları taşır.
 
 ```java
-public interface OrderEventOutboxRepository extends JpaRepository<OrderEventOutbox, UUID> {
+public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> {
 
     // Birden fazla instance ayni satiri alamaz: SKIP LOCKED kilitli satirlari atlar, locked_until kira suresidir.
-    // Kirasi dolan PUBLISHING satiri (instance cokmesi) yeniden claim edilir.
+    // Kirasi dolan PUBLISHING satiri (instance cokmesi) yeniden claim edilir. Lane = kind; oncelik yuksek olan once.
+    // Sira gereken aggregate'ler icin: ayni aggregate_id'nin daha eski PENDING satiri baska worker'daysa bu satir atlanir
+    // (NOT EXISTS) — sira uretici tarafinda korunur (Bolum 11.2).
     @Transactional
     @Query(value = """
             WITH candidates AS (
-                SELECT id FROM <schema>.order_event_outbox
-                WHERE (status = 'PENDING' OR (status = 'PUBLISHING' AND locked_until <= :now))
-                  AND next_retry_at <= :now
-                ORDER BY created_at
-                FOR UPDATE SKIP LOCKED
+                SELECT o.id FROM <schema>.outbox_event o
+                WHERE o.kind = :kind
+                  AND (o.status = 'PENDING' OR (o.status = 'PUBLISHING' AND o.locked_until <= :now))
+                  AND o.next_retry_at <= :now
+                  AND NOT EXISTS (SELECT 1 FROM <schema>.outbox_event p
+                                  WHERE p.aggregate_id = o.aggregate_id AND p.created_at < o.created_at
+                                    AND p.status IN ('PENDING','PUBLISHING'))
+                ORDER BY o.priority DESC, o.created_at
+                FOR UPDATE OF o SKIP LOCKED
                 LIMIT :limit)
-            UPDATE <schema>.order_event_outbox o
+            UPDATE <schema>.outbox_event o
             SET status = 'PUBLISHING', locked_until = :lockedUntil, claim_token = :claimToken
             FROM candidates WHERE o.id = candidates.id
             RETURNING o.*
             """, nativeQuery = true)
-    List<OrderEventOutbox> claimPending(@Param("now") Instant now, @Param("lockedUntil") Instant lockedUntil,
-                                        @Param("claimToken") UUID claimToken, @Param("limit") int limit);
+    List<OutboxEvent> claim(@Param("kind") String kind, @Param("now") Instant now,
+                            @Param("lockedUntil") Instant lockedUntil, @Param("claimToken") UUID claimToken,
+                            @Param("limit") int limit);
 
     // Sonucu yalniz claim sahibi yazar; kirasi elinden alinmis eski worker satiri ezemez.
+    // claim_token uzak hedefe cift teslimi ENGELLEMEZ; hedef idempotent olmak zorundadir (Bolum 11.3).
     @Transactional @Modifying
-    @Query("DELETE FROM OrderEventOutbox o WHERE o.id = :id AND o.claimToken = :claimToken")
+    @Query("DELETE FROM OutboxEvent o WHERE o.id = :id AND o.claimToken = :claimToken")
     int deleteProcessed(@Param("id") UUID id, @Param("claimToken") UUID claimToken);
 
     @Transactional @Modifying
     @Query("""
-            UPDATE OrderEventOutbox o SET o.status = 'PENDING', o.retryCount = :retry, o.nextRetryAt = :next,
+            UPDATE OutboxEvent o SET o.status = :status, o.retryCount = :retry, o.nextRetryAt = :next,
                    o.lockedUntil = null, o.claimToken = null, o.lastErrorCode = :err
             WHERE o.id = :id AND o.claimToken = :claimToken
             """)
-    int markFailed(@Param("id") UUID id, @Param("claimToken") UUID claimToken, @Param("retry") int retry,
-                   @Param("next") Instant next, @Param("err") String err);
+    int release(@Param("id") UUID id, @Param("claimToken") UUID claimToken, @Param("status") String status,
+                @Param("retry") int retry, @Param("next") Instant next, @Param("err") String err);
 }
 ```
 
-### 23.4 Outbox Poller
+### 23.4 Outbox Poller (lane bazlı, handler'a yönlendiren)
 
 ```java
 /**
- * Siparis olaylarinin yan etkilerini uygular. Birden fazla instance'ta calisir; satirlar SKIP LOCKED + kira ile
- * claim edilir, uzak cagri transaction disindadir. Hedef uc idempotent oldugu icin tekrar islenme zararsizdir.
+ * Generic outbox poller (platform-messaging). Her lane (kind) icin ayri zamanlanmis dongu; boylece yavas bir HTTP
+ * hedefi event yayinini bekletmez. Satirlar SKIP LOCKED + kira ile claim edilir, uzak is transaction disindadir.
+ * Isi yapan handler kind'a gore secilir: EVENT -> topic exchange publish (confirm), COMMAND -> queue, HTTP -> client.
+ * Hedefler idempotent oldugu icin tekrar islenme zararsizdir; claim_token yalniz poller'in kendi yazma yarisini cozer.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class OrderEventOutboxPoller {
+public class OutboxPoller {
 
-    static final int BATCH_SIZE = 50;
-    static final long LEASE_SECONDS = 120;
-    static final long LEASE_SAFETY_SECONDS = 30;   // kiranin son 30 sn'sinde yeni satira baslanmaz
-    static final long MAX_BACKOFF_SECONDS = 600;
-    static final int STUCK_ALERT_EVERY = 10;       // kalici hata alarmi her denemede degil, aralikla
-
-    private final OrderEventOutboxRepository repository;
-    private final InventoryClient inventoryClient;
+    private final OutboxEventRepository repository;
+    private final Map<String, OutboxHandler> handlersByKind;      // "EVENT","COMMAND","HTTP" (bean adi = kind)
+    private final OutboxProperties props;                           // baslangic ayarlari: batch 50, lease 120 sn, safety 30 sn,
+                                                                    // maxBackoff 600 sn, stuckEvery 10 (Bolum 11.2, olcumle degisir)
     private final TraceContextCarrier traceContextCarrier;
+    private final MeterRegistry meterRegistry;
 
-    @Scheduled(fixedDelayString = "${order.event-outbox.poll-interval-ms:5000}")
-    public void poll() {
+    @Scheduled(fixedDelayString = "${platform.outbox.poll-interval-ms:1000}")
+    public void pollEvents()   { poll("EVENT"); }
+    @Scheduled(fixedDelayString = "${platform.outbox.poll-interval-ms:1000}")
+    public void pollCommands() { poll("COMMAND"); }
+    @Scheduled(fixedDelayString = "${platform.outbox.poll-interval-ms:1000}")
+    public void pollHttp()     { poll("HTTP"); }
+
+    void poll(String kind) {
         Instant claimedAt = now();
-        Instant leaseEnd = claimedAt.plusSeconds(LEASE_SECONDS);
+        Instant leaseEnd = claimedAt.plusSeconds(props.leaseSeconds());
         UUID claimToken = UUID.randomUUID();
-        List<OrderEventOutbox> entries = repository.claimPending(claimedAt, leaseEnd, claimToken, BATCH_SIZE);
+        List<OutboxEvent> entries = repository.claim(kind, claimedAt, leaseEnd, claimToken, props.batchSize());
         if (entries.isEmpty()) return;                                  // bos turlar loglanmaz
 
-        Instant workDeadline = leaseEnd.minusSeconds(LEASE_SAFETY_SECONDS);
-        int applied = 0, failed = 0, deferred = 0;
-        for (OrderEventOutbox entry : entries) {
-            if (now().isAfter(workDeadline)) { deferred++; continue; }   // kira dolunca baska instance alir
+        OutboxHandler handler = handlersByKind.get(kind);
+        Instant workDeadline = leaseEnd.minusSeconds(props.leaseSafetySeconds());
+        int applied = 0, failed = 0, deferred = 0, dead = 0;
+        for (OutboxEvent entry : entries) {
+            if (now().isAfter(workDeadline)) { deferred++; continue; }   // kira dolunca baska instance alir; deneme sayilmaz
             Span span = traceContextCarrier.startSpan(
-                    traceContextCarrier.from(entry.getTraceparent(), entry.getTracestate()), "outbox.order-event.apply");
+                    traceContextCarrier.from(entry.getHeaders()), "outbox." + kind.toLowerCase() + ".apply");
             try (var ignored = traceContextCarrier.withSpan(span)) {
-                inventoryClient.apply(entry.toRequest());
+                handler.handle(entry);                                   // publish+confirm / queue / HTTP; TX disinda
                 repository.deleteProcessed(entry.getId(), claimToken);
                 applied++;
+            } catch (PermanentFailureException e) {                      // kalici 4xx (401/403/408/429 haric); is turune gore
+                span.error(e);
+                if (entry.isNeverDead()) { markFailure(entry, claimToken, e); failed++; }   // guvenlik yan etkisi DEAD olmaz
+                else { repository.release(entry.getId(), claimToken, "DEAD", entry.getRetryCount(), now(),
+                        e.getClass().getSimpleName()); dead++; }
             } catch (Exception e) {
                 span.error(e);
                 markFailure(entry, claimToken, e);
@@ -2438,31 +2628,35 @@ public class OrderEventOutboxPoller {
                 span.end();
             }
         }
-        log.info("Order event outbox batch finished: claimed={} applied={} failed={} deferred={}",
-                entries.size(), applied, failed, deferred);
+        meterRegistry.counter("outbox_processed_total", "lane", kind, "outcome", "applied").increment(applied);
+        log.info("Outbox batch finished: lane={} claimed={} applied={} failed={} dead={} deferred={}",
+                kind, entries.size(), applied, failed, dead, deferred);
     }
 
     Instant now() { return Instant.now(); }                             // test edilebilir zaman kaynagi
 
-    private void markFailure(OrderEventOutbox entry, UUID claimToken, Exception e) {
+    private void markFailure(OutboxEvent entry, UUID claimToken, Exception e) {
         int retries = entry.getRetryCount() + 1;
         String errorType = e.getClass().getSimpleName();                // exception mesaji degil
-        repository.markFailed(entry.getId(), claimToken, retries, now().plusSeconds(backoffSeconds(retries)), errorType);
-        if (retries % STUCK_ALERT_EVERY == 0) {
-            log.error("Order side effect still failing: code=ORDER_OUTBOX_STUCK eventId={} retry={} exceptionType={}",
-                    entry.getEventId(), retries, errorType);
+        repository.release(entry.getId(), claimToken, "PENDING", retries,
+                now().plusSeconds(backoffSeconds(retries, props.maxBackoffSeconds())), errorType);
+        if (retries % props.stuckAlertEvery() == 0) {
+            log.error("Outbox entry still failing: code=OUTBOX_STUCK lane={} eventId={} retry={} exceptionType={}",
+                    entry.getKind(), entry.getId(), retries, errorType);
         } else {
-            log.warn("Order side effect failed; retry scheduled: eventId={} retry={} exceptionType={}",
-                    entry.getEventId(), retries, errorType);
+            log.warn("Outbox entry failed; retry scheduled: lane={} eventId={} retry={} exceptionType={}",
+                    entry.getKind(), entry.getId(), retries, errorType);
         }
     }
 
-    // min(600, 30 * 2^n) sn
-    static long backoffSeconds(int retries) {
-        return Math.min(MAX_BACKOFF_SECONDS, 30L * (1L << Math.min(Math.max(retries, 0), 20)));
+    // min(maxBackoff, 30 * 2^n) sn — baslangic ayari
+    static long backoffSeconds(int retries, long maxBackoff) {
+        return Math.min(maxBackoff, 30L * (1L << Math.min(Math.max(retries, 0), 20)));
     }
 }
 ```
+
+Servis tarafında yalnız handler'a takılan **yönlendirme** yazılır (örn. `event_type` → hangi exchange/routing key; HTTP → hangi client). Servis kendi poller'ını, kendi tablosunu, kendi claim sorgusunu yazmaz (Bölüm 22 anti-pattern).
 
 ### 23.5 Controller Binding Testi
 
@@ -2588,20 +2782,7 @@ Her karar "bugün için doğru" ve "şu eşikte değişir" çiftiyle verilir. E�
 
 **Kural:** Üretimde yalnız OSS güvenlik yaması alan sürümler çalışır. Bir bileşenin OSS desteği bitmeden **en az 3 ay önce** upgrade planlanır. Renovate/Dependabot minor/patch'i otomatik açar; major upgrade'ler çeyreklik planda.
 
-**Kontrol edilecek kaynaklar (çeyrekte bir, tarihli olarak README'ye işlenir):**
-
-| Bileşen | Kaynak | Not (2026-09) |
-|---|---|---|
-| Spring Boot / Framework / Security / Cloud | `spring.io/support-policy`, proje sayfalarındaki destek tabloları, `endoflife.date/spring-boot` | Boot 3.x OSS desteği bitti (3.5: 2026-06); 4.0.x 2026-12'ye, 4.1.x sonrasına kadar. Spring Cloud OSS: 2025.1.x (Boot 4.0), 2026.0.x (Boot 4.1). Her minor ≥13 ay; major'ın son minor'u ticari desteğe geçer. |
-| Java | `endoflife.date/oracle-jdk`, Adoptium/Temurin | 25 LTS (2025-09); 21 LTS hâlâ destekli; LTS dışı sürümler üretimde kullanılmaz |
-| PostgreSQL | `postgresql.org/support/versioning` | 5 yıl; 15 → 2027-11, 14 → 2026-11; 18 güncel |
-| Redis / Valkey | GitHub releases; lisans: `LICENSE.txt` | Redis 7.x bakımsız; 8.x AGPL/RSALv2/SSPL; Valkey 9.x BSD |
-| RabbitMQ | `rabbitmq.com/release-information`, `endoflife.date/rabbitmq` | Community-destekli tek seri en yeni minor; eski minor'lar aylar içinde düşer |
-| Elasticsearch / OpenSearch | `elastic.co/support/eol`, OpenSearch releases | ES 8.x bakım sonu 2027-01; lisans dalına göre farklı |
-| Grafana yığını | GitHub releases; Promtail EOL (2026-03-02) | Alloy, Loki, Tempo, Prometheus minor'ları birlikte güncellenir |
-| Testcontainers, ArchUnit, Resilience4j, Debezium | GitHub releases | Testcontainers 2.x artefakt adları değişti |
-| Node / React / Vite / MUI | `endoflife.date/nodejs`, proje sayfaları | Node LTS dışı sürüm CI/Dockerfile'da kullanılmaz |
-| CVE'ler | `spring.io/security`, GitHub Advisory DB (Dependabot alerts), `osv.dev` | Yaması yalnız ticari sürümde olan CVE = upgrade tetikleyicisi |
+**Kontrol edilecek kaynaklar ve son anlık görüntü:** Ek A (tarihli). Çeyrekte bir güncellenir ve projede `docs/versions.md` olarak tarihli tutulur; bu bölümdeki kurallar tarihten bağımsızdır, Ek A'daki sayılar değildir.
 
 **Upgrade disiplini:**
 - Major Spring Boot upgrade'i (örn. 3.x → 4.x: Framework 7, Jakarta EE 11, Jackson 3, Hibernate 7, modüler starter'lar, `@MockitoBean`, Testcontainers 2) ayrı bir PR dizisi; `spring-boot-properties-migrator` ve OpenRewrite reçeteleri; önce `platform-*` starter'ları, sonra servisler.
@@ -2629,15 +2810,15 @@ Her karar "bugün için doğru" ve "şu eşikte değişir" çiftiyle verilir. E�
 
 Çıktı: `docs/adr/0001-referans-mimariye-uyum.md` (ADR) + `docs/uyum-raporu.md`.
 
-Keşif listesi (her satır: mevcut durum · referans bölümü · fark · risk · profil):
+Keşif listesi (her satır: mevcut durum · referans bölümü · kural sınıfı (zorunlu güvence / varsayılan tercih / başlangıç ayarı — Bölüm 1.4) · fark · risk · doğrulama seviyesi (yapısal / davranışsal / yok) · profil):
 - Repo ve modül topolojisi; api/core ayrımı var mı; ortak kütüphane(ler); build/deploy hattı (nerede build ediliyor, registry var mı).
-- Servis kimlik tablosu (port, actor, audience, şema, hata bloğu); **sıcak yol tablosu** (her kritik istek kaç uzak senkron çağrı yapıyor).
+- Servis kimlik tablosu (port, actor, audience, şema, hata bloğu); **kritik akış kaydı** (her sıcak yol için bütçe, uzak bağımlılıklar ve gerekçeleri, kabul edilen eskilik — Bölüm 1.2); **delegasyon matrisi** (internal uçlarda çağıran × işlem × `sub` × kaynak yetkisi — Bölüm 9.2.1).
 - Veri: DB sayısı/instance, şema/rol ayrımı, **yedek/PITR/restore provası**, büyüyen tablolar, ID stratejisi.
-- Mesajlaşma: broker ve sürümü, outbox var mı/kaç tane, komut/olay ayrımı, consumer ayarları (requeue, prefetch), DLQ.
+- Mesajlaşma: broker ve sürümü, outbox var mı/kaç tane, komut/olay ayrımı, consumer ayarları (requeue, prefetch, **ack zamanı ve inbox atomikliği**), DLQ, read-model'lerde kaynak başına revizyon ve olay sözleşmesi (tam durum/değişiklik).
 - Güvenlik: JWT türleri ve algoritmaları, secret'ların yeri ve fallback'ler, allowlist/drift, rate limit, mock entegrasyonlar, seed verisi, dosya yükleme, PII/silme akışı.
 - Dayanıklılık: timeout'lar, circuit breaker, thread modeli, control-plane bağımlılıkları.
 - Gözlem: log formatı, toplayıcı (Promtail?), tracing, **alarm kanalı**, SLO, runbook.
-- Test: gerçek DB testleri CI'da mı, ArchUnit var mı, hata kodu tekilliği, drift testi.
+- Test: gerçek DB testleri CI'da mı, ArchUnit var mı (ve kaç test koşuyor), hata kodu tekilliği, drift testi. **Doğrulama seviyesi** her satırda ayrı yazılır: yapısal (kural derlenir) / davranışsal (outbox tekrar teslimi, iki worker, restart, saga recovery koşturuldu mu) — Bölüm 19.6.
 - Sürümler: her bileşen için OSS destek durumu (Bölüm 25) ve bilinen CVE'ler.
 - AI yönetişimi: AGENTS.md, docs/ai, skill'ler, hook'lar var mı; çalışıyor mu (kuru çalıştırma).
 
@@ -2670,7 +2851,29 @@ Her faz sonunda: uyum raporu güncellenir, ilgili review skill'leri çalıştır
 1. **Keşif özeti** (10–20 satır): şekil, profil, en kritik 5 fark.
 2. **Uyum raporu tablosu** (bölüm · mevcut · fark · risk · faz).
 3. **Önerilen ilk PR** (F0'dan, tek konu, geri alınabilir) ve neden.
+   Uyum raporu tablosunda kural sınıfı ve doğrulama seviyesi sütunları dolu; "zorunlu güvence" ihlalleri her zaman ilk sırada.
 4. **Sorular** (26.1/7).
 5. Onay sonrası: her PR için `docs/ai/review-checklist.md`'deki skill'ler ve PR şablonu.
 
 **Kaçın:** Tek dev PR ile "her şeyi düzenlemek"; ArchUnit'i ilk gün tüm kurallarla zorunlu yapıp build'i günlerce kırık bırakmak; upgrade'i test ağı olmadan yapmak; profil dışı altyapı (Kafka, k8s, Vault) kurmak; mevcut migration'lara dokunmak; secret değerlerini rapora yazmak.
+
+---
+
+## Ek A — Sürüm Notları (tarihli anlık görüntü)
+
+> **Anlık görüntü tarihi: 2026-09.** Bu ek, dokümanın kural bölümlerinden ayrı tutulur: kurallar (Bölüm 25) değişmez, aşağıdaki sürümler ve tarihler eskir. Yeni projeye başlarken bu tablo kaynaklardan yeniden doğrulanır ve projede `docs/versions.md` olarak tarihli kopyalanır. Bölüm 2'deki sürüm numaraları da bu tarihe aittir.
+
+**Kontrol edilecek kaynaklar:**
+
+| Bileşen | Kaynak | Not (2026-09) |
+|---|---|---|
+| Spring Boot / Framework / Security / Cloud | `spring.io/support-policy`, proje sayfalarındaki destek tabloları, `endoflife.date/spring-boot` | Boot 3.x OSS desteği bitti (3.5: 2026-06); 4.0.x 2026-12'ye, 4.1.x sonrasına kadar. Spring Cloud OSS: 2025.1.x (Boot 4.0), 2026.0.x (Boot 4.1). Her minor ≥13 ay; major'ın son minor'u ticari desteğe geçer. |
+| Java | `endoflife.date/oracle-jdk`, Adoptium/Temurin | 25 LTS (2025-09); 21 LTS hâlâ destekli; LTS dışı sürümler üretimde kullanılmaz |
+| PostgreSQL | `postgresql.org/support/versioning` | 5 yıl; 15 → 2027-11, 14 → 2026-11; 18 güncel |
+| Redis / Valkey | GitHub releases; lisans: `LICENSE.txt` | Redis 7.x bakımsız; 8.x AGPL/RSALv2/SSPL; Valkey 9.x BSD |
+| RabbitMQ | `rabbitmq.com/release-information`, `endoflife.date/rabbitmq` | Community-destekli tek seri en yeni minor; eski minor'lar aylar içinde düşer |
+| Elasticsearch / OpenSearch | `elastic.co/support/eol`, OpenSearch releases | ES 8.x bakım sonu 2027-01; lisans dalına göre farklı |
+| Grafana yığını | GitHub releases; Promtail EOL (2026-03-02) | Alloy, Loki, Tempo, Prometheus minor'ları birlikte güncellenir |
+| Testcontainers, ArchUnit, Resilience4j, Debezium | GitHub releases | Testcontainers 2.x artefakt adları değişti |
+| Node / React / Vite / MUI | `endoflife.date/nodejs`, proje sayfaları | Node LTS dışı sürüm CI/Dockerfile'da kullanılmaz |
+| CVE'ler | `spring.io/security`, GitHub Advisory DB (Dependabot alerts), `osv.dev` | Yaması yalnız ticari sürümde olan CVE = upgrade tetikleyicisi |

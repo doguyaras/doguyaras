@@ -10,7 +10,7 @@
     <spring-boot.version>4.1.1</spring-boot.version>
     <archunit.version>1.5.1</archunit.version>
   </properties>
-  <modules><module>platform-core</module><module>order-api</module><module>order-core</module></modules>
+  <modules><module>platform-core</module><module>platform-messaging</module><module>order-api</module><module>order-core</module></modules>
   <dependencyManagement><dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-dependencies</artifactId><version>${spring-boot.version}</version><type>pom</type><scope>import</scope></dependency>
     <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
@@ -22,9 +22,12 @@
           <requireJavaVersion><version>[21,)</version></requireJavaVersion>
           <requireMavenVersion><version>[3.9,)</version></requireMavenVersion>
           <!-- core → core yasak: *-core artefaktlari yalniz kendi modulunde bulunur -->
-          <bannedDependencies><excludes><exclude>com.acme:*-core</exclude></excludes><includes><include>com.acme:platform-core</include></includes></bannedDependencies>
+          <bannedDependencies><excludes><exclude>com.acme:*-core</exclude></excludes><includes><include>com.acme:platform-*</include></includes></bannedDependencies>
         </rules></configuration></execution></executions></plugin>
-      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.3</version></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.3</version>
+        <!-- *IT siniflari da surefire ile kosar (ayri failsafe fazi bu iskelette gereksiz). "0 test = basarisiz" kurali
+             test iceren modullerin kendi pom'unda (failIfNoTests); testsiz kontrat modullerinde build kirilmaz. -->
+        <configuration><includes><include>**/*Test.java</include><include>**/*IT.java</include></includes></configuration></plugin>
     </plugins>
   </build>
 </project>

@@ -35,7 +35,9 @@ blueprint/
 │   ├── settings.json                 # Hook tanımları
 │   └── hooks/
 │       ├── flyway-immutability.js    # PreToolUse: base'teki V*.sql'e yazmayı engeller (fail-closed)
-│       └── review-gate.sh            # PreToolUse(Bash git push): son 1 saatte review skill'i çalıştı mı
+│       ├── review-gate.sh            # PreToolUse(Bash git push): son 1 saatte ve BU içerik üzerinde review skill'i çalıştı mı
+│       ├── review-stamp.sh           # PostToolUse(Skill): damga = epoch + çalışma ağacı içerik hash'i
+│       └── tree-state.sh             # ortak: git write-tree ile içerik kimliği (commit atmak damgayı bozmaz, dosya değiştirmek bozar)
 ├── scripts/
 │   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım
 │   └── flyway-immutability.test.js   # node --test
@@ -43,12 +45,21 @@ blueprint/
 │   ├── ArchitectureRulesTest.java    # ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
 │   ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik + blok + mesaj formatı
 │   └── ConfigDriftTest.java          # application-local.yml ↔ deploy config drift; ${ENV} ↔ env şablonu; secret fallback yasağı
-└── skeleton-example/                 # Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı ihlal yakalandı (README'sine bak)
-    ├── pom.xml                       # BOM, ${revision}, enforcer (Java/Maven sürümü + core→core bannedDependencies)
+└── skeleton-example/                 # Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı yapısal + 5 davranışsal ihlal yakalandı (README'sine bak)
+    ├── pom.xml                       # BOM, ${revision}, enforcer (Java/Maven sürümü + core→core bannedDependencies), *IT dahil
     ├── platform-core/  order-api/  order-core/  deploy/prod.env.example
+    └── platform-messaging/           # Generic outbox/inbox (JDBC) + OutboxBehaviourIT: gerçek PostgreSQL üzerinde 13 davranışsal senaryo
 ```
 
-**Doğrulanmış olanlar:** `scripts/flyway-immutability.js` (12 test), hook'lar (örnek stdin ile kuru çalıştırma), `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, negatif ve pozitif). Skill'ler metin olarak tamamlandı; gerçek bir PR üzerinde bir Claude Code oturumunda henüz koşturulmadı — ilk kullanımda karar formatlarının uyumu gözden geçirilir.
+## Doğrulama kapsamı (dürüst sınır — referans Bölüm 19.6)
+
+| Seviye | Ne | Durum |
+|---|---|---|
+| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (12 test); hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
+| **Davranışsal** (sistem koşarken tutarlılık güvenceleri) | outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira devri, inbox atomikliği, üretici sıralaması, lane izolasyonu, backoff/DEAD, eski karar yeni kararı ezmez | **Outbox/inbox: doğrulandı** (2026-09-29, seviye 2) — `skeleton-example/platform-messaging/OutboxBehaviourIT`, gerçek PostgreSQL 17.5 (gömülü, Docker'sız), 13 senaryo (#21, #22, #25, #27, #28, #29, #32 + 6), 5 kasıtlı regresyon yakalandı. **Koşturulmadı:** saga recovery (seviye 2), owner→participant runtime ve broker ile yeniden teslim (seviye 3) — projede P0 çıkış koşulu |
+| **Skill'ler** | 12 skill metni | Gerçek bir PR üzerinde Claude Code oturumunda henüz koşturulmadı; ilk kullanımda karar formatlarının uyumu gözden geçirilir |
+
+Yapısal `PASS` davranışsal `PASS` değildir; uyum raporu ve PR şablonu ikisini ayrı yazar.
 
 ## Kurulum
 
@@ -57,9 +68,11 @@ cp -r blueprint/. <yeni-repo>/
 cd <yeni-repo>
 grep -rl "proj-\|<proje>" . --exclude-dir=.git | xargs sed -i 's/proj-/<proje>-/g; s/<proje>/<proje-adı>/g'
 ln -s ../.agents/skills .claude/skills          # kopya değil, symlink
-chmod +x .claude/hooks/review-gate.sh
+chmod +x .claude/hooks/*.sh
+echo '.claude/.last-review-check' >> .gitignore   # review damgası yerel; commit'lenmez
 node --test scripts/flyway-immutability.test.js  # script'in kendi testleri
-bash -n .claude/hooks/review-gate.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # hook kuru çalıştırma
+bash -n .claude/hooks/review-gate.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # hook kuru çalıştırma → "ask"
+echo '{"tool_input":{"skill":"proj-security-review"}}' | .claude/hooks/review-stamp.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # damga sonrası → sessiz (izin)
 ```
 
 ## İlkeler
@@ -67,5 +80,6 @@ bash -n .claude/hooks/review-gate.sh && echo '{"tool_input":{"command":"git push
 1. **Tek kaynak:** Her kural bir dosyada yaşar; diğerleri anchor link ile yönlendirir. Skill'ler `docs/ai/*`'ı tekrar etmez.
 2. **Kanıt zorunluluğu:** Doğrulanamayan şey "**net kanıt bulunamadı**" diye yazılır; uydurulmaz.
 3. **Kural → makine:** Her kuralın bir makine kontrolü vardır (ArchUnit, enforcer, hook, CI script, test). Skill'ler "ne yapmalı"yı, testler "yapıldı mı"yı taşır.
-4. **Sabit karar formatları:** Her skill'in çıktısı sabit enum'larla biter (`APPROVE / REQUEST CHANGES / BLOCK`, `PASS / FAIL / BLOCKED`); serbest metin karar sayılmaz.
-5. **Skill'ler kısa ve test edilebilir:** Her madde bir dosyaya bakarak evet/hayır denebilecek biçimde yazılır.
+4. **Kural sınıfları:** her kural zorunlu güvence / varsayılan tercih / başlangıç ayarı sınıfındadır (referans Bölüm 1.4); skill'ler sayıyı güvence gibi, güvenceyi tercih gibi ele almaz.
+5. **Sabit karar formatları:** Her skill'in çıktısı sabit enum'larla biter (`APPROVE / REQUEST CHANGES / BLOCK`, `PASS / FAIL / BLOCKED`); serbest metin karar sayılmaz.
+6. **Skill'ler kısa ve test edilebilir:** Her madde bir dosyaya bakarak evet/hayır denebilecek biçimde yazılır.

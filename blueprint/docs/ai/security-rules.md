@@ -18,6 +18,7 @@
 - Hesap kimliği **yalnız** doğrulanmış bağlamdan (`@CurrentAccount` ← service JWT `sub`). Path/query/body'den kimlik alınmaz (IDOR). Path'teki id yalnız hedef kaynaktır; ownership serviste kontrol edilir.
 - `/internal/**` uçları default-deny; `service-jwt.internal-access` allowlist'i gerçek kullanım kadar dar; dar kural catch-all'dan önce (first-match). Allowlist eşleşmesi decode+normalize edilmiş path üzerinde.
 - Kullanıcı adına çalışan internal uçta JWT `sub` path'teki hesapla karşılaştırılır. Hesabı body'den alan internal uç hiçbir aktöre açılmaz.
+- **Servis kimliği ≠ kullanıcı adına yetki.** A'nın imzası yalnız "A'dan geldi" demektir; A'nın token'a koyduğu `sub` adına işlem yetkisi vermez. Hedef üçünü birlikte kontrol eder: (1) `act`/`iss` allowlist'te, (2) bu **işlem** için, (3) `sub` bu **kaynakta** yetkili (ownership). Kullanıcı isteğiyle çalışan çağrı ile arka plan işi token'da ayrılır (`sub` yok / `on_behalf_of` ayrı claim); arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem reddedilir. Zincirde (`A → B → C`) `act` zinciri korunur. Matris: `repo-context.md` Bölüm 3.1 (RFC 8693 delegation/impersonation ayrımı).
 - Gateway: `/internal/**` → 404 (prefix kırpma sonrası da), iç header'ları (`X-Subject-Id`, `X-User-*`) temizler, `X-Forwarded-*` yalnız güvenilen proxy'den, CORS listesi açık (`*` yasak), rate limit ve timeout bütçesi var, `gateway` actuator ucu kapalı.
 - Oturum sürümü (`sv`): şifre sıfırlama, logout-all, **ban**, rol değişimi → `sv + 1`; gateway ve realtime bu sürümün altını reddeder.
 - Refresh token: opak, `sha256(plain:salt)` ile saklanır, aile rotasyonu, reuse → aile iptali. Mutlak süre uzamaz.
@@ -63,7 +64,8 @@
 
 ## 7. Veritabanı
 
-- Servis başına DB rolü; şema sahibi rol; başka şemaya USAGE yok. Cross-schema erişim hatası "GRANT ekleyerek" çözülmez.
+- Servis başına **iki** DB rolü: `svc_<x>_migrate` (şema sahibi, DDL; yalnız Flyway) ve `svc_<x>` (uygulama; tablo/sequence DML, `ALTER DEFAULT PRIVILEGES` ile). Uygulama rolü DDL yapamaz, audit/append-only tablolarda UPDATE/DELETE yetkisi yoktur. Başka şemaya USAGE yok. Cross-schema erişim hatası "GRANT ekleyerek" çözülmez.
+- `spring.flyway.baseline-on-migrate` config'te **açık tutulmaz**; mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` prosedürüdür.
 - Audit tabloları `@Immutable` + DB'de `REVOKE UPDATE, DELETE` / trigger.
 - Seed/test verisi prod migration location'ında değil; bilinen parolalı admin tohumlanmaz (bootstrap runner + env + ilk girişte değiştir).
 - Yedek şifreli; restore provası aylık.

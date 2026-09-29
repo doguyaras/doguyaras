@@ -23,7 +23,8 @@ Bu dosya tüm AI kodlama ajanları (Claude Code, Codex, Copilot, Cursor vb.) iç
 - Mevcut bir pattern varsa onu kullan; yoksa yenisini icat etmeden önce sor.
 - Secret, token, parola, private key değerlerini hiçbir yeni içeriğe (kod, doküman, test, log, PR açıklaması) taşıma. Yalnız isimleri yaz.
 - Aynı kuralı iki yerde yazma; belgeye link ver.
-- Her değişiklikte ownership kontrolü: kimlik her zaman doğrulanmış bağlamdan (`@CurrentAccount`), path/body'den değil.
+- Kurallar üç sınıftadır (referans Bölüm 1.4): **zorunlu güvence** (ihlali `BLOCK`; değişmez), **varsayılan tercih** (sapma gerekçeli ADR ister), **başlangıç ayarı** (sayılar; ölçümle değişir). Bir sayıyı "kural" diye savunma, bir güvenceyi "tercih" diye gevşetme.
+- Her değişiklikte ownership kontrolü: kimlik her zaman doğrulanmış bağlamdan (`@CurrentAccount`), path/body'den değil. Servis kimliği (service JWT) kullanıcı adına yetki **değildir**; internal uçlar `docs/ai/repo-context.md` Bölüm 3.1 delegasyon matrisine göre çağıran × işlem × kullanıcı bağlamı × kaynak yetkisini birlikte kontrol eder.
 - Ana README kökteki `README.md`'dir; servis kimlik tablosu ve hata kodu blokları oradadır.
 
 ## 3. Kanıt ve Varsayım Disiplini
@@ -41,8 +42,9 @@ Bu dosya tüm AI kodlama ajanları (Claude Code, Codex, Copilot, Cursor vb.) iç
 
 ## 5. Sıcak Yol Kuralı
 
-- Kullanıcıya latency olarak yansıyan bir istekte **en fazla bir** uzak senkron çağrı olur, o da yazma/rezervasyon türünden. Okuma amaçlı senkron çağrı eklemek yasaktır; read-model veya JWT claim kullan.
-- Yeni bir uzak çağrı ekliyorsan `docs/ai/repo-context.md`'deki sıcak yol tablosunu güncelle ve `proj-resilience-review` skill'ini çalıştır.
+- **Zorunlu güvence:** kullanıcıya latency olarak yansıyan her akışın kritik akış kaydı (`docs/ai/repo-context.md` Bölüm 3: gecikme bütçesi, uzak bağımlılıklar ve gerekçeleri, kabul edilen veri eskiliği, bağımlılık düşünce davranış) yazılıdır ve güncel tutulur.
+- **Varsayılan tercih:** en fazla bir uzak senkron çağrı, o da yazma/rezervasyon türünden; okuma amaçlı senkron çağrı yerine read-model veya JWT claim. Varsayılanı aşan her ek bağımlılık ADR + `proj-resilience-review` ister; "ikinci çağrı" yasak değildir, gerekçesiz ve bütçesiz olanı yasaktır.
+- Yeni bir uzak çağrı ekliyorsan kaydı güncelle ve `proj-resilience-review` skill'ini çalıştır.
 - Her HTTP client çağrısı timeout + circuit breaker + bulkhead altındadır; bunlar olmadan client ekleme.
 
 ## 6. Migration Değişmezliği
@@ -62,7 +64,8 @@ Bu dosya tüm AI kodlama ajanları (Claude Code, Codex, Copilot, Cursor vb.) iç
 
 - Başka servisin verisini değiştirmek için komut gönderilmez; kendi domain event'in yayınlanır (`outbox_event`, `kind=EVENT`).
 - Yayın her zaman outbox'tan; doğrudan `convertAndSend` yasak.
-- Yeni event/komut için `proj-event-design-review` çalıştırılır; tüketici önce deploy edilir.
+- Tüketici: inbox satırı ve iş değişikliği **aynı transaction'da**; ack commit'ten sonra. Read-model'de kaynak başına `source_revision`; olay sözleşmesi (tam durum / değişiklik) yazılı.
+- Yeni event/komut için `proj-event-design-review` çalıştırılır; rollout sözleşmesi (referans Bölüm 18.4: değişiklik türüne göre sıra + uyumluluk matrisi) PR'a yazılır. "Tüketici önce" tek başına kural değildir.
 
 ## 9. Environment ve Config Etkisi
 

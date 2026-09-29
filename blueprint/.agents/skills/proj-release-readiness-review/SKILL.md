@@ -26,8 +26,9 @@ Kontrol et:
 
 ## Deploy ve geri dönüş
 - Image CI'da build, registry'de, cosign imzalı, digest ile deploy; prod'da build yok.
-- Rollout sırası (sahip → tüketici → auth → gateway) release notunda; tüketici-önce kuralı yeni event/enum için sağlanmış.
-- Rollback: önceki digest listesi mevcut; migration expand/contract'a uygun (eski image yeni şemayla çalışır); prova edilmiş rollback süresi.
+- **Rollout sözleşmesi** (referans Bölüm 18.4) release notunda değişiklik türü bazında: her olay/uç/şema/enum/claim değişikliği için sıra ve birlikte çalışacak sürümler; kırıcı değişiklikler için 4 hücreli uyumluluk matrisi; "çalışmaz" hücresi kabul edilmişse `FAIL`.
+- Rollback: önceki digest listesi mevcut; migration expand/contract'a uygun (eski image yeni şemayla çalışır); prova edilmiş rollback süresi. **Image rollback ≠ veri rollback:** yeni sürümün yazdığı veri/olay/read-model ve dış komutlar geri alınmaz; geri alınamaz etkiler flag arkasında; staging'de "N+1 → yaz → N → oku" provası kayıtlı.
+- CI test sayısı kontrolü var (mimari/tutarlılık testleri 0 test ile yeşil olamaz).
 - Healthcheck ve readiness her serviste; `restart: always`; `docker-rollout`/blue-green.
 - Staging'de smoke test geçti; prod deploy onay kapısı var.
 
@@ -49,6 +50,10 @@ Kontrol et:
 - Kişisel veri envanteri ve DPIA güncel; yeni alanlar eklendi mi.
 - İstemci entegrasyon dokümanı ve OpenAPI/generated client release ile uyumlu; API sunset tarihleri.
 - Runbook'lar: her alarm için "ne yapılır" sayfası; on-call kim; olay sonrası postmortem şablonu.
+
+## Doğrulama kapsamı ve kanıt (referans Bölüm 19.6)
+- Release notu yapısal (ArchUnit/enforcer/drift) ile davranışsal (outbox tekrar teslimi, iki worker, restart, inbox atomikliği, saga recovery) doğrulamayı ayrı listeliyor; davranışsal senaryoların kanıt kaydı (senaryo · seviye · test · commit · ortam · sonuç · tarih) dolu. Kaydı olmayan senaryo `BLOCKED`.
+- Yeni servisin ilk prod deploy'unda en az: outbox tekrar teslimi, iki worker, süreç öldürme/kira devri seviye 2/3'te `PASS`.
 
 ## Dokümantasyon
 - README kimlik tablosu, sıcak yol tablosu, fail politikası tablosu, kapasite tablosu güncel.

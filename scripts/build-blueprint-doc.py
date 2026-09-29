@@ -11,7 +11,7 @@ order=['README.md','AGENTS.md','CLAUDE.md','.github/copilot-instructions.md','.g
  'docs/ai/repo-context.md','docs/ai/security-rules.md','docs/ai/context-boundaries.md','docs/ai/review-checklist.md','docs/ai/operation-consistency.md',
  'docs/adr/0000-template.md']
 skills=sorted(p for p in root.glob('.agents/skills/**/*.md'))
-rest=['.claude/settings.json','.claude/hooks/flyway-immutability.js','.claude/hooks/review-gate.sh','.claude/hooks/review-stamp.sh',
+rest=['.claude/settings.json','.claude/hooks/flyway-immutability.js','.claude/hooks/review-gate.sh','.claude/hooks/review-stamp.sh','.claude/hooks/tree-state.sh',
  'scripts/flyway-immutability.js','scripts/flyway-immutability.test.js',
  'tests/ArchitectureRulesTest.java','tests/ErrorCodeUniquenessTest.java','tests/ConfigDriftTest.java']
 skeleton=sorted(p for p in (root/'skeleton-example').rglob('*') if p.is_file() and 'target' not in p.parts)

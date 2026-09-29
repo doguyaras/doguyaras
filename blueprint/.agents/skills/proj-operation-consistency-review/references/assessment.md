@@ -13,7 +13,7 @@
    - Evet ama çok adım / çok katılımcı → `extension required` (ADR).
    - Hayır (para transferi, dış sistem, geri alınamaz) → saga uygun değil → süreç tablosu + durum makinesi + insan/dış onay adımı; `decision blocked` ile mimari karar iste.
 4. **İşlem sıcak yolda mı?**
-   - Evet → uzak çağrı sayısı 1'i geçemez; consume dışındaki kontroller read-model/claim ile.
+   - Evet → kritik akış kaydı güncellenir (bütçe, bağımlılık gerekçesi, eskilik); varsayılan ≤1 uzak çağrı aşılıyorsa ADR; consume dışındaki kontroller read-model/claim ile.
 5. **Dış sağlayıcıya iş emri mi (SMS, push, webhook)?**
    - Evet → **komut** (outbox `kind=COMMAND` → queue) veya `kind=HTTP`.
 

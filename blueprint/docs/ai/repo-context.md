@@ -20,15 +20,28 @@
 
 Ortak kod blokları: validation 90000, security 90100–90199, system 99998–99999.
 
-## 3. Sıcak yol tablosu (referans Bölüm 1.2)
+## 3. Kritik akış kaydı — sıcak yol tablosu (referans Bölüm 1.2)
 
-| Akış | Uç | Uzak senkron çağrı | Read-model / claim ile karşılanan kontroller | Hedef p99 |
-|---|---|---|---|---|
-| Ana yazma | `POST /v1/orders` | 1 (hak tüketimi) | hesap durumu (`account_standing` read-model), yasal onay (`legal_ok` claim) | 300 ms |
-| Mesaj gönder | `POST /v1/conversations/{id}/messages` | 0 | engel (`block_relation` read-model), üyelik (local) | 150 ms |
-| Giriş | `POST /v1/auth/password/login` | 0 | – | 500 ms |
+| Akış | Uç | Gecikme bütçesi (p99) | Uzak senkron bağımlılıklar (gerekçe) | Read-model / claim ile karşılanan kontroller (kabul edilen eskilik) | Bağımlılık düşünce davranış | Yeniden değerlendirme |
+|---|---|---|---|---|---|---|
+| Ana yazma | `POST /v1/orders` | 300 ms | 1: `subscription.consume` (hak tüketimi = yazma; read-model ile yapılamaz) | hesap durumu (`rm_account_status`, lag ≤ 5 dk), yasal onay (`legal_ok` claim, token ömrü) | subscription: 503 `UPSTREAM_UNAVAILABLE`; read-model satır yok: reddet | p99 > 300 ms 3 gün; `readmodel_lag_seconds{source="auth"}` > 300 |
+| Mesaj gönder | `POST /v1/conversations/{id}/messages` | 150 ms | 0 | engel (`rm_block_relation`, lag ≤ 30 sn; aşılırsa fail-closed), üyelik (local) | – | lag alarmı |
+| Giriş | `POST /v1/auth/password/login` | 500 ms | 0 | – | – | – |
 
-Bu tabloya 1'den fazla uzak çağrı yazılamaz; yazılmak isteniyorsa ADR + `proj-resilience-review`.
+Varsayılan: ≤1 uzak senkron çağrı. Aşan satır ADR + `proj-resilience-review` ister; kayıt alanlarından biri boş olan satır `REQUEST CHANGES`.
+
+## 3.1 Delegasyon matrisi (referans Bölüm 9.2.1)
+
+Her internal uç için bir satır. Hedef servis üçünü birlikte kontrol eder: çağıran allowlist'te mi, bu işlem için mi, `sub` varsa bu kaynakta yetkili mi.
+
+| Çağıran (`act`) | Hedef işlem | Kullanıcı bağlamı (`sub`) | Kaynak yetkisi kontrolü | Bağlam kaynağı | Ele geçirilirse zarar |
+|---|---|---|---|---|---|
+| gateway | tüm public uçlar | zorunlu (user JWT) | hedef: ownership | kullanıcı isteği | tüm kullanıcı işlemleri |
+| core-service (order) | `subscription: consume/confirm/compensate` | zorunlu; yalnız kendi sipariş akışındaki hesap | `operation_key` + hesap eşleşmesi | kullanıcı isteği (senkron) | yalnız hak tüketimi |
+| core-service (worker) | `notification: commands` | yok (arka plan token'ı) | – | outbox | spam → rate limit |
+| backoffice-service | `user: moderate` | yok; admin id ayrı claim | admin rolü + audit | panel isteği | moderasyon kararları |
+
+Arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem kabul edilmez; "her kullanıcı adına her şey" satırı yoktur.
 
 ## 4. Yüksek sinyalli dosyalar
 

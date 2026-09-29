@@ -13,7 +13,7 @@
 
 ## 2. Senaryo matrisi
 
-| # | Senaryo | Beklenen | Kanıt seviyesi | Test | Sonuç |
+| # | Senaryo | Beklenen | Kanıt seviyesi | Test · commit · ortam · tarih | Sonuç (link) |
 |---|---|---|---|---|---|
 | 1 | Normal başarı | saga CONFIRMED, hak tüketildi, domain yazıldı | 2 | | |
 | 2 | Aynı key ile replay | aynı sonuç, ikinci consume yok | 2 | | |
@@ -39,6 +39,14 @@
 | 22 | Tüketici duplicate olay | tek etki | 2 | | |
 | 23 | Sıra bozuk olay (eski revision) | yok sayılır | 2 | | |
 | 24 | Bilinmeyen event type | ack + log, DLQ değil | 1 | | |
+| 25 | Handler ortasında exception (inbox atomikliği) | inbox satırı yok; yeniden teslimde iş yapılır | 2 | | |
+| 26 | Commit sonrası, ack öncesi çökme | yeniden teslim duplicate olarak yutulur, tek etki | 3 | | |
+| 27 | İki poller instance + aynı aggregate'in sıralı iki satırı | tek worker, sıra korunur; ilk satır başarısızsa ikincisi beklet | 2 | | |
+| 28 | Bir lane'de takılı hedef (HTTP 30 sn timeout) | EVENT lane'i gecikmeden yayınlıyor | 2 | | |
+| 29 | Eski güvenlik kararı yeniden denemede | yeni kararı ezmiyor (superseded + `source_revision`) | 2 | | |
+| 30 | Publisher confirm var, tüketici işlemedi | üretici "tamamlandı" saymıyor; tamamlanma tüketici olayıyla | 3 | | |
+| 31 | Delta olayında sıra boşluğu | uygulama durur, `readmodel_gap_total` artar, uzlaştırma | 2 | | |
+| 32 | Süreç öldürme: PUBLISHING satır + kira dolumu | ikinci instance devralır; ilk instance geri gelince yazamaz | 3 | | |
 
 Kanıt seviyeleri: 1 unit/MVC · 2 gerçek PostgreSQL (Testcontainers) · 3 owner→participant runtime (iki servis ayakta) · 4 release/staging.
 
@@ -47,3 +55,4 @@ Kanıt seviyeleri: 1 unit/MVC · 2 gerçek PostgreSQL (Testcontainers) · 3 owne
 - Tüm satırlar `PASS` → **PASS**.
 - Herhangi bir satır `FAIL` → **FAIL** (liste).
 - Test/kanıt olmayan satır → **BLOCKED** (liste; "test yok" = geçmiş sayılmaz).
+- `PASS` yazılan her satırda commit SHA ve sonuç linki dolu; boşsa `BLOCKED`. Yapısal testler (ArchUnit) bu tablo için kanıt değildir.

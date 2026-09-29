@@ -28,7 +28,10 @@ npm --prefix <panel>-web run lint && npm --prefix <panel>-web run build && npm -
 
 ## 3. Öz-kontrol (skill'lerden bağımsız)
 
-- [ ] Yeni uzak senkron çağrı sıcak yola eklendi mi? Eklendiyse read-model/claim alternatifi değerlendirildi ve `repo-context.md` tablosu güncellendi.
+- [ ] Yeni uzak senkron çağrı sıcak yola eklendi mi? Eklendiyse kritik akış kaydı (`repo-context.md` Bölüm 3: bütçe, gerekçe, eskilik, düşünce davranış) güncellendi; varsayılan (≤1) aşılıyorsa ADR.
+- [ ] Yeni/değişen internal uç delegasyon matrisinde (`repo-context.md` Bölüm 3.1).
+- [ ] Yeni tüketici: inbox satırı + iş aynı TX; ack commit sonrası.
+- [ ] Olay/uç/şema değişikliği için rollout sözleşmesi satırı PR'da (referans Bölüm 18.4).
 - [ ] Yeni outbox satırı domain transaction'ında mı (MANDATORY)?
 - [ ] Hata yolu: throw öncesi structured log; kullanıcı 4xx → WARN.
 - [ ] Yeni `@RequestBody` → `@Valid`; binding adları açık.
