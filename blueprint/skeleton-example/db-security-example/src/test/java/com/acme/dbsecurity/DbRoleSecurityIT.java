@@ -31,7 +31,7 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 /**
  * DAVRANISSAL dogrulama (referans Bolum 10.1, 10.2, 10.3, 10.5, 10.6; kanit seviyesi 2 ve 3): rol ayrimi, default
  * privilege, rol bazli zaman asimlari, RLS + SET LOCAL, append-only audit, UUIDv7, Flyway baseline proseduru ve
- * PgBouncer transaction mode — gercek PostgreSQL 18 (gomulu) ve gercek pgbouncer sureci uzerinde.
+ * PgBouncer transaction mode - gercek PostgreSQL 18 (gomulu) ve gercek pgbouncer sureci uzerinde.
  * Metot yorumlarindaki #n gorev senaryo numarasidir.
  *
  * Zaman: buradaki sureler uygulama mantigi degil, sunucu tarafi ayarlardir (statement/lock/idle timeout); bu yuzden
@@ -211,6 +211,48 @@ class DbRoleSecurityIT {
         app.execute("GRANT ALL ON \"order\".order_item TO PUBLIC");
         assertThat(su.queryForObject("SELECT count(*) FROM information_schema.role_table_grants "
                 + "WHERE table_schema = 'order' AND table_name = 'order_item' AND grantee = 'PUBLIC'", Integer.class)).isZero();
+    }
+
+    @Test // #2b: public semasinda USAGE yok; tablo bazli GRANT verilse bile sema kapisi kapali (REVOKE ... FROM PUBLIC)
+    void appRoleCannotUsePublicSchemaEvenWithTableGrant() {
+        // PG15+ public'te CREATE'i zaten kapatir; USAGE ise varsayilan olarak PUBLIC'e aciktir. Bu test REVOKE'u kanitlar.
+        su.execute("CREATE TABLE public.shared_probe (id INT)");
+        try {
+            su.execute("GRANT SELECT ON public.shared_probe TO " + spec.appRole());
+            assertThat(sqlState(() -> app.queryForObject("SELECT count(*) FROM public.shared_probe", Integer.class)))
+                    .isEqualTo("42501");
+            assertThat(su.queryForObject("SELECT has_schema_privilege(?, 'public', 'USAGE')", Boolean.class,
+                    spec.appRole())).isFalse();
+        } finally {
+            su.execute("DROP TABLE public.shared_probe");
+        }
+    }
+
+    @Test // #2c: flyway_schema_history migration rolunun tablosu; default privilege'in verdigi DML afterMigrate ile geri alinir
+    void appRoleCannotTamperWithFlywayHistory() {
+        String history = "\"order\".flyway_schema_history";
+        assertThat(sqlState(() -> app.queryForObject("SELECT count(*) FROM " + history, Integer.class))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("UPDATE " + history + " SET success = false"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("DELETE FROM " + history + " WHERE version = '3'"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("INSERT INTO " + history + " (installed_rank, version, description, type, "
+                + "script, installed_by, execution_time, success) VALUES (99, '99', 'x', 'SQL', 'x', 'x', 0, true)")))
+                .isEqualTo("42501");
+        assertThat(appGrantsOn("flyway_schema_history")).isEmpty();
+        assertThat(appGrantsOn("order_item")).containsExactlyInAnyOrder("SELECT", "INSERT", "UPDATE", "DELETE");
+
+        // Elle yapilan drift: bir sonraki migrate() (bekleyen migration olmasa bile) yetkiyi yine geri alir
+        su.execute("GRANT ALL ON " + history + " TO " + spec.appRole());
+        assertThat(appGrantsOn("flyway_schema_history")).isNotEmpty();
+        MigrateResult again = new SchemaMigrator(jdbcUrl, spec.migrateRole(), MIGRATE_PW, SCHEMA, "classpath:db/migration").migrate();
+        assertThat(again.migrationsExecuted).isZero();
+        assertThat(appGrantsOn("flyway_schema_history")).isEmpty();
+        assertThat(su.queryForList("SELECT version FROM " + history + " ORDER BY installed_rank", String.class))
+                .as("callback history'ye satir yazmaz").containsExactly("1", "2", "3");
+    }
+
+    static List<String> appGrantsOn(String table) {
+        return su.queryForList("SELECT privilege_type FROM information_schema.role_table_grants WHERE table_schema = 'order' "
+                + "AND table_name = ? AND grantee = ?", String.class, table, spec.appRole());
     }
 
     @Test // #3: audit_log append-only: uygulama INSERT eder, UPDATE/DELETE 42501; tablo sahibi bile trigger'a takilir
@@ -433,9 +475,10 @@ class DbRoleSecurityIT {
         try (PgBouncerProcess pgb = PgBouncerProcess.start(pg.getPort(), DB, spec.appRole(), APP_PW,
                 new PgBouncerProcess.Config(0, 5))) {
             List<String> anomalies = runAlternatingPreparedTransactions(pgb, 30);
-            System.out.println("[#10b] max_prepared_statements=0 gozlemi: " + anomalies);
+            // Gozlem (1.22.0): once 42P05 "S_1 already exists", sonra 26000 ve 08P01 bind uyusmazligi; ayrinti aciklamada
             assertThat(anomalies).as("izleme kapaliyken hata beklenir; log:\n" + pgb.log()).isNotEmpty();
-            assertThat(anomalies.getFirst()).containsAnyOf("42P05", "26000", "TAG-MISMATCH");
+            assertThat(anomalies.getFirst()).as("max_prepared_statements=0 gozlemi: %s", anomalies)
+                    .containsAnyOf("42P05", "26000", "TAG-MISMATCH");
         }
     }
 

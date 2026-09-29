@@ -1,6 +1,7 @@
 package com.acme.dbsecurity;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -9,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -96,6 +98,18 @@ final class PgBouncerProcess implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
+        }
+        deleteDir();
+    }
+
+    /** ini, log ve duz metin sifreli userlist.txt /tmp'de birikmesin. */
+    private void deleteDir() {
+        try (var paths = Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try { Files.deleteIfExists(path); } catch (IOException e) { throw new UncheckedIOException(e); }
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 }
