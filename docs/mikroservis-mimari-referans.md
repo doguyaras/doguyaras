@@ -265,6 +265,8 @@ Docker (Jib veya layered jar, non-root), docker compose (+ `docker-rollout`), Gi
 
 ### 3.2 Maven ve Build Hattı
 
+**Zorunlu derleyici bayrağı:** `spring-boot-starter-parent` yerine BOM import kullanan projelerde `<maven.compiler.parameters>true</maven.compiler.parameters>` açıkça yazılır; Spring Framework 6.1+/7 `@PathVariable`/`@RequestParam` adlarını yansımadan okur, bayrak yoksa çalışma zamanında "Name for argument … not specified" hatası alınır (iskelette yaşandı).
+
 - Parent `packaging=pom`. `dependencyManagement` içinde `spring-boot-dependencies` ve `spring-cloud-dependencies` BOM'ları import edilir.
 - **Kural:** `maven-enforcer-plugin` (Java/Maven sürümü, `dependencyConvergence`, **`bannedDependencies` ile `*-core` → `*-core` yasağı**) ve `spring-boot-maven-plugin` yalnız `pluginManagement`'ta bırakılmaz, `build/plugins`'e de eklenir. Aksi halde hiç çalışmazlar.
 - **Kural — affected-module build:** Her PR'da tüm reactor derlenip test edilmez. `gitflow-incremental-builder` (referans branch'e göre değişen modül + bağımlıları: `buildDownstream`, `buildUpstreamMode=impacted`) veya **Maven Build Cache Extension** (girdi hash'iyle modül çıktısı cache'lenir) kullanılır. En basit hali: `dorny/paths-filter` + servis başına GitHub Actions matrix + `mvn -pl <modül> -amd`.
@@ -437,8 +439,12 @@ CREATE TABLE "order".rm_account_status (          -- sahibi: auth; olay: account
 );
 CREATE TABLE "order".rm_block_relation (          -- sahibi: user; olay: user.block.created / user.block.removed (DEĞİŞİKLİK)
     blocker_id UUID NOT NULL, blocked_id UUID NOT NULL,
-    source_seq BIGINT NOT NULL,                   -- user'ın (blocker) başına monoton sırası; boşluk = eksik olay
+    source_seq BIGINT NOT NULL,                   -- bilgi amaçlı; sıra takibi bu tabloda YAPILAMAZ (removed satırı siler, seq kaybolur)
     PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE TABLE "order".rm_delta_position (          -- delta projeksiyonları için aggregate başına son uygulanan sıra (FOR UPDATE ile kilitlenir)
+    source TEXT NOT NULL, aggregate_id UUID NOT NULL, last_seq BIGINT NOT NULL,
+    PRIMARY KEY (source, aggregate_id)            -- seq <= last_seq → tekrar (yok say); seq != last_seq+1 → boşluk (dur, sayaç); aksi → uygula + last_seq aynı TX
 );
 CREATE TABLE "order".rm_consumer_position (       -- tüketim konumu: tazelik buradan ölçülür, satırın yaşından değil
     source TEXT PRIMARY KEY,                      -- 'auth', 'user'
@@ -458,14 +464,15 @@ CREATE TABLE "order".rm_consumer_position (       -- tüketim konumu: tazelik bu
 | **Rebuild** | stream replay (Bölüm 12.4) veya sahibin keyset `export` ucu | Yeni tüketici sıfırdan kurabilir |
 
 **Tazelik ve karar kuralları:**
-- Tazelik, satırın `applied_at`'ından değil **tüketim konumundan** ölçülür: `rm_consumer_position.updated_at` ve `readmodel_lag_seconds{source}` (kaynağın son yayınladığı seq ile tüketilen seq farkı). Bir hesabın durumu bir ay değişmemiş olabilir; eski `source_time` gecikme değildir.
+- Tazelik, satırın `applied_at`'ından değil **tüketim konumundan** ölçülür: `readmodel_lag_seconds{source} = now − rm_consumer_position.last_event_time` (tüketilen son olayın kaynaktaki zamanı; konum satırı yoksa +Inf ve alarm). Kaynak head seq'ini yayınlıyorsa ek olarak `readmodel_seq_lag{source} = kaynak_head_seq − last_seq` tutulur; iki metrik farklı büyüklüktür, karıştırılmaz. Bir hesabın durumu bir ay değişmemiş olabilir; eski `source_time` gecikme değildir.
+- **Sessiz kaynak sorunu:** zaman bazlı lag, kaynak olay yayınlamadığında da büyür ve tamamen güncel bir read-model'de fail-closed tetikler. Bu yüzden her read-model kaynağı periyodik bir `<kaynak>.position.heartbeat` olayı (head seq + zaman) yayınlar; tüketici bunu yalnız konuma işler (projeksiyon değişmez). Heartbeat aralığı en sıkı kararın `maxLag`'ının en az yarısıdır (engel kararı 30 sn ise heartbeat ≤ 15 sn). Heartbeat yoksa bu kabul yazılır.
 - Her karar için "**en fazla ne kadar eski bilgiyle verilebilir**" ayrı cevaplanır: profil görselinin gecikmesi ile engelleme kararının gecikmesi aynı risk değildir. Örnek: engel kararı lag ≤ 30 sn ister; aşılırsa fail-closed (kaynağa sor veya reddet); hesap aktiflik bayrağı lag ≤ 5 dk tolere eder.
 - Satır yoksa davranış yazılıdır (varsayılan: fail-closed).
 - Read-model **karar** verdirir ama **kaynak** değildir; dışa açılmaz; başka servis okumaz.
 - **JWT claim alternatifi:** Kullanıcıya bağlı, nadir değişen bayraklar (`legal_ok`, `legal_rev`, `tier`) user JWT'de taşınır; değişince oturum sürümü (`sv`) artırılır → token yenilenir → claim güncellenir. Kural: claim'ler yetki **sinyali**dir, kaynak DB'yi değiştirmez; token ömrü kadar eskilik kabul edilmiş demektir.
 - Yazma niteliğindeki kontrol (hak tüketimi, stok rezervasyonu) read-model'den yapılamaz; senkron kalır ve saga ile korunur (Bölüm 11.4).
 
-**Doğrulama:** delta olayı sıra boşluğunda uygulanmıyor; snapshot'ta küçük revizyon yok sayılıyor; duplicate tek etki; replay deterministik; lag metriği ve alarm var; "satır yok" davranışı test edilmiş.
+**Doğrulama:** delta olayı sıra boşluğunda uygulanmıyor ve sayaç artıyor; snapshot'ta küçük/eşit revizyon yok sayılıyor; snapshot olayları karışık sırada teslim edilince son durum ve konum aynı (konum `GREATEST` ile ilerler, geri gitmez); duplicate tek etki; rebuild aynı export ile iki kez aynı satırları veriyor ve export'ta olmayan eski satırı siliyor; lag konumdan ölçülüyor (30 gün eski satır + taze konum ⇒ ALLOW); "satır yok" ve "konum yok" fail-closed; inbox TX'i içindeki çağrı rollback olunca ne projeksiyon ne konum değişiyor. **Çalışan hali (seviye 2):** `platform-messaging/readmodel` + `ReadModelBehaviourIT` (15 test, 6 mutasyon yakalandı; "uygula-sonra-kontrol-et" mutasyonu DB durumuyla görünmez — sayaç/spy projeksiyonla yakalanır).
 
 **Eşik:** Sıcak yoldaki her istek için kritik akış kaydı (Bölüm 1.2) README/`repo-context.md`'de; varsayılanı aşan her ek senkron bağımlılık ADR ister.
 
@@ -951,6 +958,7 @@ Olası nedenler ve düzeltme (sıralı) · Ne zaman eskalasyon · Kalıcı düze
 | Üreten | auth | gateway ve her servis (client interceptor) — **her biri kendi private key'iyle** | auth |
 | Doğrulayan | gateway (ve WebSocket handshake) — auth'un public key'iyle | tüm core servisler — `iss` → JWKS eşlemesiyle | yönetim servisi |
 | Algoritma | EdDSA (Ed25519) veya ES256 | EdDSA / ES256 | EdDSA / ES256 |
+| Kütüphane notu | Nimbus JOSE+JWT 10.x'in `Ed25519Signer/Verifier` sınıfları **opsiyonel** `com.google.crypto.tink` bağımlılığını çalışma zamanında ister (derleme geçer, ilk imzada `NoClassDefFoundError`). JDK 15+ Ed25519'u yerli destekler: platform-security'deki `JdkEd25519Signer/Verifier` (`Signature.getInstance("Ed25519")`) Tink'siz çalışır. Doğrulayıcı `alg`'ı EdDSA'ya sabitler; `alg`'a göre verifier seçmek (HS256 → MACVerifier) alg-confusion açığıdır (public anahtar byte'larını HMAC secret'i yapan token ile test edilir) | | |
 | Claim'ler | `typ`, `iss`, `aud`, `sub`, `iat`, `exp`, `sv`, iş bayrakları (`legal_ok`, `tier`) | `typ`, `jti`, `iss`=çağıran servis, `aud`=hedef, `sub` (opsiyonel), `act`, `iat`, `exp` | `typ=admin`, `iss`, `aud`, `sub`, `exp`, `sv`, (`roles`) |
 | TTL | kısa (örn. 15 dk) | çok kısa (30–45 sn) | kısa (örn. 15 dk) |
 | Taşıyıcı | `Authorization` | `X-Service-Auth` | `Authorization` |
@@ -982,7 +990,7 @@ A servisi kendi anahtarıyla imzalayınca B, token'ın A'dan geldiğini doğrula
 Kurallar:
 - **Kullanıcı isteğiyle çalışan çağrı** (`sub` = isteği yapan) ile **arka plan işi** (`sub` yok veya `on_behalf_of` claim'i ayrı) token'da ayırt edilir; hedef, arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem kabul etmez.
 - Bir servis yalnız kendi akışında gördüğü `sub`'ı aktarabilir; "her kullanıcı adına her şey" allowlist satırı **yoktur**.
-- Zincirleme delegasyonda (`A → B → C`) `act` zinciri korunur; C, zincirin her halkasını allowlist'te arar.
+- `act` = **doğrudan çağıran** servis ve her zaman `iss`'e eşittir (farklıysa 401); doğrulayan `kid`'i yalnız o issuer altında arar. Zincirleme delegasyonda (`A → B → C`) önceki halkalar ayrı bir `via` (dizi) claim'inde taşınır; C allowlist kararını `act` ile verir, `via`'yı audit ve isteğe bağlı ek kısıtlar için kullanır. `via` imzalayanın kendi beyanıdır; güvenlik sınırı `act == iss` + o issuer'ın anahtarıdır. (Doğrulandı: `act == iss` kontrolü kaldırılınca backoffice kendi geçerli anahtarıyla `act=order-service` diyerek delegasyonu geçti.)
 - Matris değişince `proj-security-review` ve `proj-architecture-boundary-review` çalışır; testler izinli/izinsiz aktör + yanlış `sub` + arka plan token'ıyla kullanıcı işlemi senaryolarını kapsar.
 
 **Replay koruması (`jti`) kararı:** RFC 9700 (OAuth 2.0 Security BCP) bearer token replay'ine karşı `jti` deposu yerine **sender-constrained** token (mTLS RFC 8705 / DPoP RFC 9449) + sıkı `aud` önerir. İç ağda TLS + 45 sn TTL + `aud` varken, her istekte Redis `SET NX` yapan bir replay guard ~45 sn'lik aynı-servis replay koruması satın alır; bedeli her çağrıda Redis RTT ve sert bir availability bağımlılığıdır. Karar: mTLS varsa replay guard **yok**; yoksa yalnız gateway → servis (dış kaynaklı) token'larda, **TTL sınırlı** bir depoda (asla boyut sınırlı — Spring Security'nin DPoP `jti` cache'i bu yüzden CVE aldı) ve fail politikası açıkça yazılmış olarak.
@@ -1025,10 +1033,10 @@ spring.cloud.gateway:
 ### 9.4 `ServiceJwtVerificationFilter`
 
 ```
-0. Path decode + normalize. Çift kodlama, '..'/'.', '//', '\', NUL → 400
+0. Path decode + normalize: filtre `/*`'a bağlı (yalnız `/internal/*` değil; `/v1/../internal/x` görülsün), `getRequestURI()` (ham; servlet path zaten decode edilmiş gelir) bir kez %XX decode + `URI.normalize`. /internal'a dokunan istekte (ham, decode edilmiş veya normalize edilmiş hali /internal ile başlıyorsa) kalan '%', '\', NUL, '//', ';', ham `%2F`, '.'/'..' segmenti → 400 `{"code":"INTERNAL_PATH_INVALID"}`; public kurallara ASLA geri düşülmez. Filtre DispatcherServlet'ten önce çalıştığı için 400/401/403 zarfını (`{code, message}`, token/kid sızdırmadan; 401'de `WWW-Authenticate: Bearer`) kendisi yazar.
 1. exclude-paths → doğrulama yok
 2. X-Service-Auth yok → 401
-3. typ / iss (bilinen imzalayıcı) / kid → JWKS'ten public key / imza / aud / exp(+leeway) → 401
+3. typ / iss (bilinen imzalayıcı) / kid → JWKS'ten public key (yalnız o issuer'ın anahtarları) / imza (alg header'a bakılmaz, EdDSA sabit) / aud (**tam eşitlik**: tek elemanlı `[bu-servis]`; çoklu aud → 401) / exp+nbf (±30 sn, enjekte edilen `Clock`) → 401
 4. [opsiyonel] jti daha önce görülmüş → 401   (jti yetki kontrolünden ÖNCE tüketilir)
 5. sub → attr x.accountId ; act → attr x.actor   (act == iss olmalı; farklıysa 401)
 6. internal-access FIRST-MATCH: eşleşen ilk kuralda act ∉ allowed-actors → 403
@@ -1045,7 +1053,7 @@ service-jwt:
   audience: order-api              # bu servisin aud'u
   service-name: order-service      # bu servisin act'i ve imzalarken iss'i
   private-key-path: /run/secrets/order-service-signing-key   # config tree ile mount edilir
-  jwks-path: /run/config/service-jwks.json                   # iss → public key; kid ile rotasyon
+  jwks-path: /run/config/service-jwks.json                   # issuer'a göre bölümlenmiş: {"gateway":{"keys":[...]},"order-service":{"keys":[...]}}; kid yalnız kendi issuer'ı altında aranır (aksi halde her kayıtlı servis kendi anahtarıyla başka iss taklit eder)
   ttl-seconds: 30
   replay-guard: { enabled: false }  # mTLS yoksa ve dış kaynaklı token'lar için gerekiyorsa açılır; TTL sınırlı depo
   exclude-paths: [/actuator/health, /actuator/info, /actuator/prometheus]
@@ -1276,7 +1284,7 @@ ALTER ROLE svc_order_migrate SET lock_timeout = '10s';                 -- DDL ki
 
   Uzun raporlama/export sorguları ayrı rol veya `SET LOCAL statement_timeout` ile; sıcak yol sorguları 10 sn'ye yaklaşıyorsa sorun timeout değil sorgudur.
 
-  **Row Level Security (opsiyon, varsayılan değil):** hesap sahipliği için ikinci savunma hattı olarak `ENABLE ROW LEVEL SECURITY` + `current_setting('app.account_id')` policy'si kullanılabilir; kural: bağlam **`SET LOCAL`** ile TX içinde verilir (`SET` PgBouncer transaction mode'da bir sonraki isteğe sızar), uygulama rolü `BYPASSRLS` değildir, view'ların sahibi superuser değildir, policy'siz tablo = herkese kapalı. Uygulama katmanındaki ownership kontrolü (Bölüm 9.7) kalkmaz; RLS onu tamamlar.
+  **Row Level Security (opsiyon, varsayılan değil):** hesap sahipliği için ikinci savunma hattı olarak `ENABLE ROW LEVEL SECURITY` + policy `USING (account_id = NULLIF(current_setting('app.account_id', true), '')::uuid)` kullanılabilir. **Neden bu biçim:** parametre hiç set edilmemişse `current_setting(name)` 42704 hatası verir; `SET LOCAL` yapılan TX bittikten sonra değer NULL değil boş string'dir ve `''::uuid` 22P02 verir — `missing_ok=true` + `NULLIF` ile bağlamsız sorgu hata yerine **0 satır** döndürür (kapalı varsayılan). Bağlam TX içinde `SELECT set_config('app.account_id', ?, true)` ile verilir (`SET LOCAL` literal ister, parametre bağlanamaz); düz `SET` PgBouncer transaction mode'da **başka bir istemcinin** sonraki TX'inde görünür (seviye 3'te gözlendi: 2 satır sızdı) ve Hikari'den dönen bağlantı da bağlamı taşır. Uygulama rolü `BYPASSRLS` değildir, view'ların sahibi superuser değildir, policy'siz tablo = herkese kapalı; tablo sahibi (migration rolü) `FORCE ROW LEVEL SECURITY` yoksa RLS'i atlar (backfill için istenen davranış, yazılır). Sahibi olmayan rolün `GRANT`'ı hata vermez, WARNING ile etkisiz kalır: yetki testi SQLState değil `information_schema.role_table_grants` üzerinden "grant yok" iddiasını doğrular. Uygulama katmanındaki ownership kontrolü (Bölüm 9.7) kalkmaz; RLS onu tamamlar.
 
   Microsoft Azure Architecture Center ve AWS Prescriptive Guidance aynı fiziksel sunucuyu paylaşmayı kabul eder; sorun şema/tablo paylaşımıdır. Rol ayrımı ileride şemayı ayrı instance'a taşımayı da kolaylaştırır (Bölüm 24).
 - **Zorlama — testle (ikincil):**
@@ -1297,7 +1305,7 @@ ALTER ROLE svc_order_migrate SET lock_timeout = '10s';                 -- DDL ki
 |---|---|
 | Konum | `<servis>-core/src/main/resources/db/migration` |
 | İsim | `V<n>__<snake>.sql` (artan tamsayı), `R__<ad>.sql` |
-| İlk dosya | `V1__init_schema.sql`: `CREATE SCHEMA IF NOT EXISTS <schema>;` |
+| İlk dosya | Şema 10.1'deki altyapı migration'ında (`CREATE SCHEMA … AUTHORIZATION svc_<x>_migrate`) yaratılır; `V1__*.sql` `CREATE SCHEMA` içermez, doğrudan ilk tabloyla başlar (`spring.flyway.schemas: <schema>`; history tablosu o şemada, migration rolü sahipliğinde). `CREATE SCHEMA IF NOT EXISTS` yalnız altyapı script'i olmayan tek-rol kurulumlarında. |
 | Ayar | `enabled: true`, `locations: classpath:db/migration`, `schemas: <schema>`, `clean-disabled: true`, `user/password` = migration rolü (uygulama datasource'undan ayrı). **`baseline-on-migrate` varsayılan olarak kapalıdır**: Flyway dokümanı bu ayarın, migration'ı yanlış (boş olmayan, yönetilmeyen) bir veritabanına uygulamayı önleyen kontrolü kaldırdığı konusunda uyarır. Mevcut bir DB'yi Flyway yönetimine alma, ayrı ve tek seferlik bir prosedürdür (`flyway baseline` komutu, belgelenmiş `baselineVersion`), config'te sürekli açık bir bayrak değil. |
 | JPA | `ddl-auto: validate`. Flyway ile `update`/`create` birlikte **kullanılmaz**. |
 | Değişmezlik | Base branch'teki `V*.sql` değiştirilmez, silinmez, yeniden adlandırılmaz; düzeltme yeni bir `V` dosyasıyla yapılır. Kural script + CI + AI hook ile zorlanır (Bölüm 19.4). |
@@ -1389,7 +1397,7 @@ Bu bölüm **ilk sprint** işidir; "sonra bakarız" denen tek konu değildir.
 | Restore provası | **Aylık**, otomatik: yedek ayrı bir container'a restore edilir, Flyway `validate` + smoke test koşar, sonucu alarm/rapor. Test edilmemiş yedek, yedek değildir. |
 | RPO/RTO | README'de yazılı (örn. RPO 5 dk, RTO 1 sa). Arşiv gecikmesi (`archive lag`) alarmı. |
 | HA | Tek compose host'unda araç ne olursa olsun HA **yoktur**. Seçenekler: managed PostgreSQL (standby + otomatik failover + PITR + dahili PgBouncer; küçük ekip için önerilen) veya ikinci host + streaming replica. Patroni ≥3 DCS node ister; tek host'ta anlamsız. |
-| Bağlantı bütçesi | Her PG bağlantısı bir OS process'i. HikariCP rehberi: havuz ≈ `(çekirdek × 2) + disk`; "daha az bağlantı daha hızlı". N servis × instance × havuz hesabı README'de. **PgBouncer** transaction mode (`default_pool_size` 20) `max_connections`'ı korur. Protokol seviyesi prepared statement'lar 1.21+ ile transaction mode'da desteklenir (`max_prepared_statements`; 1.24.1'den beri varsayılan 200; SQL `PREPARE` desteklenmez). Transaction mode kuralları: oturum durumu yok (`SET` yerine `SET LOCAL`, advisory lock yalnız `pg_advisory_xact_lock`, `LISTEN/NOTIFY` yok), Hikari `connection-init-sql`/`schema` gibi oturuma bağlı ayarlar kullanılmaz. Boot 4.1 `spring.datasource.connection-fetch=lazy` ile bağlantı yalnız ilk SQL'de alınır. |
+| Bağlantı bütçesi | Her PG bağlantısı bir OS process'i. HikariCP rehberi: havuz ≈ `(çekirdek × 2) + disk`; "daha az bağlantı daha hızlı". N servis × instance × havuz hesabı README'de. **PgBouncer** transaction mode (`default_pool_size` 20) `max_connections`'ı korur. Protokol seviyesi prepared statement'lar 1.21+ ile transaction mode'da desteklenir; `max_prepared_statements` 1.21–1.24.0'da varsayılan **0 (kapalı)**, 1.24.1'den itibaren 200 — sürüme güvenilmez, `pgbouncer.ini`'de **her zaman açıkça** `max_prepared_statements = 200` yazılır (kapalıyken JDBC `prepareThreshold` ile 42P05 "already exists", 26000 "does not exist" ve en tehlikelisi 08P01 / başka istemcinin planıyla yanlış sonuç üretir; 1.22.0'da gözlendi). JDBC sürücüsü için `ignore_startup_parameters = extra_float_digits`. SQL `PREPARE` desteklenmez. Transaction mode kuralları: oturum durumu yok (`SET` yerine `SET LOCAL`/`set_config(…, true)` — `server_reset_query` bu modda çalışmaz, `SET` başka istemcinin TX'ine sızar; advisory lock yalnız `pg_advisory_xact_lock`, `LISTEN/NOTIFY` yok), Hikari `connection-init-sql`/`schema` gibi oturuma bağlı ayarlar kullanılmaz. Boot 4.1 `spring.datasource.connection-fetch=lazy` ile bağlantı yalnız ilk SQL'de alınır. |
 | Gözlem | `pg_stat_statements` açık; postgres-exporter (bağlantı, replication slot, bloat, uzun transaction). |
 | Büyüyen tablolar | Outbox, audit, log, olay tabloları için retention ve gerekirse **partition** politikası tanımlıdır (Bölüm 10.6). |
 | Redis/Valkey | Güvenlik instance'ı AOF (`appendfsync everysec`); cache instance'ı kaybedilebilir. Sentinel veya managed. |
@@ -1700,7 +1708,7 @@ spring.rabbitmq: { publisher-confirm-type: correlated, publisher-returns: true, 
   - `RetryInterceptorBuilder.stateful()` + `RepublishMessageRecoverer` uygulama içi alternatiftir; 4.3'te broker tarafı retry varken gereksizdir.
 - **Tüketici zaman aşımı:** quorum queue için `consumer-timeout` policy anahtarı (ms; ya da `x-consumer-timeout` consumer argümanı; global varsayılan 30 dk) `basic.consume` anında okunur — policy tüketici başlamadan **önce** kurulur. Süre dolunca QQ ack'lenmemiş mesajı geri alır ve tüketiciye `basic.cancel` gönderir (kanal kapanmaz); Spring container consumer'ı yeniden başlatır, mesaj `redelivered=true` ile gelir (5 sn policy ile doğrulandı). Inbox TX'i bu süreden kısa tutulur; uzun işler outbox satırına devredilir.
 - `prefetch` açıkça (10–50; Spring varsayılanı **250**) ve `concurrency` ayarlanır.
-- Idempotent handler: inbox `ON CONFLICT (event_id) DO NOTHING` (Bölüm 11.3).
+- Idempotent handler: inbox `INSERT INTO inbox_event (handler, event_id) … ON CONFLICT (handler, event_id) DO NOTHING` (Bölüm 11.3; PK `(handler, event_id)` olduğu için `ON CONFLICT (event_id)` PostgreSQL'de "no unique constraint" hatası verir).
 - DLQ için izleme (derinlik > 0 alarmı) ve replay aracı bulunur.
 
 **Kaçın:** Gecikmesiz requeue (`ImmediateRequeueAmqpException` / `basic.nack requeue=true` ile DB kesintisinde sıcak döngü; QQ'da log/disk büyümesi). Consumer'ı prefetch'siz bırakmak. Commit'ten önce ack: mesaj çökmede kaybolur ve aynı tag'e ikinci ack/reject `PRECONDITION_FAILED unknown delivery tag` ile kanalı kapatır.
@@ -2736,8 +2744,11 @@ class OrderControllerTest {
 
     @Test
     void cancel_whenAuthenticatedAccountIsMissing_doesNotReachService() throws Exception {
+        // Kimlik yoklugu istemci girdisi hatasi degildir: platform-security resolver'i 401 ACCOUNT_CONTEXT_REQUIRED doner
+        // (guvenlik katmani duz {code, message} zarfi kullanir; is hatalari Bolum 7'deki zarfi).
         mockMvc.perform(post("/orders/{orderId}/cancel", orderId))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("ACCOUNT_CONTEXT_REQUIRED"));
         verifyNoInteractions(orderService);
     }
 
