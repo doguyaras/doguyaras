@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>broker-example</artifactId>
+  <!-- Seviye 3 kanit (referans Bolum 19.6): generic outbox -> GERCEK RabbitMQ 4.3 (quorum queue, native gecikmeli
+       retry, DLQ, stream) -> inbox'li tuketici; PostgreSQL gomulu (18.x binary). Docker gerekmez. Servisler bu modulu
+       kopyalamaz: OutboxEventPublisher / listener sablonu platform-messaging'e tasinacak parcalari gosterir. -->
+  <dependencyManagement><dependencies>
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>18.1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-messaging</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-amqp</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <!-- Jackson 3 (tools.jackson): Boot 4 BOM'unun yonettigi hat; payload/headers JSON'u icin -->
+    <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 5) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
