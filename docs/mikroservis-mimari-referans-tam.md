@@ -491,7 +491,7 @@ Sıra (Nygard, *Release It!*): önce **her hop'ta sert timeout**, sonra **bağı
 | Katman | Kural |
 |---|---|
 | Gateway | İstek başına toplam bütçe (örn. 3 sn). Downstream timeout'ları bunun altında. |
-| HTTP client | connect 1–2 sn, read 2–5 sn; hedef başına `resilience4j.circuitbreaker.instances.<hedef>` + `bulkhead` (eşzamanlı çağrı üst sınırı, semaphore). Circuit açıkken tanımlı `ServiceException` (503/`UPSTREAM_UNAVAILABLE`) döner, thread bloke olmaz. |
+| HTTP client | Timeout'lar gateway bütçesinden türetilir: senkron zincirdeki `connect + read` toplamı gateway bütçesinden **küçük** olmalı (bütçe 3 sn ise tek hop için connect 0,5 sn / read 1,5 sn; iskelette yavaş katılımcı 1,5 sn'de 503 aldı). connect 2 / read 5 sn yalnız arka plan/worker client'ları içindir. Hedef başına `resilience4j.circuitbreaker.instances.<hedef>` + `bulkhead` (semaphore). Sıra `CircuitBreaker(Bulkhead(http))`: circuit açıkken bulkhead izni alınmaz. `record-exceptions` yalnız belirsiz/erişilemez sonucu (timeout, IO, 5xx) içerir; 4xx iş kararları ve `BulkheadFullException` `ignore-exceptions`'a yazılır (Resilience4j listede olmayanı başarı sayar; yazılmazsa iş cevapları hata oranını sulandırır ya da kendi yük kısıtımız circuit'i açar). `bulkhead.max-wait-duration: 0` açıkça yazılır. Circuit açıkken tanımlı `ServiceException` (503/`UPSTREAM_UNAVAILABLE`) döner, thread bloke olmaz. |
 | Tuzak | Spring Cloud CircuitBreaker + Resilience4j entegrasyonu varsayılan **1 sn TimeLimiter** ve thread-pool bulkhead ekler; `resilience4j.timelimiter.instances.*` ayarlanmaz ya da `disable-time-limiter` denmezse 5 sn'lik read timeout anlamsızlaşır. |
 | Thread modeli | `spring.threads.virtual.enabled=true` (Java 25). Tomcat thread sınırı kalkar; bloklayan IO ucuzlar. Hikari havuzu bilinçli sınır olarak kalır (Bölüm 10.5). |
 | Retry | Senkron yolda yok (`Retryer.NEVER_RETRY`). Retry outbox/saga worker'larında, backoff ile. |
@@ -690,17 +690,21 @@ public interface InventoryClient {                                   // hedef se
 ```yaml
 spring.http.serviceclient.inventory:
   base-url: ${services.inventory.base-url}
-  connect-timeout: 2s
-  read-timeout: 5s
-resilience4j.circuitbreaker.instances.inventory: { failure-rate-threshold: 50, wait-duration-in-open-state: 20s, sliding-window-size: 20 }
-resilience4j.bulkhead.instances.inventory: { max-concurrent-calls: 25 }
+  connect-timeout: 500ms        # connect + read < gateway bütçesi (3 sn); worker client'ları için 2s / 5s
+  read-timeout: 1500ms
+resilience4j.circuitbreaker.instances.inventory:
+  { failure-rate-threshold: 50, wait-duration-in-open-state: 20s, sliding-window-size: 20,
+    record-exceptions: [java.io.IOException, org.springframework.web.client.HttpServerErrorException],
+    ignore-exceptions: [com.acme.platform.core.ServiceException, io.github.resilience4j.bulkhead.BulkheadFullException] }
+resilience4j.bulkhead.instances.inventory: { max-concurrent-calls: 25, max-wait-duration: 0 }
 ```
 
 Client grubu için ortak `ClientHttpRequestInterceptor` / Feign `RequestInterceptor` şunları sağlar:
 - **Kimlik:** `aud` = hedefin audience'ı, `iss` = bu servis, `sub` = `X-Subject-Id`; imza bu servisin **kendi** private key'iyle (Bölüm 9.2); ardından header silinir.
 - **Hata çevirisi:** Upstream 4xx → `ServiceException` (status korunur, gövde okunmaz ve loglanmaz); 5xx/timeout → 502/503 `UPSTREAM_*`.
 - **Dayanıklılık:** circuit breaker + bulkhead (Bölüm 4.7). Retry **yok**; retry outbox ve saga worker'larındadır.
-- **Tracing:** W3C header'ları otomatik (`micrometer` entegrasyonu).
+- **Tracing:** W3C header'ları otomatik, ama **yalnız** client Boot'un enjekte ettiği `RestClient.Builder` (veya `@ImportHttpServices`) ile kurulduysa: `RestClient.builder()`/`RestClient.create()` observation customizer'ını atlar ve `traceparent` göndermez (iskelette mutasyonla gösterildi).
+- **Arka plan çağrısında kimlik:** worker'da HTTP isteği yoktur; interceptor'ın varsayılan "mevcut istekteki hesap" kaynağı boş kalır ve katılımcı `REQUIRED` delegasyonda 403 döner (her saga `MANUAL_REVIEW`'e düşer). Worker `sub`'ı yalnız kendi akışının kalıcı kaydından (saga/outbox satırı) aktarır; client `sub`'ı çağrı parametresinden alır.
 
 **Kaçın:** Karşı tarafta `@RequestHeader("X-Subject-Id")` beklemek. Interceptor bu header'ı sildiği için kimlik orada `@CurrentAccount` ile okunmalı. Sıcak yolda **okuma** amaçlı client çağrısı (Bölüm 4.6).
 
@@ -884,7 +888,7 @@ Her testten sonra appender ayrılır ve logger seviyesi geri yüklenir (Bölüm 
 ### 8.6 Tracing
 
 - Boot 4: **`spring-boot-starter-opentelemetry`** (OTel API + Micrometer tracing bridge + metrik ve trace için OTLP exporter'lar; ayarlar `management.*` altında, `otel.*` değil). Ayrı ayrı `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` eklemek 3.x kalıntısıdır.
-- `propagation.type: W3C`, `spring.reactor.context-propagation: auto`, HTTP client micrometer entegrasyonu açık
+- `propagation.type: W3C`, `spring.reactor.context-propagation: auto`, HTTP client micrometer entegrasyonu açık (client'lar Boot'un `RestClient.Builder` bean'inden kurulur, Bölüm 6.8). Test: katılımcının aldığı `traceparent` W3C biçiminde (`00-<32hex>-<16hex>-<2hex>`; flags `01` veya `03` olabilir) ve trace-id çağırana gelenle aynıdır.
 - **Sampling:** Uygulama %100 head sampling ile Alloy/OTel Collector'a gönderir; Collector **tail sampling** yapar: hatalı ve yavaş (p99 üstü) izlerin tamamı, kalanın %10'u (`tailsampling` processor; `decision_wait` 30 sn; bir izin tüm span'leri aynı collector'a gelmeli). Boot varsayılanı (%10 head) düşük trafikte yeterli olsa da hata izlerini kaybettirir.
 - **Asenkron sınırlar:** Outbox satırında `traceparent` ve `tracestate` kolonları tutulur. Poller trace'e bu değerlerden devam eder. MQ header'larına inject edilir. Redis zarfında trace metadata **HMAC kapsamına dahildir**. WebSocket handshake ve STOMP frame'leri için interceptor bulunur.
 - **Kural:** Trace id yetki sinyali değildir. Span attribute'larına PII konmaz. Route'lar static template olarak yazılır. Trace id Loki label'ı yapılmaz.
@@ -992,7 +996,7 @@ A servisi kendi anahtarıyla imzalayınca B, token'ın A'dan geldiğini doğrula
 | Çağıran (`act`) | Hedef işlem | Kullanıcı bağlamı (`sub`) | Kaynak yetkisi kontrolü | Bağlam kaynağı | Ele geçirilirse zarar |
 |---|---|---|---|---|---|
 | gateway | her public uç | zorunlu (user JWT'den) | hedef: ownership | kullanıcı isteği | tüm kullanıcı işlemleri → gateway en kritik bileşen |
-| order-service | `subscription: consume/confirm/compensate` | zorunlu; yalnız kendi sipariş akışındaki hesap | subscription: `operation_key` + hesap eşleşmesi | kullanıcı isteği (senkron) | yalnız hak tüketimi; başka işlem yok |
+| order-service | `subscription: consume/confirm/compensate/get` | zorunlu; yalnız kendi saga kaydındaki hesap | subscription: `operation_key` + hesap eşleşmesi | consume: kullanıcı isteği (senkron); confirm/compensate/get: recovery worker, `sub` = `saga.account_id` (isteğin `sub`'ı saga kaydında saklanır) | yalnız hak tüketimi; başka işlem yok |
 | order-service (worker) | `notification: commands` | opsiyonel | – | arka plan (outbox) | spam gönderimi → rate limit |
 | backoffice-service | `user: moderate` | yok (admin adına; admin id ayrı claim) | user: admin rolü + audit | panel isteği | moderasyon kararları |
 
@@ -1630,7 +1634,7 @@ POST /internal/<kaynak>/operations/{operationKey}/compensate
 | Parametre | Değer |
 |---|---|
 | deadline | 15 sn |
-| HTTP client timeout | 2 / 5 sn |
+| HTTP client timeout | Senkron consume: 0,5 / 1,5 sn (connect + read < gateway bütçesi); worker'ın confirm/compensate/get çağrıları: 2 / 5 sn |
 | poll | 5 sn |
 | lease | 60 sn |
 | max backoff | 5 dk |
@@ -1906,7 +1910,7 @@ management:
   tracing: { propagation.type: W3C, sampling.probability: <oran> }
   otlp.tracing.endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT}
 logging.pattern.correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
-app.http: { connect-timeout-ms: 2000, read-timeout-ms: 5000 }
+app.http: { connect-timeout-ms: 500, read-timeout-ms: 1500 }   # connect + read < gateway bütçesi (Bölüm 4.7); worker client'ları ayrı grupta 2000 / 5000
 ```
 
 Servis dosyası:
@@ -2979,7 +2983,7 @@ Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu 
 | Modulith `verify()` + negatif test, event publication registry atomikliği ve en-az-bir-kez teslimi, 2.1.1 `withMinAge` hatası (1.1, 11.2, 16) | 12 test, gömülü PostgreSQL 18; 5/5 mutasyon; ACCEPT | 1/2 | `modulith-example` |
 | OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 18.4, 20) | 16 test: baseline gate'i, 8 varyant, araç sınırları sabitlendi (3.1 tip körlüğü, opsiyonel istek alanı adı, operationId); 9 mutasyon, 8 yakalandı + 1 beklenen uyumlu; ACCEPT | 1 | `contract-example` |
 | gitleaks (geçmiş + çalışma ağacı, tarama hatası ayrımı) + config-lint (15.3, 18.3, 19.5) | 30 test, 10/11 mutasyon; CI adımları fail-closed; ACCEPT | Y | `blueprint/scripts` |
-| İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart (4.7, 9.2.1, 11.4) | *sprint koşuyor* | 3 | `runtime-example` (bekleniyor) |
+| İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart, trace yayılımı (4.7, 6.8, 8.6, 9.2.1, 11.4) | İki gerçek Boot uygulaması, gerçek HTTP + servis JWT + PostgreSQL; 8 senaryo, 7/8 mutasyon + 1 eşdeğer; ACCEPT. Bulgu: worker'ın `sub` kaynağı ve timeout/bütçe çelişkisi | 3 | `runtime-example` |
 | RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, consumer-timeout, broker down (12.3, 12.4) | 12 senaryo PASS: yerelde 4.3.0, CI'da 4.3.6 (Actions run 36554502553); 6 mutasyon yakalandı, 1 eşdeğer mutasyon açıklandı | 3 | `broker-example/BrokerBehaviourIT` |
 | Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | Headless `claude -p` oturumunda migration hook'u engelledi, review-gate sordu, damga skill çağrısıyla yazıldı; 7 kusur bulundu ve düzeltildi (hook alt dizin fail-open'ı dahil) | S | `blueprint/README.md` gerçek oturum tablosu |
 | 12 review skill'i gerçek bir PR'da (19.3) | Tohumlanmış kusurlu PR'da 67 beklenen eşleşmeden 63'ü yakalandı, 3 tuzağın hiçbiri işaretlenmedi; kaçırılanlar skill metinlerine işlendi (revize metin yeniden koşulmadı) | S | doguyaras/doguyaras PR #1 özet yorumu |
@@ -21124,7 +21128,7 @@ public class SubscriptionInternalController {
     <spring-boot.version>4.1.1</spring-boot.version>
     <archunit.version>1.5.1</archunit.version>
   </properties>
-  <modules><module>platform-core</module><module>platform-messaging</module><module>order-api</module><module>order-core</module><module>broker-example</module><module>platform-parameters</module><module>rate-limit-example</module><module>modulith-example</module><module>contract-example</module><module>platform-security</module><module>db-security-example</module></modules>
+  <modules><module>platform-core</module><module>platform-messaging</module><module>order-api</module><module>order-core</module><module>broker-example</module><module>platform-parameters</module><module>rate-limit-example</module><module>modulith-example</module><module>contract-example</module><module>platform-security</module><module>db-security-example</module><module>runtime-example</module></modules>
   <dependencyManagement><dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-dependencies</artifactId><version>${spring-boot.version}</version><type>pom</type><scope>import</scope></dependency>
     <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
@@ -22297,6 +22301,1957 @@ final class RedisServerProcess {
         } catch (IOException e) {
             return false;
         }
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>runtime-example</artifactId>
+  <!-- Seviye 3 runtime ornegi (referans Bolum 4.7, 6.8, 8.6, 9.2-9.5, 11.4-11.5): iki gercek Spring Boot uygulamasi
+       (OrderApp = saga koordinatoru, SubscriptionApp = katilimci) gercek HTTP + servis JWT + Resilience4j ile konusur.
+       Iki uygulama tek modulde durur ki test ayni JVM'de ikisini ayri context/port ile ayaga kaldirabilsin;
+       gercek projede her biri kendi *-core modulundedir. -->
+  <properties>
+    <resilience4j.version>2.4.0</resilience4j.version>
+    <!-- BOM import eden iskelette @PathVariable adlari icin -parameters elle acilir (platform-security ile ayni sebep) -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+  </properties>
+  <dependencyManagement><dependencies>
+    <!-- Gomulu PostgreSQL 18 (Docker olmayan ortamda gercek PG) -->
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>18.1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-core</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-security</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-messaging</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-restclient</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <!-- Bolum 8.6: Boot 4'te tek starter (OTel API + Micrometer tracing bridge + OTLP exporter) -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-opentelemetry</artifactId></dependency>
+    <!-- Bolum 4.7: hedef basina circuit breaker + semaphore bulkhead; Spring Cloud CircuitBreaker YOK (gizli 1 sn TimeLimiter tuzagi) -->
+    <dependency><groupId>io.github.resilience4j</groupId><artifactId>resilience4j-spring-boot4</artifactId><version>${resilience4j.version}</version></dependency>
+    <dependency><groupId>io.github.resilience4j</groupId><artifactId>resilience4j-circuitbreaker</artifactId><version>${resilience4j.version}</version></dependency>
+    <dependency><groupId>io.github.resilience4j</groupId><artifactId>resilience4j-bulkhead</artifactId><version>${resilience4j.version}</version></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/OrderApp.java`
+
+```java
+package com.acme.runtime.order;
+
+import java.util.Arrays;
+import java.util.stream.Stream;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+/**
+ * Saga koordinatoru (referans Bolum 11.4): POST /v1/orders istek yolunda begin -> uzak consume -> domain + success;
+ * recovery worker @Scheduled ile confirm/compensate eder. Katilimciya giden tek client HTTP + servis JWT +
+ * circuit breaker + bulkhead ile korunur (Bolum 4.7, 6.8).
+ *
+ * Config dosyasi order-app.yml (ayni modulde SubscriptionApp de var; application.yml paylasilmaz).
+ */
+@SpringBootApplication
+@EnableScheduling
+@ConfigurationPropertiesScan
+public class OrderApp {
+
+    public static final String CONFIG_NAME = "order-app";
+
+    public static ConfigurableApplicationContext start(String... args) {
+        return new SpringApplicationBuilder(OrderApp.class).run(withConfigName(args));
+    }
+
+    public static void main(String[] args) { start(args); }
+
+    static String[] withConfigName(String[] args) {
+        return Stream.concat(Stream.of("--spring.config.name=" + CONFIG_NAME), Arrays.stream(args)).toArray(String[]::new);
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/client/SubscriptionParticipantClient.java`
+
+```java
+package com.acme.runtime.order.client;
+
+import com.acme.platform.messaging.saga.SagaParticipant;
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+/**
+ * SagaParticipant'in HTTP implementasyonu (referans Bolum 6.8, 11.4). Istek yolu (consume) ve recovery worker
+ * (confirm/compensate/get) AYNI client'i, dolayisiyla ayni circuit breaker ve bulkhead'i kullanir: hedef basina tek
+ * koruma. Sira CircuitBreaker(Bulkhead(http)): circuit acikken bulkhead izni bile alinmaz, thread bloke olmaz.
+ *
+ * Hata cevirisi (govde okunmaz/loglanmaz): 401/403 -> Forbidden, 409 ve diger 4xx -> Conflict, 5xx / IO / timeout /
+ * circuit acik / bulkhead dolu -> Unavailable (sonuc belirsiz; koordinator GET ile sorar). Retry YOK (Bolum 4.7):
+ * tekrar deneme saga worker'inda backoff ile yapilir.
+ *
+ * sub: servis JWT'sindeki sub her cagrida saga'nin hesabidir. Worker arka planda calissa da sub'i kendi akisinda
+ * (saga kaydinda) gordugu hesaptan aktarir; katilimcinin delegasyon kurali REQUIRED oldugu icin bu zorunludur.
+ */
+public class SubscriptionParticipantClient implements SagaParticipant {
+
+    private static final Logger log = LoggerFactory.getLogger(SubscriptionParticipantClient.class);
+    private static final String BASE = "/internal/subscription/accounts/{accountId}/operations/{operationKey}";
+    private static final ThreadLocal<UUID> SUBJECT = new ThreadLocal<>();
+
+    record OperationResponse(String state) {}
+
+    private final RestClient rest;
+    private final CircuitBreaker circuitBreaker;
+    private final Bulkhead bulkhead;
+    private final String serviceName;
+
+    /**
+     * @param rest RestClient: base-url, timeout'lu request factory ve ServiceJwtClientInterceptor(subjectContext()) ile
+     *             kurulmus olmali (OrderConfig).
+     */
+    public SubscriptionParticipantClient(RestClient rest, CircuitBreaker circuitBreaker, Bulkhead bulkhead, String serviceName) {
+        this.rest = Objects.requireNonNull(rest);
+        this.circuitBreaker = Objects.requireNonNull(circuitBreaker);
+        this.bulkhead = Objects.requireNonNull(bulkhead);
+        this.serviceName = Objects.requireNonNull(serviceName);
+    }
+
+    /** ServiceJwtClientInterceptor'un sub kaynagi: o anki cagrinin hesabi (yalniz bu client'in cagri suresince dolu). */
+    public static Supplier<Optional<UUID>> subjectContext() { return () -> Optional.ofNullable(SUBJECT.get()); }
+
+    @Override
+    public State consume(String callerService, UUID accountId, UUID operationKey, String operationType, int amount) {
+        requireSelf(callerService);
+        return call("consume", accountId, () -> state(rest.post().uri(BASE + "/consume", accountId, operationKey)
+                .body(Map.of("operationType", operationType, "amount", amount))
+                .retrieve().body(OperationResponse.class)));
+    }
+
+    @Override
+    public Optional<State> get(String callerService, UUID accountId, UUID operationKey) {
+        requireSelf(callerService);
+        return call("get", accountId, () -> {
+            try {
+                return Optional.of(state(rest.get().uri(BASE, accountId, operationKey).retrieve().body(OperationResponse.class)));
+            } catch (HttpClientErrorException.NotFound e) {
+                return Optional.<State>empty();                             // kayit yok: consume hic uygulanmadi
+            }
+        });
+    }
+
+    @Override
+    public State confirm(String callerService, UUID accountId, UUID operationKey) {
+        requireSelf(callerService);
+        return call("confirm", accountId, () -> state(rest.post().uri(BASE + "/confirm", accountId, operationKey)
+                .retrieve().body(OperationResponse.class)));
+    }
+
+    @Override
+    public State compensate(String callerService, UUID accountId, UUID operationKey) {
+        requireSelf(callerService);
+        return call("compensate", accountId, () -> state(rest.post().uri(BASE + "/compensate", accountId, operationKey)
+                .retrieve().body(OperationResponse.class)));
+    }
+
+    private <T> T call(String operation, UUID accountId, Supplier<T> http) {
+        Supplier<T> translated = () -> translate(operation, accountId, http);
+        Supplier<T> guarded = CircuitBreaker.decorateSupplier(circuitBreaker, Bulkhead.decorateSupplier(bulkhead, translated));
+        try {
+            return guarded.get();
+        } catch (CallNotPermittedException e) {
+            log.warn("participant call short-circuited: target=subscription operation={} circuitState=OPEN", operation);
+            throw new ParticipantUnavailableException("circuit open");
+        } catch (BulkheadFullException e) {
+            log.warn("participant call rejected: target=subscription operation={} reason=BULKHEAD_FULL", operation);
+            throw new ParticipantUnavailableException("bulkhead full");
+        }
+    }
+
+    /** Circuit breaker cevrilmis istisnayi gorur: yalniz ParticipantUnavailableException hata sayilir (order-app.yml). */
+    private <T> T translate(String operation, UUID accountId, Supplier<T> http) {
+        SUBJECT.set(accountId);
+        try {
+            return http.get();
+        } catch (HttpStatusCodeException e) {
+            HttpStatusCode status = e.getStatusCode();
+            log.warn("participant call failed: target=subscription operation={} status={}", operation, status.value());
+            if (status.is5xxServerError() || status.value() == 429) throw new ParticipantUnavailableException("upstream " + status.value());
+            if (status.value() == 401 || status.value() == 403) throw new ParticipantForbiddenException("upstream " + status.value());
+            throw new ParticipantConflictException("upstream " + status.value());
+        } catch (RestClientException e) {
+            // ResourceAccessException (connect/read timeout, baglanti koptu) ve yarim govde: sonuc belirsiz
+            log.warn("participant call failed: target=subscription operation={} exceptionType={}", operation,
+                    e.getClass().getSimpleName());
+            throw new ParticipantUnavailableException("upstream io: " + e.getClass().getSimpleName());
+        } finally {
+            SUBJECT.remove();
+        }
+    }
+
+    private static State state(OperationResponse body) {
+        if (body == null || body.state() == null) throw new ParticipantUnavailableException("empty participant response");
+        return State.valueOf(body.state());
+    }
+
+    /** act claim'i imzalayan anahtardan gelir; parametre yalniz tutarlilik kontrolu icin. */
+    private void requireSelf(String callerService) {
+        if (!serviceName.equals(callerService)) {
+            throw new IllegalArgumentException("client signs as " + serviceName + ", not " + callerService);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/config/OperationConsistencyProperties.java`
+
+```java
+package com.acme.runtime.order.config;
+
+import com.acme.platform.messaging.saga.SagaProperties;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+
+/** Bolum 11.4 "Isletim degerleri" (operation-consistency.*); pollMillis recovery worker'in @Scheduled araligidir. */
+@ConfigurationProperties("operation-consistency")
+public record OperationConsistencyProperties(
+        @DefaultValue("15") long deadlineSeconds,
+        @DefaultValue("60") long leaseSeconds,
+        @DefaultValue("300") long maxBackoffSeconds,
+        @DefaultValue("15") long warnAfterMinutes,
+        @DefaultValue("30") long retentionDays,
+        @DefaultValue("50") int batchSize,
+        @DefaultValue("5000") long pollMillis) {
+
+    public SagaProperties toSagaProperties() {
+        return new SagaProperties(deadlineSeconds, leaseSeconds, maxBackoffSeconds, warnAfterMinutes, retentionDays, batchSize);
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/config/OrderConfig.java`
+
+```java
+package com.acme.runtime.order.config;
+
+import com.acme.platform.messaging.saga.LocalSagaStore;
+import com.acme.platform.messaging.saga.SagaRecoveryWorker;
+import com.acme.platform.security.client.ServiceJwtClientInterceptor;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.runtime.order.client.SubscriptionParticipantClient;
+import com.acme.runtime.order.flow.OrderCreationFlow;
+import com.acme.runtime.order.web.GatewayIdentityFilter;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.net.http.HttpClient;
+import java.time.Clock;
+import java.util.Set;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.client.RestClient;
+
+@Configuration(proxyBeanMethods = false)
+public class OrderConfig {
+
+    /** Resilience4j instance adi = hedef servis (order-app.yml: resilience4j.*.instances.subscription). */
+    public static final String SUBSCRIPTION_TARGET = "subscription";
+
+    @Bean
+    public Clock clock() { return Clock.systemUTC(); }
+
+    @Bean
+    public LocalSagaStore localSagaStore(NamedParameterJdbcTemplate jdbc, PlatformTransactionManager tm,
+                                         OperationConsistencyProperties props, Clock clock) {
+        return new LocalSagaStore(jdbc, tm, "order", props.toSagaProperties(), clock);
+    }
+
+    /**
+     * Boot'un RestClient.Builder'i kullanilir: observation (W3C traceparent) customizer'i yalniz bu builder'da vardir
+     * (Bolum 8.6). RestClient.create()/builder() ile kurulan client trace baglamini TASIMAZ.
+     */
+    @Bean
+    public SubscriptionParticipantClient subscriptionParticipantClient(RestClient.Builder builder, SubscriptionClientProperties props,
+                                                                       ServiceJwtSigner signer, CircuitBreakerRegistry circuitBreakers,
+                                                                       BulkheadRegistry bulkheads) {
+        HttpClient http = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(props.connectTimeout())
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
+        factory.setReadTimeout(props.readTimeout());
+        RestClient rest = builder
+                .baseUrl(props.baseUrl())
+                .requestFactory(factory)
+                .requestInterceptor(new ServiceJwtClientInterceptor(signer, props.audience(), SubscriptionParticipantClient.subjectContext()))
+                .build();
+        return new SubscriptionParticipantClient(rest, circuitBreakers.circuitBreaker(SUBSCRIPTION_TARGET),
+                bulkheads.bulkhead(SUBSCRIPTION_TARGET), signer.serviceName());
+    }
+
+    @Bean
+    public SagaRecoveryWorker sagaRecoveryWorker(LocalSagaStore store, SubscriptionParticipantClient participant,
+                                                 OperationConsistencyProperties props, Clock clock) {
+        return new SagaRecoveryWorker(store, participant, OrderCreationFlow.CALLER, props.toSagaProperties(), clock);
+    }
+
+    /** Public uclar yalniz gateway'in servis JWT'siyle (act=gateway, sub=hesap) cagrilabilir. */
+    @Bean
+    public FilterRegistrationBean<GatewayIdentityFilter> gatewayIdentityFilter(ServiceJwtVerifier verifier) {
+        var reg = new FilterRegistrationBean<>(new GatewayIdentityFilter(verifier, Set.of("gateway")));
+        reg.setOrder(Ordered.HIGHEST_PRECEDENCE + 11);                  // /internal filtresiyle ayni katman
+        reg.addUrlPatterns("/v1/*");
+        return reg;
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/config/SubscriptionClientProperties.java`
+
+```java
+package com.acme.runtime.order.config;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.springframework.validation.annotation.Validated;
+
+/**
+ * Katilimci client'i (clients.subscription.*). Timeout'lar ACIK yazilir: varsayilan (sonsuz/uzun) read timeout
+ * circuit breaker ve bulkhead'i anlamsizlastirir (Bolum 4.7 "once her hop'ta sert timeout").
+ */
+@Validated
+@ConfigurationProperties("clients.subscription")
+public record SubscriptionClientProperties(
+        @NotBlank String baseUrl,
+        @DefaultValue("subscription-api") String audience,
+        @NotNull Duration connectTimeout,
+        @NotNull Duration readTimeout) {}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/exception/OrderRuntimeErrorCode.java`
+
+```java
+package com.acme.runtime.order.exception;
+
+import com.acme.platform.core.ErrorCode;
+import org.springframework.http.HttpStatus;
+
+/** POST /v1/orders hata kodlari (order blogu 11000-11999; order-core'daki 110xx ile cakismasin diye 111xx). */
+public enum OrderRuntimeErrorCode implements ErrorCode {
+    UPSTREAM_UNAVAILABLE(11101, "Upstream service unavailable.", HttpStatus.SERVICE_UNAVAILABLE),
+    UPSTREAM_REJECTED(11102, "Upstream service rejected the call.", HttpStatus.BAD_GATEWAY),
+    OPERATION_IN_PROGRESS(11103, "Operation is in progress.", HttpStatus.CONFLICT),
+    OPERATION_CANCELLED(11104, "Operation was cancelled.", HttpStatus.CONFLICT),
+    QUOTA_REJECTED(11105, "Quota is not sufficient.", HttpStatus.UNPROCESSABLE_CONTENT),
+    RESOURCE_ALREADY_ORDERED(11106, "Resource is already ordered.", HttpStatus.CONFLICT);
+
+    private final int code;
+    private final String message;
+    private final HttpStatus httpStatus;
+
+    OrderRuntimeErrorCode(int code, String message, HttpStatus httpStatus) {
+        this.code = code; this.message = message; this.httpStatus = httpStatus;
+    }
+
+    @Override public int getCode() { return code; }
+    @Override public String getMessage() { return message; }
+    @Override public String getService() { return "order"; }
+    @Override public HttpStatus getHttpStatus() { return httpStatus; }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/flow/OrderCreationFlow.java`
+
+```java
+package com.acme.runtime.order.flow;
+
+import com.acme.platform.messaging.saga.LocalSagaStore;
+import com.acme.platform.messaging.saga.LocalSagaStore.BeginResult;
+import com.acme.platform.messaging.saga.SagaCancelledException;
+import com.acme.platform.messaging.saga.SagaParticipant;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantConflictException;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantForbiddenException;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantUnavailableException;
+import com.acme.platform.messaging.saga.SagaParticipant.State;
+import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Service;
+
+/**
+ * Istek yolu (referans Bolum 11.4 adim 1-3): begin (ayri TX) -> consume (TX DISI, ayni operationKey) -> domain +
+ * success() (ayni TX). Uzak cagri belirsiz bittiyse (timeout, 5xx, circuit acik) saga STARTED birakilir: deadline
+ * dolunca recovery worker GET ile uzlasir ve telafi eder. Istek yolunda retry yok (Bolum 4.7).
+ */
+@Service
+public class OrderCreationFlow {
+
+    public static final String CALLER = "order-service";
+    public static final String SCOPE = "ORDER_CREATE";
+    public static final String STEP = "quota";
+    public static final String OPERATION_TYPE = "ORDER_QUOTA";
+
+    public enum Kind { OK, REPLAY, IN_PROGRESS, CANCELLED, REJECTED, UPSTREAM_UNAVAILABLE, UPSTREAM_REJECTED, DOMAIN_CONFLICT }
+
+    public record Result(Kind kind, String detail, UUID sagaId) {}
+
+    private final LocalSagaStore store;
+    private final SagaParticipant participant;
+    private final OrderTransactionService transactions;
+
+    public OrderCreationFlow(LocalSagaStore store, SagaParticipant participant, OrderTransactionService transactions) {
+        this.store = store;
+        this.participant = participant;
+        this.transactions = transactions;
+    }
+
+    public Result createOrder(UUID accountId, UUID operationKey, UUID resourceId) {
+        BeginResult begin = store.begin(accountId, SCOPE, operationKey, STEP);
+        UUID sagaId = begin.saga().id();
+        if (!begin.created()) {                                           // ayni key: idempotent replay
+            return switch (begin.saga().status()) {
+                case SUCCEEDED, CONFIRMED -> new Result(Kind.REPLAY, begin.saga().result(), sagaId);
+                case COMPENSATED, MANUAL_REVIEW -> new Result(Kind.CANCELLED, "OPERATION_CANCELLED", sagaId);
+                default -> new Result(Kind.IN_PROGRESS, "OPERATION_IN_PROGRESS", sagaId);
+            };
+        }
+        State state;
+        try {
+            state = participant.consume(CALLER, accountId, operationKey, OPERATION_TYPE, 1);
+        } catch (ParticipantUnavailableException e) {
+            return new Result(Kind.UPSTREAM_UNAVAILABLE, "UPSTREAM_UNAVAILABLE", sagaId);   // STARTED kalir; deadline -> recovery
+        } catch (ParticipantForbiddenException | ParticipantConflictException e) {
+            store.fail(sagaId);                                           // katilimci reddetti: telafi (no-op/tombstone)
+            return new Result(Kind.UPSTREAM_REJECTED, "UPSTREAM_REJECTED", sagaId);
+        }
+        if (state != State.APPLIED) {
+            store.fail(sagaId);
+            return new Result(Kind.REJECTED, "QUOTA_" + state, sagaId);
+        }
+        try {
+            UUID orderId = transactions.createOrder(sagaId, accountId, operationKey, resourceId);
+            return new Result(Kind.OK, "ORDER:" + orderId, sagaId);
+        } catch (SagaCancelledException e) {
+            return new Result(Kind.CANCELLED, "OPERATION_CANCELLED", sagaId);
+        } catch (DuplicateKeyException e) {
+            store.fail(sagaId);                                           // domain uniqueness reddetti -> telafi
+            return new Result(Kind.DOMAIN_CONFLICT, "RESOURCE_ALREADY_ORDERED", sagaId);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/flow/OrderTransactionService.java`
+
+```java
+package com.acme.runtime.order.flow;
+
+import com.acme.platform.messaging.saga.LocalSagaStore;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.util.UUID;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Domain yazimi + saga success() AYNI local TX'te, ayri bir bean uzerinden (referans Bolum 11.4 adim 3). success()
+ * compare-and-set kaybederse (recovery iptal etti) SagaCancelledException firlar ve siparis satiri rollback olur.
+ */
+@Service
+public class OrderTransactionService {
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final LocalSagaStore sagaStore;
+    private final Clock clock;
+
+    public OrderTransactionService(NamedParameterJdbcTemplate jdbc, LocalSagaStore sagaStore, Clock clock) {
+        this.jdbc = jdbc;
+        this.sagaStore = sagaStore;
+        this.clock = clock;
+    }
+
+    @Transactional
+    public UUID createOrder(UUID sagaId, UUID accountId, UUID operationKey, UUID resourceId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO "order".order_item (id, account_id, resource_id, operation_key, created_at)
+                VALUES (:id, :a, :r, :k, :now)""",
+                new MapSqlParameterSource().addValue("id", id).addValue("a", accountId).addValue("r", resourceId)
+                        .addValue("k", operationKey).addValue("now", Timestamp.from(clock.instant())));
+        sagaStore.success(sagaId, "ORDER:" + id);
+        return id;
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/flow/SagaRecoveryScheduler.java`
+
+```java
+package com.acme.runtime.order.flow;
+
+import com.acme.platform.messaging.saga.SagaRecoveryWorker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * Recovery worker'in zamanlamasi (referans Bolum 11.4 "poll"). Her instance calistirir; esgudum claim'deki
+ * SKIP LOCKED + lease ile saglanir, leader election gerekmez. Bir turdaki hata sonraki turu durdurmaz.
+ */
+@Component
+public class SagaRecoveryScheduler {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaRecoveryScheduler.class);
+
+    private final SagaRecoveryWorker worker;
+
+    public SagaRecoveryScheduler(SagaRecoveryWorker worker) { this.worker = worker; }
+
+    @Scheduled(fixedDelayString = "${operation-consistency.poll-millis:5000}")
+    public void poll() {
+        try {
+            worker.runOnce();
+        } catch (RuntimeException e) {
+            log.error("saga recovery run failed: exceptionType={}", e.getClass().getSimpleName(), e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/web/GatewayIdentityFilter.java`
+
+```java
+package com.acme.runtime.order.web;
+
+import com.acme.platform.security.jwt.ServiceIdentity;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.platform.security.jwt.ServiceTokenInvalidException;
+import com.acme.platform.security.web.ErrorResponse;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.acme.platform.security.web.ServiceRequestAttributes;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+/**
+ * Public uclar (/v1/**) icin kimlik (referans Bolum 6.1 tablo): gateway kullanici JWT'sini dogrular ve servise
+ * act=gateway, sub=kullanici tasiyan servis JWT'si gecirir. Bu filtre yalniz izinli aktorleri (gateway) kabul eder
+ * ("public path'ler de aktore kisitlanabilir", Bolum 9.5) ve sub'i x.accountId attribute'una yazar; @CurrentAccount
+ * ve ServiceJwtClientInterceptor ayni attribute'u okur. sub'siz token public ucta anlamsizdir -> 401.
+ */
+public class GatewayIdentityFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(GatewayIdentityFilter.class);
+
+    private final ServiceJwtVerifier verifier;
+    private final Set<String> allowedActors;
+
+    public GatewayIdentityFilter(ServiceJwtVerifier verifier, Set<String> allowedActors) {
+        this.verifier = verifier;
+        this.allowedActors = Set.copyOf(allowedActors);
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        String token = request.getHeader(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER);
+        if (token == null || token.isBlank()) {
+            new ErrorResponse(ErrorResponse.SERVICE_TOKEN_INVALID, "Service token missing").write(response, HttpStatus.UNAUTHORIZED);
+            return;
+        }
+        ServiceIdentity identity;
+        try {
+            identity = verifier.verify(token.trim());
+        } catch (ServiceTokenInvalidException e) {
+            log.debug("public request token rejected: {}", e.getMessage());
+            new ErrorResponse(ErrorResponse.SERVICE_TOKEN_INVALID, "Service token invalid").write(response, HttpStatus.UNAUTHORIZED);
+            return;
+        }
+        if (!allowedActors.contains(identity.actor())) {
+            log.info("public access denied: actor={} path={}", identity.actor(), request.getRequestURI());
+            new ErrorResponse(ErrorResponse.INTERNAL_ACCESS_DENIED, "Access denied").write(response, HttpStatus.FORBIDDEN);
+            return;
+        }
+        if (identity.background()) {
+            new ErrorResponse(ErrorResponse.ACCOUNT_CONTEXT_REQUIRED, "Account context required").write(response, HttpStatus.UNAUTHORIZED);
+            return;
+        }
+        request.setAttribute(ServiceRequestAttributes.CALLER_SERVICE, identity.actor());
+        request.setAttribute(ServiceRequestAttributes.ACCOUNT_ID, identity.accountId());
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            request.removeAttribute(ServiceRequestAttributes.CALLER_SERVICE);
+            request.removeAttribute(ServiceRequestAttributes.ACCOUNT_ID);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/order/web/OrderController.java`
+
+```java
+package com.acme.runtime.order.web;
+
+import com.acme.platform.core.ErrorCode;
+import com.acme.platform.security.web.CurrentAccount;
+import com.acme.runtime.order.exception.OrderRuntimeErrorCode;
+import com.acme.runtime.order.flow.OrderCreationFlow;
+import com.acme.runtime.order.flow.OrderCreationFlow.Result;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * POST /v1/orders. Hesap @CurrentAccount ile gateway token'inin sub'indan gelir (govdeden asla). Yanit {kind, detail,
+ * sagaId}; hata durumlarinda ayrica Bolum 6.2 zarfi (ok=false, error{code,message,service}).
+ */
+@RestController
+public class OrderController {
+
+    public record CreateOrderRequest(@NotNull UUID resourceId) {}
+
+    private final OrderCreationFlow flow;
+
+    public OrderController(OrderCreationFlow flow) { this.flow = flow; }
+
+    @PostMapping("/v1/orders")
+    public ResponseEntity<Map<String, Object>> create(@CurrentAccount UUID accountId,
+                                                      @RequestHeader("X-Idempotency-Key") UUID operationKey,
+                                                      @Valid @RequestBody CreateOrderRequest request) {
+        Result r = flow.createOrder(accountId, operationKey, request.resourceId());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", r.kind() == OrderCreationFlow.Kind.OK || r.kind() == OrderCreationFlow.Kind.REPLAY);
+        body.put("kind", r.kind().name());
+        body.put("detail", r.detail());
+        body.put("sagaId", r.sagaId());
+        ErrorCode error = switch (r.kind()) {
+            case OK, REPLAY -> null;
+            case IN_PROGRESS -> OrderRuntimeErrorCode.OPERATION_IN_PROGRESS;
+            case CANCELLED -> OrderRuntimeErrorCode.OPERATION_CANCELLED;
+            case REJECTED -> OrderRuntimeErrorCode.QUOTA_REJECTED;
+            case UPSTREAM_UNAVAILABLE -> OrderRuntimeErrorCode.UPSTREAM_UNAVAILABLE;
+            case UPSTREAM_REJECTED -> OrderRuntimeErrorCode.UPSTREAM_REJECTED;
+            case DOMAIN_CONFLICT -> OrderRuntimeErrorCode.RESOURCE_ALREADY_ORDERED;
+        };
+        if (error == null) {
+            return ResponseEntity.status(r.kind() == OrderCreationFlow.Kind.OK ? HttpStatus.CREATED : HttpStatus.OK).body(body);
+        }
+        body.put("error", Map.of("code", error.getCode(), "message", error.getMessage(), "service", error.getService()));
+        return ResponseEntity.status(error.getHttpStatus()).body(body);
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/SubscriptionApp.java`
+
+```java
+package com.acme.runtime.subscription;
+
+import java.util.Arrays;
+import java.util.stream.Stream;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.context.ConfigurableApplicationContext;
+
+/**
+ * Katilimci servis (abonelik/kota). Saga koordinatoru OrderApp'in /internal cagrilarini servis JWT + allowlist +
+ * delegasyon matrisiyle kabul eder (referans Bolum 9.2.1, 9.5, 11.4 "Katilimci sozlesmesi").
+ *
+ * Ayni modulde OrderApp de oldugu icin config dosyasi adi ayridir (subscription-app.yml): iki uygulama birbirinin
+ * application.yml'ini okumaz. Paket taramasi yalniz com.acme.runtime.subscription altini kapsar.
+ */
+@SpringBootApplication
+public class SubscriptionApp {
+
+    public static final String CONFIG_NAME = "subscription-app";
+
+    public static ConfigurableApplicationContext start(String... args) {
+        return new SpringApplicationBuilder(SubscriptionApp.class).run(withConfigName(args));
+    }
+
+    public static void main(String[] args) { start(args); }
+
+    static String[] withConfigName(String[] args) {
+        return Stream.concat(Stream.of("--spring.config.name=" + CONFIG_NAME), Arrays.stream(args)).toArray(String[]::new);
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/chaos/ChaosConfig.java`
+
+```java
+package com.acme.runtime.subscription.chaos;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+
+/** YALNIZ TEST kablolamasi; runtime.chaos.enabled=true degilse hicbir bean olusmaz. */
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = "runtime.chaos.enabled", havingValue = "true")
+public class ChaosConfig {
+
+    @Bean
+    public ChaosState chaosState() { return new ChaosState(); }
+
+    @Bean
+    public FilterRegistrationBean<ChaosFilter> chaosFilter(ChaosState state) {
+        var reg = new FilterRegistrationBean<>(new ChaosFilter(state));
+        reg.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);                  // servis JWT filtresinden (+10) sonra
+        reg.addUrlPatterns("/internal/subscription/*");
+        return reg;
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/chaos/ChaosController.java`
+
+```java
+package com.acme.runtime.subscription.chaos;
+
+import java.util.Map;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * YALNIZ TEST: /internal/test/chaos. Allowlist'te yalniz "test" aktorune acik (subscription-app.yml); bean yalniz
+ * runtime.chaos.enabled=true iken vardir, uretimde uc 404'tur ve kural default-deny'i bozmaz.
+ */
+@RestController
+@RequestMapping("/internal/test/chaos")
+@ConditionalOnProperty(name = "runtime.chaos.enabled", havingValue = "true")
+public class ChaosController {
+
+    private final ChaosState state;
+
+    public ChaosController(ChaosState state) { this.state = state; }
+
+    @PutMapping
+    public ChaosState.Settings set(@RequestBody ChaosState.Settings settings) {
+        state.set(settings);
+        return state.settings();
+    }
+
+    @DeleteMapping
+    public ChaosState.Settings clear() {
+        state.set(ChaosState.Settings.NONE);
+        return state.settings();
+    }
+
+    @GetMapping("/stats")
+    public Map<String, Object> stats() { return state.stats(); }
+
+    @PostMapping("/stats/reset")
+    public Map<String, Object> resetStats() {
+        state.resetStats();
+        return state.stats();
+    }
+
+    @GetMapping("/traces")
+    public Map<String, String> trace(@RequestParam String path) {
+        String tp = state.tracesByPath.get(path);
+        return tp == null ? Map.of() : Map.of("traceparent", tp);
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/chaos/ChaosFilter.java`
+
+```java
+package com.acme.runtime.subscription.chaos;
+
+import com.acme.runtime.subscription.web.SubscriptionErrorCode;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+import org.springframework.http.MediaType;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingResponseWrapper;
+
+/**
+ * YALNIZ TEST: /internal/subscription/** cagrilarina hata enjekte eder ve gozlemler (esanli istek sayisi, alinan
+ * traceparent). Servis JWT filtresinden SONRA calisir: yalniz kimligi dogrulanmis cagrilar sayilir/geciktirilir.
+ * Gecikme is mantigi (ve TX commit) bittikten sonra, yanit tamponda tutulurken uygulanir: istemci read-timeout ile
+ * vazgectiginde katilimcida commit olmus bir islem kalir (Bolum 11.4 "belirsiz sonuc").
+ */
+public class ChaosFilter extends OncePerRequestFilter {
+
+    public static final String TRACE_ECHO_HEADER = "X-Received-Traceparent";
+    private static final String PREFIX = "/internal/subscription/";
+
+    private final ChaosState state;
+
+    public ChaosFilter(ChaosState state) { this.state = state; }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return !request.getRequestURI().startsWith(PREFIX);
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        String traceparent = request.getHeader("traceparent");
+        if (traceparent != null) {                                       // katilimcinin GORDUGU trace baglami
+            response.setHeader(TRACE_ECHO_HEADER, traceparent);
+            state.tracesByPath.put(request.getRequestURI(), traceparent);
+        }
+        ChaosState.Settings s = state.settings();
+        boolean applies = s.appliesTo(operation(request));
+        state.enter();
+        try {
+            if (applies && s.down()) {
+                response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                response.getWriter().write("{\"ok\":false,\"error\":{\"code\":" + SubscriptionErrorCode.PARTICIPANT_UNAVAILABLE.getCode()
+                        + ",\"message\":\"" + SubscriptionErrorCode.PARTICIPANT_UNAVAILABLE.getMessage() + "\",\"service\":\"subscription\"}}");
+                return;
+            }
+            if (!applies || (s.slowMillis() <= 0 && !s.dropAfterCommit())) {
+                chain.doFilter(request, response);
+                return;
+            }
+            ContentCachingResponseWrapper buffered = new ContentCachingResponseWrapper(response);
+            chain.doFilter(request, buffered);                           // is mantigi + commit burada tamamlandi
+            if (s.dropAfterCommit()) {
+                dropConnection(response);
+                return;
+            }
+            pause(s.slowMillis());
+            buffered.copyBodyToResponse();
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** Content-Length'ten kisa govde + Connection: close: istemci govdeyi okurken EOF alir (yanit kayboldu). */
+    private static void dropConnection(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setHeader("Connection", "close");
+        response.setContentLength(1024);
+        response.getOutputStream().write("{\"state\":".getBytes(StandardCharsets.UTF_8));
+        response.flushBuffer();
+    }
+
+    private static void pause(long millis) {
+        try {
+            TimeUnit.MILLISECONDS.sleep(millis);                         // enjekte edilen gecikme (gercek zaman)
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    static String operation(HttpServletRequest request) {
+        if ("GET".equals(request.getMethod())) return "get";
+        String uri = request.getRequestURI();
+        return uri.substring(uri.lastIndexOf('/') + 1);
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/chaos/ChaosState.java`
+
+```java
+package com.acme.runtime.subscription.chaos;
+
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * YALNIZ TEST: hata enjeksiyonu ayarlari ve gozlem sayaclari. runtime.chaos.enabled=false iken bean yoktur.
+ *
+ * slowMillis      is mantigi + commit bittikten SONRA yanit bu kadar geciktirilir (commit olmus ama yanit gec)
+ * dropAfterCommit is mantigi commit olur, yanit yarim yazilip baglanti kapatilir (yanit kayboldu)
+ * down            is mantigina hic girilmeden 503 (commit yok)
+ * operations      bos = tum islemler; aksi halde yalniz listelenenler (consume, confirm, compensate, get)
+ */
+public class ChaosState {
+
+    public record Settings(Long slowMillis, Boolean dropAfterCommit, Boolean down, Set<String> operations) {
+        public static final Settings NONE = new Settings(0L, false, false, Set.of());
+        public Settings {                                                // JSON'da verilmeyen alan = etkisiz
+            slowMillis = slowMillis == null ? 0L : slowMillis;
+            dropAfterCommit = Boolean.TRUE.equals(dropAfterCommit);
+            down = Boolean.TRUE.equals(down);
+            operations = operations == null ? Set.of() : Set.copyOf(operations);
+        }
+        boolean appliesTo(String operation) { return operations.isEmpty() || operations.contains(operation); }
+    }
+
+    private volatile Settings settings = Settings.NONE;
+    final AtomicInteger inFlight = new AtomicInteger();
+    final AtomicInteger maxInFlight = new AtomicInteger();
+    final Map<String, String> tracesByPath = new ConcurrentHashMap<>();
+
+    public Settings settings() { return settings; }
+    public void set(Settings s) { settings = s == null ? Settings.NONE : s; }
+
+    public void resetStats() { maxInFlight.set(inFlight.get()); tracesByPath.clear(); }
+
+    public Map<String, Object> stats() { return Map.of("inFlight", inFlight.get(), "maxInFlight", maxInFlight.get()); }
+
+    void enter() {
+        int now = inFlight.incrementAndGet();
+        maxInFlight.accumulateAndGet(now, Math::max);
+    }
+
+    void exit() { inFlight.decrementAndGet(); }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/config/SubscriptionConfig.java`
+
+```java
+package com.acme.runtime.subscription.config;
+
+import java.time.Clock;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/** Tek zaman kaynagi: JWT dogrulama (exp/nbf) ve kayit zaman damgalari ayni Clock'u kullanir. */
+@Configuration(proxyBeanMethods = false)
+public class SubscriptionConfig {
+
+    @Bean
+    public Clock clock() { return Clock.systemUTC(); }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/quota/QuotaOperationService.java`
+
+```java
+package com.acme.runtime.subscription.quota;
+
+import com.acme.platform.core.ServiceException;
+import com.acme.platform.messaging.saga.SagaParticipant.State;
+import com.acme.runtime.subscription.web.SubscriptionErrorCode;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.dao.support.DataAccessUtils;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * Katilimci is mantigi (referans Bolum 11.4 tablo). Tum islemler idempotent ve ayni anahtar icin advisory lock ile
+ * siralanir; kota satiri FOR UPDATE ile kilitlenir. caller her zaman dogrulanmis JWT act claim'idir (controller verir).
+ *
+ * Iki katmanli yetki: allowlist + delegasyon (HTTP katmani) ve burada "aktor -> izinli islem tipi" haritasi.
+ */
+@Service
+public class QuotaOperationService {
+
+    static final Map<String, Set<String>> ALLOWED_OPERATIONS = Map.of("order-service", Set.of("ORDER_QUOTA"));
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final TransactionTemplate tx;
+    private final Clock clock;
+
+    public QuotaOperationService(NamedParameterJdbcTemplate jdbc, PlatformTransactionManager tm, Clock clock) {
+        this.jdbc = jdbc;
+        this.tx = new TransactionTemplate(tm);
+        this.clock = clock;
+    }
+
+    public State consume(String caller, UUID account, UUID key, String opType, int amount) {
+        if (!ALLOWED_OPERATIONS.getOrDefault(caller, Set.of()).contains(opType)) {
+            throw new ServiceException(SubscriptionErrorCode.OPERATION_TYPE_NOT_ALLOWED);
+        }
+        return tx.execute(st -> {
+            lock(caller, account, key);
+            State existing = status(caller, account, key);
+            if (existing != null) return existing;                       // replay; CANCELLED tombstone dahil (uygulanmaz)
+            Integer remaining = DataAccessUtils.singleResult(jdbc.queryForList(
+                    "SELECT remaining FROM subscription.quota WHERE account_id = :a FOR UPDATE", Map.of("a", account), Integer.class));
+            State result = remaining != null && remaining >= amount ? State.APPLIED : State.REJECTED;
+            if (result == State.APPLIED) {
+                jdbc.update("UPDATE subscription.quota SET remaining = remaining - :n WHERE account_id = :a", Map.of("n", amount, "a", account));
+            }
+            insert(caller, account, key, opType, result, amount);
+            return result;
+        });
+    }
+
+    public Optional<State> get(String caller, UUID account, UUID key) {
+        return Optional.ofNullable(status(caller, account, key));
+    }
+
+    public State confirm(String caller, UUID account, UUID key) {
+        return tx.execute(st -> {
+            lock(caller, account, key);
+            State s = status(caller, account, key);
+            if (s == State.APPLIED) { setStatus(caller, account, key, State.CONFIRMED); return State.CONFIRMED; }
+            if (s == State.CONFIRMED) return State.CONFIRMED;                                   // replay
+            throw new ServiceException(SubscriptionErrorCode.OPERATION_STATE_CONFLICT);        // yok/iptal/iade: celiski
+        });
+    }
+
+    public State compensate(String caller, UUID account, UUID key) {
+        return tx.execute(st -> {
+            lock(caller, account, key);
+            State s = status(caller, account, key);
+            if (s == null) {                                                // tombstone: gec gelen consume uygulanmaz
+                insert(caller, account, key, "TOMBSTONE", State.CANCELLED, 0);
+                return State.CANCELLED;
+            }
+            return switch (s) {
+                case APPLIED -> {
+                    // iade tek sefer: refunded_at IS NULL kosulu tekrar gelen compensate'i no-op yapar
+                    int n = jdbc.update("""
+                            UPDATE subscription.operation SET status = 'COMPENSATED', refunded_at = :now, updated_at = :now
+                            WHERE caller_service = :c AND account_id = :a AND operation_key = :k AND refunded_at IS NULL""",
+                            keyParams(caller, account, key).addValue("now", now()));
+                    if (n == 1) {
+                        jdbc.update("""
+                                UPDATE subscription.quota q SET remaining = q.remaining + o.amount FROM subscription.operation o
+                                WHERE q.account_id = o.account_id AND o.caller_service = :c AND o.account_id = :a AND o.operation_key = :k""",
+                                keyParams(caller, account, key));
+                    }
+                    yield State.COMPENSATED;
+                }
+                case REJECTED -> State.CANCELLED;                           // hic uygulanmamis: telafi no-op
+                case COMPENSATED, CANCELLED, MANUAL_REVIEW -> s;            // replay
+                case CONFIRMED -> { setStatus(caller, account, key, State.MANUAL_REVIEW); yield State.MANUAL_REVIEW; }
+            };
+        });
+    }
+
+    private void lock(String caller, UUID account, UUID key) {
+        jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtext(:k))", Map.of("k", caller + ":" + account + ":" + key), Object.class);
+    }
+
+    private State status(String caller, UUID account, UUID key) {
+        String s = DataAccessUtils.singleResult(jdbc.queryForList("""
+                SELECT status FROM subscription.operation WHERE caller_service = :c AND account_id = :a AND operation_key = :k""",
+                keyParams(caller, account, key), String.class));
+        return s == null ? null : State.valueOf(s);
+    }
+
+    private void insert(String caller, UUID account, UUID key, String opType, State status, int amount) {
+        jdbc.update("""
+                INSERT INTO subscription.operation (caller_service, account_id, operation_key, op_type, status, amount, created_at, updated_at)
+                VALUES (:c, :a, :k, :t, :s, :n, :now, :now)""",
+                keyParams(caller, account, key).addValue("t", opType).addValue("s", status.name()).addValue("n", amount)
+                        .addValue("now", now()));
+    }
+
+    private void setStatus(String caller, UUID account, UUID key, State status) {
+        jdbc.update("""
+                UPDATE subscription.operation SET status = :s, updated_at = :now
+                WHERE caller_service = :c AND account_id = :a AND operation_key = :k""",
+                keyParams(caller, account, key).addValue("s", status.name()).addValue("now", now()));
+    }
+
+    private static MapSqlParameterSource keyParams(String caller, UUID account, UUID key) {
+        return new MapSqlParameterSource().addValue("c", caller).addValue("a", account).addValue("k", key);
+    }
+
+    private Timestamp now() { return Timestamp.from(clock.instant()); }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/web/InternalSubscriptionController.java`
+
+```java
+package com.acme.runtime.subscription.web;
+
+import com.acme.platform.core.ServiceException;
+import com.acme.platform.messaging.saga.SagaParticipant.State;
+import com.acme.platform.security.delegation.RequireOperation;
+import com.acme.platform.security.web.ServiceRequestAttributes;
+import com.acme.runtime.subscription.quota.QuotaOperationService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Katilimci sozlesmesi (referans Bolum 11.4): consume / GET / confirm / compensate. Uc guvence birlikte calisir
+ * (Bolum 9.2.1): filtre token'i dogrular ve allowlist'i uygular, DelegationInterceptor @RequireOperation ile sub ==
+ * {accountId} sartini arar (arka plan token'i reddedilir), servis aktor -> islem tipi haritasini uygular.
+ * Cagiran kimligi govdeden/header'dan degil, dogrulanmis act claim'inden okunur.
+ */
+@RestController
+@RequestMapping("/internal/subscription/accounts/{accountId}/operations/{operationKey}")
+public class InternalSubscriptionController {
+
+    private static final Logger log = LoggerFactory.getLogger(InternalSubscriptionController.class);
+
+    public record ConsumeRequest(@NotBlank String operationType, @Min(1) @Max(100) int amount) {}
+    public record OperationResponse(String state) {}
+
+    private final QuotaOperationService service;
+
+    public InternalSubscriptionController(QuotaOperationService service) { this.service = service; }
+
+    @PostMapping("/consume")
+    @RequireOperation("subscription.consume")
+    public OperationResponse consume(@PathVariable UUID accountId, @PathVariable UUID operationKey,
+                                     @Valid @RequestBody ConsumeRequest body, HttpServletRequest request) {
+        State state = service.consume(caller(request), accountId, operationKey, body.operationType(), body.amount());
+        log.info("quota consume: operationKey={} state={}", operationKey, state);
+        return new OperationResponse(state.name());
+    }
+
+    @GetMapping
+    @RequireOperation("subscription.read")
+    public OperationResponse get(@PathVariable UUID accountId, @PathVariable UUID operationKey, HttpServletRequest request) {
+        return service.get(caller(request), accountId, operationKey).map(s -> new OperationResponse(s.name()))
+                .orElseThrow(() -> new ServiceException(SubscriptionErrorCode.OPERATION_NOT_FOUND));
+    }
+
+    @PostMapping("/confirm")
+    @RequireOperation("subscription.confirm")
+    public OperationResponse confirm(@PathVariable UUID accountId, @PathVariable UUID operationKey, HttpServletRequest request) {
+        return new OperationResponse(service.confirm(caller(request), accountId, operationKey).name());
+    }
+
+    @PostMapping("/compensate")
+    @RequireOperation("subscription.compensate")
+    public OperationResponse compensate(@PathVariable UUID accountId, @PathVariable UUID operationKey, HttpServletRequest request) {
+        return new OperationResponse(service.compensate(caller(request), accountId, operationKey).name());
+    }
+
+    /** Filtre bu attribute'u yazmadan istek buraya ulasamaz; yine de yoksa fail-closed. */
+    private static String caller(HttpServletRequest request) {
+        return ServiceRequestAttributes.callerService(request).orElseThrow(() -> new IllegalStateException("caller identity missing"));
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/web/SubscriptionErrorCode.java`
+
+```java
+package com.acme.runtime.subscription.web;
+
+import com.acme.platform.core.ErrorCode;
+import org.springframework.http.HttpStatus;
+
+/**
+ * Katilimci hata kodlari. HTTP durumu sozlesmenin parcasidir: koordinatorun client'i govdeyi okumaz, yalniz durumu
+ * cevirir (403 -> ParticipantForbidden, 409 -> ParticipantConflict, 5xx/timeout -> ParticipantUnavailable; Bolum 6.8).
+ */
+public enum SubscriptionErrorCode implements ErrorCode {
+    OPERATION_TYPE_NOT_ALLOWED(12001, "Actor is not allowed for this operation type.", HttpStatus.FORBIDDEN),
+    OPERATION_STATE_CONFLICT(12002, "Operation state does not allow this action.", HttpStatus.CONFLICT),
+    OPERATION_NOT_FOUND(12003, "Operation not found.", HttpStatus.NOT_FOUND),
+    PARTICIPANT_UNAVAILABLE(12004, "Participant temporarily unavailable.", HttpStatus.SERVICE_UNAVAILABLE);
+
+    private final int code;
+    private final String message;
+    private final HttpStatus httpStatus;
+
+    SubscriptionErrorCode(int code, String message, HttpStatus httpStatus) {
+        this.code = code; this.message = message; this.httpStatus = httpStatus;
+    }
+
+    @Override public int getCode() { return code; }
+    @Override public String getMessage() { return message; }
+    @Override public String getService() { return "subscription"; }
+    @Override public HttpStatus getHttpStatus() { return httpStatus; }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/java/com/acme/runtime/subscription/web/SubscriptionExceptionHandler.java`
+
+```java
+package com.acme.runtime.subscription.web;
+
+import com.acme.platform.core.ErrorCode;
+import com.acme.platform.core.ServiceException;
+import java.util.Map;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/** ServiceException -> zarfli hata (Bolum 6.2 bicimi: {ok:false, error:{code, message, service}}). */
+@RestControllerAdvice
+public class SubscriptionExceptionHandler {
+
+    @ExceptionHandler(ServiceException.class)
+    public ResponseEntity<Map<String, Object>> handle(ServiceException e) {
+        return ResponseEntity.status(e.getErrorCode().getHttpStatus()).body(envelope(e.getErrorCode()));
+    }
+
+    public static Map<String, Object> envelope(ErrorCode code) {
+        return Map.of("ok", false, "error", Map.of("code", code.getCode(), "message", code.getMessage(), "service", code.getService()));
+    }
+}
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/resources/db/order/V1__order_item.sql`
+
+```
+-- order servisinin domain tablosu. Saga tablolari platform-messaging'in db/platform/saga_coordinator.sql dosyasindan
+-- ${schema} = "order" ile uretilir (ayni migration setinde, bu dosyadan once).
+CREATE TABLE "order".order_item (
+  id            UUID PRIMARY KEY,
+  account_id    UUID NOT NULL,
+  resource_id   UUID NOT NULL UNIQUE,                 -- ayni kaynak iki kez siparis edilemez (domain uniqueness)
+  operation_key UUID NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL
+);
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/resources/db/subscription/V1__quota.sql`
+
+```
+-- Katilimci (referans Bolum 11.4 "Katilimci sozlesmesi"). Tekillik (caller_service, account_id, operation_key):
+-- caller_service JWT act claim'inden gelir, govdeden degil.
+CREATE TABLE subscription.quota (
+  account_id UUID PRIMARY KEY,
+  remaining  INT NOT NULL CHECK (remaining >= 0)
+);
+CREATE TABLE subscription.operation (
+  caller_service TEXT NOT NULL,
+  account_id     UUID NOT NULL,
+  operation_key  UUID NOT NULL,
+  op_type        TEXT NOT NULL,
+  status         TEXT NOT NULL CHECK (status IN ('APPLIED','REJECTED','CONFIRMED','CANCELLED','COMPENSATED','MANUAL_REVIEW')),
+  amount         INT NOT NULL,
+  refunded_at    TIMESTAMPTZ,                         -- cift iadeyi engeller (compensate tekrar gelirse no-op)
+  created_at     TIMESTAMPTZ NOT NULL,
+  updated_at     TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (caller_service, account_id, operation_key)
+);
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/resources/order-app.yml`
+
+```yaml
+# OrderApp (saga koordinatoru). datasource, anahtar yollari ve hedef adresler ortamdan gelir (Bolum 15.3).
+spring:
+  application.name: order-service
+  datasource:
+    url: ${ORDER_DB_URL}
+    username: ${ORDER_DB_USER:order}
+    password: ${ORDER_DB_PASSWORD:}
+    hikari.maximum-pool-size: 10
+management:
+  tracing:
+    sampling.probability: 1.0            # Bolum 8.6: %100 head sampling, ornekleme Collector'da (tail)
+    propagation.type: W3C
+  otlp.metrics.export.enabled: false     # ornekte Collector yok; uretimde endpoint ortamdan verilir
+  tracing.export.otlp.enabled: false
+service-jwt:
+  audience: order-api
+  service-name: order-service
+  private-key-path: ${ORDER_SIGNING_KEY_PATH}
+  jwks-path: ${SERVICE_JWKS_PATH}
+  # order-service'in /internal ucu yok: bos allowlist = default-deny
+operation-consistency:
+  deadline-seconds: 15
+  lease-seconds: 60
+  max-backoff-seconds: 300
+  warn-after-minutes: 15
+  retention-days: 30
+  batch-size: 50
+  poll-millis: 5000
+clients:
+  subscription:
+    base-url: ${SUBSCRIPTION_BASE_URL}
+    audience: subscription-api
+    # Toplam butce: connect + read < gateway butcesi (Bolum 4.7 ornegi 3 sn). Consume tek, hizli bir DB yazimi.
+    connect-timeout: 500ms
+    read-timeout: 1500ms
+resilience4j:
+  circuitbreaker:
+    instances:
+      subscription:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 4
+        minimum-number-of-calls: 4              # varsayilan 100; COUNT_BASED pencerede boyuta kirpildigi olculdu (satir silinince test 3 yine gecti); pencere tipi degisirse diye acik yazilir
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 2s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: false
+        # Yalniz belirsiz/erisilemez sonuc hata sayilir; 403/409 is kararidir, bulkhead reddi bizim kendi korumamiz.
+        record-exceptions:
+          - com.acme.platform.messaging.saga.SagaParticipant$ParticipantUnavailableException
+        ignore-exceptions:
+          - io.github.resilience4j.bulkhead.BulkheadFullException
+          - com.acme.platform.messaging.saga.SagaParticipant$ParticipantForbiddenException
+          - com.acme.platform.messaging.saga.SagaParticipant$ParticipantConflictException
+  bulkhead:
+    instances:
+      subscription:
+        max-concurrent-calls: 8
+        max-wait-duration: 0ms                  # bekleme yok: dolu ise hemen UPSTREAM_UNAVAILABLE
+```
+
+---
+
+### `skeleton-example/runtime-example/src/main/resources/subscription-app.yml`
+
+```yaml
+# SubscriptionApp (katilimci). datasource ve anahtar yollari ortamdan gelir (Bolum 15.3); burada literal secret yok.
+spring:
+  application.name: subscription-service
+  datasource:
+    url: ${SUBSCRIPTION_DB_URL}
+    username: ${SUBSCRIPTION_DB_USER:subscription}
+    password: ${SUBSCRIPTION_DB_PASSWORD:}
+    hikari.maximum-pool-size: 10
+management:
+  tracing:
+    sampling.probability: 1.0            # Bolum 8.6: uygulama %100 head sampling, ornekleme Collector'da (tail)
+    propagation.type: W3C
+  otlp.metrics.export.enabled: false     # ornekte Collector yok; uretimde endpoint ortamdan verilir
+  tracing.export.otlp.enabled: false
+service-jwt:
+  audience: subscription-api
+  service-name: subscription-service
+  jwks-path: ${SERVICE_JWKS_PATH}
+  internal-access:
+    # First-match: dar kurallar once (Bolum 9.5). Katilimci uclarinin tamami yalniz order-service'e acik.
+    - path: "/internal/subscription/accounts/*/operations/*/consume"
+      allowed-actors: [ order-service ]
+    - path: "/internal/subscription/accounts/*/operations/*/confirm"
+      allowed-actors: [ order-service ]
+    - path: "/internal/subscription/accounts/*/operations/*/compensate"
+      allowed-actors: [ order-service ]
+    - path: "/internal/subscription/accounts/*/operations/*"
+      allowed-actors: [ order-service ]
+    # Test-only chaos ucu: controller yalniz runtime.chaos.enabled=true iken var
+    - path: "/internal/test/**"
+      allowed-actors: [ test ]
+  delegation:
+    # Bolum 9.2.1 matrisi: order-service kota islemlerini YALNIZ sub == {accountId} ile yapar; arka plan token'i red.
+    - { actor: order-service, operation: subscription.consume, user-context: REQUIRED }
+    - { actor: order-service, operation: subscription.confirm, user-context: REQUIRED }
+    - { actor: order-service, operation: subscription.compensate, user-context: REQUIRED }
+    - { actor: order-service, operation: subscription.read, user-context: REQUIRED }
+runtime.chaos.enabled: false
+```
+
+---
+
+### `skeleton-example/runtime-example/src/test/java/com/acme/runtime/OrderSubscriptionRuntimeIT.java`
+
+```java
+package com.acme.runtime;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.acme.platform.security.jwt.Ed25519Keys;
+import com.acme.platform.security.jwt.ServiceJwtKeyRegistry;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.runtime.order.OrderApp;
+import com.acme.runtime.subscription.SubscriptionApp;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.dao.support.DataAccessUtils;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * KANIT SEVIYESI 3 (referans Bolum 11.5, 19.6): iki ayri Spring Boot uygulamasi (OrderApp koordinator,
+ * SubscriptionApp katilimci) rastgele portlarda, aralarinda GERCEK HTTP + servis JWT (Ed25519, anahtar dosyalari) +
+ * Resilience4j; tek gomulu PostgreSQL 18'de iki ayri schema. Test gateway rolundedir (act=gateway, sub=hesap).
+ * Hata enjeksiyonu katilimcinin test-only /internal/test/chaos ucu ile yapilir (allowlist: yalniz "test" aktoru).
+ *
+ * Zaman: uygulamalar gercek saatle calisir (timeout/circuit/recovery gercek zamanda olculur); asenkron sonuclar
+ * sinirli poll ile beklenir (en fazla 15 sn), uygulama mantigi icin sabit sleep yoktur.
+ */
+class OrderSubscriptionRuntimeIT {
+
+    static final Duration MAX_WAIT = Duration.ofSeconds(15);
+    static final String SUBSCRIPTION_AUD = "subscription-api";
+    static final String ORDER_AUD = "order-api";
+    static final JsonMapper JSON = new JsonMapper();
+
+    static EmbeddedPostgres pg;
+    static NamedParameterJdbcTemplate db;
+    static Path secrets;
+    static String jdbcUrl;
+    static ServiceJwtSigner gateway, order, chat, tester;
+    static ConfigurableApplicationContext subscriptionApp, orderApp;
+    static String subscriptionBase, orderBase;
+    static HttpClient http;
+
+    record Resp(int status, Map<String, Object> body, Map<String, List<String>> headers, long elapsedMs) {
+        String str(String field) { Object v = body.get(field); return v == null ? null : v.toString(); }
+        @SuppressWarnings("unchecked")
+        Object errorField(String field) { return ((Map<String, Object>) body.get("error")).get(field); }
+        String header(String name) { return headers.getOrDefault(name.toLowerCase(), List.of()).stream().findFirst().orElse(null); }
+    }
+
+    // ---------------------------------------------------------------- altyapi
+
+    @BeforeAll
+    static void startInfrastructure() throws Exception {
+        pg = EmbeddedPostgres.builder().start();
+        DataSource ds = pg.getPostgresDatabase();
+        db = new NamedParameterJdbcTemplate(ds);
+        assertThat(db.getJdbcTemplate().queryForObject("SHOW server_version_num", Integer.class)).isGreaterThanOrEqualTo(180000);
+        jdbcUrl = pg.getJdbcUrl("postgres", "postgres");
+        migrate(ds);
+
+        // Her imzalayicinin kendi Ed25519 anahtari (Bolum 9.2); dogrulayicilar ortak JWKS dosyasini okur
+        Clock clock = Clock.systemUTC();
+        OctetKeyPair gatewayKey = Ed25519Keys.generate("gw-1"), orderKey = Ed25519Keys.generate("order-1"),
+                chatKey = Ed25519Keys.generate("chat-1"), testKey = Ed25519Keys.generate("test-1");
+        gateway = new ServiceJwtSigner(gatewayKey, "gateway", clock);
+        order = new ServiceJwtSigner(orderKey, "order-service", clock);
+        chat = new ServiceJwtSigner(chatKey, "chat-service", clock);
+        tester = new ServiceJwtSigner(testKey, "test", clock);
+        ServiceJwtKeyRegistry registry = new ServiceJwtKeyRegistry();
+        registry.register("gateway", gatewayKey);
+        registry.register("order-service", orderKey);
+        registry.register("chat-service", chatKey);
+        registry.register("test", testKey);
+        secrets = Files.createTempDirectory("runtime-secrets");
+        Files.writeString(secrets.resolve("service-jwks.json"), registry.toJson());
+        Files.writeString(secrets.resolve("order-service-signing-key"), orderKey.toJSONString());
+
+        http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(2)).build();
+        subscriptionApp = SubscriptionApp.start(
+                "--server.port=0",
+                "--spring.datasource.url=" + jdbcUrl, "--spring.datasource.username=postgres",
+                "--service-jwt.jwks-path=" + secrets.resolve("service-jwks.json"),
+                "--runtime.chaos.enabled=true");
+        subscriptionBase = "http://localhost:" + subscriptionApp.getEnvironment().getProperty("local.server.port");
+        startOrderApp();
+    }
+
+    static void startOrderApp() {
+        orderApp = OrderApp.start(
+                "--server.port=0",
+                "--spring.datasource.url=" + jdbcUrl, "--spring.datasource.username=postgres",
+                "--service-jwt.jwks-path=" + secrets.resolve("service-jwks.json"),
+                "--service-jwt.private-key-path=" + secrets.resolve("order-service-signing-key"),
+                "--clients.subscription.base-url=" + subscriptionBase,
+                // deadline/backoff test icin kisaltildi; timeout, circuit ve bulkhead degerleri order-app.yml'deki gibi
+                "--operation-consistency.deadline-seconds=3",
+                "--operation-consistency.lease-seconds=5",
+                "--operation-consistency.max-backoff-seconds=2",
+                "--operation-consistency.poll-millis=500");
+        orderBase = "http://localhost:" + orderApp.getEnvironment().getProperty("local.server.port");
+    }
+
+    /** Migration yerine gecen DDL: saga tablolari platform-messaging'den, domain tablolari bu modulden. */
+    static void migrate(DataSource ds) throws Exception {
+        db.getJdbcTemplate().execute("CREATE SCHEMA \"order\"");
+        db.getJdbcTemplate().execute("CREATE SCHEMA subscription");
+        String saga = resource("/db/platform/saga_coordinator.sql").replace("${schema}", "\"order\"");
+        try (var conn = ds.getConnection()) {
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(saga.getBytes(StandardCharsets.UTF_8)));
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(resource("/db/order/V1__order_item.sql").getBytes(StandardCharsets.UTF_8)));
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(resource("/db/subscription/V1__quota.sql").getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    static String resource(String path) throws Exception {
+        try (var in = OrderSubscriptionRuntimeIT.class.getResourceAsStream(path)) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    @AfterAll
+    static void stopInfrastructure() throws Exception {
+        if (orderApp != null) orderApp.close();
+        if (subscriptionApp != null) subscriptionApp.close();
+        if (pg != null) pg.close();
+    }
+
+    @BeforeEach
+    void resetFaults() throws Exception {
+        clearChaos();
+        circuitBreaker().reset();                                       // onceki testin circuit durumu tasinmaz
+        chaosCall("POST", "/internal/test/chaos/stats/reset", null);
+    }
+
+    /** Test izolasyonu: arka planda kalan saga'lar terminal olana kadar bekle; hicbiri MANUAL_REVIEW'a dusmemeli. */
+    @AfterEach
+    void drain() throws Exception {
+        clearChaos();
+        await("all sagas terminal", () -> count("SELECT count(*) FROM \"order\".saga WHERE status NOT IN ('CONFIRMED','COMPENSATED','MANUAL_REVIEW')") == 0);
+        assertThat(count("SELECT count(*) FROM \"order\".saga WHERE status = 'MANUAL_REVIEW'")).as("manual review sagas").isZero();
+    }
+
+    // ---------------------------------------------------------------- senaryolar
+
+    @Test // 1: mutlu yol + W3C trace yayilimi (gateway -> order -> subscription)
+    void happyPathConfirmsAndPropagatesTrace() throws Exception {
+        UUID account = newAccount(5), key = UUID.randomUUID();
+        String traceId = hex(16), parentId = hex(8);
+        Resp r = postOrder(account, key, UUID.randomUUID(), "00-" + traceId + "-" + parentId + "-01");
+
+        assertThat(r.status()).isEqualTo(201);
+        assertThat(r.str("kind")).isEqualTo("OK");
+        assertThat(r.str("detail")).startsWith("ORDER:");
+        UUID sagaId = UUID.fromString(r.str("sagaId"));
+        await("saga CONFIRMED", () -> "CONFIRMED".equals(sagaStatus(sagaId)));
+        assertThat(opStatus(account, key)).isEqualTo("CONFIRMED");
+        assertThat(remaining(account)).isEqualTo(4);
+        assertThat(orderCount(account)).isEqualTo(1);
+
+        // Katilimcinin ALDIGI traceparent: ayni trace-id, OrderApp'in client span'i yeni parent-id
+        String received = receivedTraceparent(account, key, "consume");
+        assertThat(received).matches("00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}");
+        assertThat(received.substring(3, 35)).isEqualTo(traceId);
+        assertThat(received.substring(36, 52)).isNotEqualTo(parentId);
+        // Worker'in confirm cagrisi da (arka plan, istek baglami yok) W3C header tasir
+        assertThat(receivedTraceparent(account, key, "confirm")).matches("00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}");
+    }
+
+    @Test // 2: yavas katilimci: read-timeout butcesi korunur, commit olmus consume recovery ile telafi edilir
+    void slowParticipantTimesOutAndRecoveryCompensates() throws Exception {
+        UUID account = newAccount(5), key = UUID.randomUUID();
+        chaos("{\"slowMillis\":3000,\"operations\":[\"consume\"]}");
+
+        Resp r = postOrder(account, key, UUID.randomUUID(), null);
+        assertThat(r.status()).isEqualTo(503);
+        assertThat(r.str("kind")).isEqualTo("UPSTREAM_UNAVAILABLE");
+        assertThat(r.errorField("code")).isEqualTo(11101);
+        assertThat(r.errorField("service")).isEqualTo("order");
+        assertThat(r.elapsedMs()).as("request bounded by read timeout 1500 ms").isBetween(1400L, 2499L);
+        UUID sagaId = UUID.fromString(r.str("sagaId"));
+        assertThat(sagaStatus(sagaId)).isEqualTo("STARTED");
+        // Istemci vazgecti ama katilimci commit etti: belirsiz sonuc gercek
+        assertThat(opStatus(account, key)).isEqualTo("APPLIED");
+        assertThat(remaining(account)).isEqualTo(4);
+
+        clearChaos();
+        await("saga COMPENSATED after deadline", () -> "COMPENSATED".equals(sagaStatus(sagaId)));
+        assertThat(opStatus(account, key)).isEqualTo("COMPENSATED");
+        assertThat(remaining(account)).as("quota restored exactly once").isEqualTo(5);
+        assertThat(orderCount(account)).isZero();
+    }
+
+    @Test // 2b: yanit commit SONRASI kayboluyor (baglanti kopuyor): worker GET ile uzlasir, iade tek sefer
+    void lostResponsesAreReconciledThroughGet() throws Exception {
+        UUID account = newAccount(5), key = UUID.randomUUID();
+        // consume VE compensate commit olur ama yanitlari hic ulasmaz; GET saglikli
+        chaos("{\"dropAfterCommit\":true,\"operations\":[\"consume\",\"compensate\"]}");
+
+        Resp r = postOrder(account, key, UUID.randomUUID(), null);
+        assertThat(r.status()).isEqualTo(503);
+        assertThat(r.str("kind")).isEqualTo("UPSTREAM_UNAVAILABLE");
+        assertThat(r.elapsedMs()).as("connection drop is detected without waiting for read timeout").isLessThan(1400L);
+        UUID sagaId = UUID.fromString(r.str("sagaId"));
+        assertThat(opStatus(account, key)).isEqualTo("APPLIED");
+
+        // chaos ACIK kalir: compensate yaniti her seferinde kaybolur; saga yalniz GET uzlasmasiyla terminal olabilir
+        await("saga COMPENSATED via GET reconciliation", () -> "COMPENSATED".equals(sagaStatus(sagaId)));
+        assertThat(opStatus(account, key)).isEqualTo("COMPENSATED");
+        assertThat(remaining(account)).as("refund applied exactly once").isEqualTo(5);
+    }
+
+    @Test // 3: circuit breaker: pencere dolunca hizli red, bekleme + saglikli katilimci -> half-open -> closed
+    void circuitBreakerOpensAndRecovers() throws Exception {
+        UUID account = newAccount(50);
+        chaos("{\"slowMillis\":3000}");
+        List<Long> elapsed = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            Resp r = postOrder(account, UUID.randomUUID(), UUID.randomUUID(), null);
+            assertThat(r.str("kind")).as("request %d", i + 1).isEqualTo("UPSTREAM_UNAVAILABLE");
+            assertThat(r.status()).isEqualTo(503);
+            elapsed.add(r.elapsedMs());
+        }
+        assertThat(elapsed.get(0)).as("first call waits for read timeout").isGreaterThanOrEqualTo(1400L);
+        assertThat(elapsed.subList(4, 6)).as("circuit OPEN: no thread blocked").allSatisfy(ms -> assertThat(ms).isLessThan(200L));
+        assertThat(circuitBreaker().getState()).isEqualTo(CircuitBreaker.State.OPEN);
+
+        clearChaos();
+        // wait-duration (2 sn) dolana kadar istekler hizli reddedilir; sonra half-open deneme cagrilari gecer
+        await("order succeeds again (half-open probe)", () -> "OK".equals(postOrderQuiet(account).str("kind")));
+        await("circuit CLOSED", () -> circuitBreaker().getState() == CircuitBreaker.State.CLOSED
+                || "OK".equals(postOrderQuiet(account).str("kind")) && circuitBreaker().getState() == CircuitBreaker.State.CLOSED);
+        assertThat(postOrderQuiet(account).str("kind")).isEqualTo("OK");
+    }
+
+    @Test // 4: katilimci 503: hizli UPSTREAM_UNAVAILABLE, worker backoff ile dener, duzelince tombstone ile telafi
+    void participantDownRetriesWithBackoffThenCompensates() throws Exception {
+        UUID account = newAccount(5), key = UUID.randomUUID();
+        chaos("{\"down\":true}");
+
+        Resp r = postOrder(account, key, UUID.randomUUID(), null);
+        assertThat(r.status()).isEqualTo(503);
+        assertThat(r.str("kind")).isEqualTo("UPSTREAM_UNAVAILABLE");
+        assertThat(r.errorField("code")).isEqualTo(11101);
+        assertThat(r.elapsedMs()).isLessThan(500L);
+        UUID sagaId = UUID.fromString(r.str("sagaId"));
+
+        await("worker retried twice with backoff", () -> {
+            Map<String, Object> step = step(sagaId);
+            return ((Number) step.get("attempt")).intValue() >= 2 && "RETRY".equals(step.get("status"));
+        });
+        Map<String, Object> step = step(sagaId);
+        assertThat(step.get("last_error_code")).isEqualTo("ParticipantUnavailableException");
+        assertThat(((Number) step.get("backoff_ms")).longValue()).as("backoff = min(max, 2^n) s").isEqualTo(2000L);
+        assertThat(sagaStatus(sagaId)).isEqualTo("CANCEL_REQUESTED");
+        assertThat(opStatus(account, key)).as("down: nothing committed on participant").isNull();
+
+        clearChaos();
+        await("saga COMPENSATED", () -> "COMPENSATED".equals(sagaStatus(sagaId)));
+        assertThat(opStatus(account, key)).as("tombstone blocks a late consume").isEqualTo("CANCELLED");
+        assertThat(remaining(account)).isEqualTo(5);
+        assertThat(count("SELECT count(*) FROM subscription.operation WHERE account_id = '" + account + "' AND amount > 0")).isZero();
+    }
+
+    @Test // 5: allowlist (yanlis aktor) ve delegasyon (arka plan token'i / baska hesap) katilimcida reddedilir
+    void wrongActorAndBackgroundTokenAreRejected() throws Exception {
+        UUID account = newAccount(5), key = UUID.randomUUID();
+        String path = "/internal/subscription/accounts/" + account + "/operations/" + key + "/consume";
+        String body = "{\"operationType\":\"ORDER_QUOTA\",\"amount\":1}";
+
+        Resp wrongActor = call("POST", subscriptionBase + path, chat.mint(SUBSCRIPTION_AUD, account), body, null);
+        assertThat(wrongActor.status()).isEqualTo(403);
+        assertThat(wrongActor.str("code")).isEqualTo("INTERNAL_ACCESS_DENIED");
+
+        Resp background = call("POST", subscriptionBase + path, order.mint(SUBSCRIPTION_AUD, null), body, null);
+        assertThat(background.status()).isEqualTo(403);
+        assertThat(background.str("code")).isEqualTo("DELEGATION_DENIED");
+
+        Resp otherAccount = call("POST", subscriptionBase + path, order.mint(SUBSCRIPTION_AUD, UUID.randomUUID()), body, null);
+        assertThat(otherAccount.status()).isEqualTo(403);
+        assertThat(otherAccount.str("code")).isEqualTo("DELEGATION_DENIED");
+
+        assertThat(opStatus(account, key)).as("no operation row after rejected calls").isNull();
+        assertThat(remaining(account)).isEqualTo(5);
+
+        // Pozitif kontrol: dogru aktor + sub == path hesabi; katilimci aldigi traceparent'i yanitta yansitir
+        String tp = "00-" + hex(16) + "-" + hex(8) + "-01";
+        Resp ok = call("POST", subscriptionBase + path, order.mint(SUBSCRIPTION_AUD, account), body, tp);
+        assertThat(ok.status()).isEqualTo(200);
+        assertThat(ok.str("state")).isEqualTo("APPLIED");
+        assertThat(ok.header("X-Received-Traceparent")).isEqualTo(tp);
+        assertThat(opStatus(account, key)).isEqualTo("APPLIED");
+    }
+
+    @Test // 6: bulkhead: katilimcida en fazla 8 esanli cagri, fazlasi hemen reddedilir, thread havuzu tukenmez
+    void bulkheadCapsConcurrentCallsAndRejectsFast() throws Exception {
+        UUID account = newAccount(50);
+        chaos("{\"slowMillis\":1000,\"operations\":[\"consume\"]}");
+        int n = 20;
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<Resp>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < n; i++) {
+                futures.add(pool.submit(() -> { go.await(); return postOrder(account, UUID.randomUUID(), UUID.randomUUID(), null); }));
+            }
+            long start = System.nanoTime();
+            go.countDown();
+            List<Resp> results = new ArrayList<>();
+            for (Future<Resp> f : futures) results.add(f.get(5, TimeUnit.SECONDS));
+            long wallMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+            long ok = results.stream().filter(r -> "OK".equals(r.str("kind"))).count();
+            List<Resp> rejected = results.stream().filter(r -> "UPSTREAM_UNAVAILABLE".equals(r.str("kind"))).toList();
+            assertThat(ok + rejected.size()).isEqualTo(n);
+            assertThat(ok).isEqualTo(8);
+            assertThat(rejected).hasSize(12).allSatisfy(r -> {
+                assertThat(r.status()).isEqualTo(503);
+                assertThat(r.elapsedMs()).as("bulkhead full -> immediate").isLessThan(700L);
+            });
+            assertThat(wallMs).as("all return within read timeout + margin").isLessThan(2500L);
+            Map<String, Object> stats = chaosCall("GET", "/internal/test/chaos/stats", null).body();
+            assertThat(((Number) stats.get("maxInFlight")).intValue()).as("max concurrent calls at participant").isEqualTo(8);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test // 7: SUCCEEDED ama confirm edilmemis saga, OrderApp yeniden baslayinca ayni DB'den confirm edilir
+    void restartedCoordinatorConfirmsPendingSaga() throws Exception {
+        UUID account = newAccount(5), key = UUID.randomUUID();
+        chaos("{\"down\":true,\"operations\":[\"confirm\",\"get\"]}");
+
+        Resp r = postOrder(account, key, UUID.randomUUID(), null);
+        assertThat(r.str("kind")).isEqualTo("OK");
+        UUID sagaId = UUID.fromString(r.str("sagaId"));
+        await("confirm attempted and deferred", () -> ((Number) step(sagaId).get("attempt")).intValue() >= 1);
+
+        orderApp.close();                                               // koordinator sureci durur
+        assertThat(sagaStatus(sagaId)).isEqualTo("SUCCEEDED");
+        assertThat(opStatus(account, key)).isEqualTo("APPLIED");
+
+        clearChaos();
+        startOrderApp();                                                // yeni surec, ayni DB
+        await("saga CONFIRMED after restart", () -> "CONFIRMED".equals(sagaStatus(sagaId)));
+        assertThat(opStatus(account, key)).isEqualTo("CONFIRMED");
+        assertThat(remaining(account)).isEqualTo(4);
+        assertThat(orderCount(account)).isEqualTo(1);
+    }
+
+    // ---------------------------------------------------------------- yardimcilar
+
+    static UUID newAccount(int quota) {
+        UUID account = UUID.randomUUID();
+        db.update("INSERT INTO subscription.quota (account_id, remaining) VALUES (:a, :r)", Map.of("a", account, "r", quota));
+        return account;
+    }
+
+    static Resp postOrder(UUID account, UUID key, UUID resource, String traceparent) throws Exception {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(orderBase + "/v1/orders"))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json")
+                .header("X-Service-Auth", gateway.mint(ORDER_AUD, account))
+                .header("X-Idempotency-Key", key.toString())
+                .POST(HttpRequest.BodyPublishers.ofString("{\"resourceId\":\"" + resource + "\"}"));
+        if (traceparent != null) b.header("traceparent", traceparent);
+        return send(b.build());
+    }
+
+    static Resp postOrderQuiet(UUID account) {
+        try {
+            return postOrder(account, UUID.randomUUID(), UUID.randomUUID(), null);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    static Resp call(String method, String url, String token, String body, String traceparent) throws Exception {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json").header("X-Service-Auth", token)
+                .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
+        if (traceparent != null) b.header("traceparent", traceparent);
+        return send(b.build());
+    }
+
+    @SuppressWarnings("unchecked")
+    static Resp send(HttpRequest request) throws Exception {
+        long start = System.nanoTime();
+        HttpResponse<String> res = http.send(request, HttpResponse.BodyHandlers.ofString());
+        long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        Map<String, Object> body = res.body() == null || res.body().isBlank() ? Map.of() : JSON.readValue(res.body(), Map.class);
+        return new Resp(res.statusCode(), body, res.headers().map(), ms);
+    }
+
+    static Resp chaosCall(String method, String path, String body) throws Exception {
+        Resp r = call(method, subscriptionBase + path, tester.mint(SUBSCRIPTION_AUD, null), body, null);
+        assertThat(r.status()).as("chaos endpoint %s %s", method, path).isEqualTo(200);
+        return r;
+    }
+
+    static void chaos(String settingsJson) throws Exception { chaosCall("PUT", "/internal/test/chaos", settingsJson); }
+
+    static void clearChaos() throws Exception { chaosCall("DELETE", "/internal/test/chaos", null); }
+
+    static String receivedTraceparent(UUID account, UUID key, String operation) throws Exception {
+        String path = "/internal/subscription/accounts/" + account + "/operations/" + key + "/" + operation;
+        return chaosCall("GET", "/internal/test/chaos/traces?path=" + path, null).str("traceparent");
+    }
+
+    static CircuitBreaker circuitBreaker() {
+        return orderApp.getBean(CircuitBreakerRegistry.class).circuitBreaker("subscription");
+    }
+
+    static String sagaStatus(UUID sagaId) {
+        return DataAccessUtils.singleResult(db.queryForList("SELECT status FROM \"order\".saga WHERE id = :id", Map.of("id", sagaId), String.class));
+    }
+
+    static Map<String, Object> step(UUID sagaId) {
+        return db.queryForMap("""
+                SELECT status, attempt, last_error_code,
+                       (EXTRACT(EPOCH FROM (next_attempt_at - updated_at)) * 1000)::bigint AS backoff_ms
+                FROM "order".saga_steps WHERE saga_id = :id""", Map.of("id", sagaId));
+    }
+
+    static String opStatus(UUID account, UUID key) {
+        return DataAccessUtils.singleResult(db.queryForList(
+                "SELECT status FROM subscription.operation WHERE caller_service = 'order-service' AND account_id = :a AND operation_key = :k",
+                Map.of("a", account, "k", key), String.class));
+    }
+
+    static int remaining(UUID account) {
+        return db.queryForObject("SELECT remaining FROM subscription.quota WHERE account_id = :a", Map.of("a", account), Integer.class);
+    }
+
+    static int orderCount(UUID account) {
+        return db.queryForObject("SELECT count(*) FROM \"order\".order_item WHERE account_id = :a", Map.of("a", account), Integer.class);
+    }
+
+    static int count(String sql) { return db.getJdbcTemplate().queryForObject(sql, Integer.class); }
+
+    /** Sinirli poll: gercek zamanli altyapi (HTTP, scheduler) icin; en fazla MAX_WAIT. */
+    static void await(String what, BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + MAX_WAIT.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) return;
+            TimeUnit.MILLISECONDS.sleep(100);
+        }
+        assertThat(condition.getAsBoolean()).as("timed out after %s waiting for: %s", MAX_WAIT, what).isTrue();
+    }
+
+    static String hex(int bytes) {
+        byte[] b = new byte[bytes];
+        ThreadLocalRandom.current().nextBytes(b);
+        b[0] |= 1;                                                       // tamami sifir olmayan id (W3C: gecersiz)
+        return HexFormat.of().formatHex(b);
     }
 }
 ```

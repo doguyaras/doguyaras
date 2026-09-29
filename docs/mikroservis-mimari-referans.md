@@ -483,7 +483,7 @@ Sıra (Nygard, *Release It!*): önce **her hop'ta sert timeout**, sonra **bağı
 | Katman | Kural |
 |---|---|
 | Gateway | İstek başına toplam bütçe (örn. 3 sn). Downstream timeout'ları bunun altında. |
-| HTTP client | connect 1–2 sn, read 2–5 sn; hedef başına `resilience4j.circuitbreaker.instances.<hedef>` + `bulkhead` (eşzamanlı çağrı üst sınırı, semaphore). Circuit açıkken tanımlı `ServiceException` (503/`UPSTREAM_UNAVAILABLE`) döner, thread bloke olmaz. |
+| HTTP client | Timeout'lar gateway bütçesinden türetilir: senkron zincirdeki `connect + read` toplamı gateway bütçesinden **küçük** olmalı (bütçe 3 sn ise tek hop için connect 0,5 sn / read 1,5 sn; iskelette yavaş katılımcı 1,5 sn'de 503 aldı). connect 2 / read 5 sn yalnız arka plan/worker client'ları içindir. Hedef başına `resilience4j.circuitbreaker.instances.<hedef>` + `bulkhead` (semaphore). Sıra `CircuitBreaker(Bulkhead(http))`: circuit açıkken bulkhead izni alınmaz. `record-exceptions` yalnız belirsiz/erişilemez sonucu (timeout, IO, 5xx) içerir; 4xx iş kararları ve `BulkheadFullException` `ignore-exceptions`'a yazılır (Resilience4j listede olmayanı başarı sayar; yazılmazsa iş cevapları hata oranını sulandırır ya da kendi yük kısıtımız circuit'i açar). `bulkhead.max-wait-duration: 0` açıkça yazılır. Circuit açıkken tanımlı `ServiceException` (503/`UPSTREAM_UNAVAILABLE`) döner, thread bloke olmaz. |
 | Tuzak | Spring Cloud CircuitBreaker + Resilience4j entegrasyonu varsayılan **1 sn TimeLimiter** ve thread-pool bulkhead ekler; `resilience4j.timelimiter.instances.*` ayarlanmaz ya da `disable-time-limiter` denmezse 5 sn'lik read timeout anlamsızlaşır. |
 | Thread modeli | `spring.threads.virtual.enabled=true` (Java 25). Tomcat thread sınırı kalkar; bloklayan IO ucuzlar. Hikari havuzu bilinçli sınır olarak kalır (Bölüm 10.5). |
 | Retry | Senkron yolda yok (`Retryer.NEVER_RETRY`). Retry outbox/saga worker'larında, backoff ile. |
@@ -682,17 +682,21 @@ public interface InventoryClient {                                   // hedef se
 ```yaml
 spring.http.serviceclient.inventory:
   base-url: ${services.inventory.base-url}
-  connect-timeout: 2s
-  read-timeout: 5s
-resilience4j.circuitbreaker.instances.inventory: { failure-rate-threshold: 50, wait-duration-in-open-state: 20s, sliding-window-size: 20 }
-resilience4j.bulkhead.instances.inventory: { max-concurrent-calls: 25 }
+  connect-timeout: 500ms        # connect + read < gateway bütçesi (3 sn); worker client'ları için 2s / 5s
+  read-timeout: 1500ms
+resilience4j.circuitbreaker.instances.inventory:
+  { failure-rate-threshold: 50, wait-duration-in-open-state: 20s, sliding-window-size: 20,
+    record-exceptions: [java.io.IOException, org.springframework.web.client.HttpServerErrorException],
+    ignore-exceptions: [com.acme.platform.core.ServiceException, io.github.resilience4j.bulkhead.BulkheadFullException] }
+resilience4j.bulkhead.instances.inventory: { max-concurrent-calls: 25, max-wait-duration: 0 }
 ```
 
 Client grubu için ortak `ClientHttpRequestInterceptor` / Feign `RequestInterceptor` şunları sağlar:
 - **Kimlik:** `aud` = hedefin audience'ı, `iss` = bu servis, `sub` = `X-Subject-Id`; imza bu servisin **kendi** private key'iyle (Bölüm 9.2); ardından header silinir.
 - **Hata çevirisi:** Upstream 4xx → `ServiceException` (status korunur, gövde okunmaz ve loglanmaz); 5xx/timeout → 502/503 `UPSTREAM_*`.
 - **Dayanıklılık:** circuit breaker + bulkhead (Bölüm 4.7). Retry **yok**; retry outbox ve saga worker'larındadır.
-- **Tracing:** W3C header'ları otomatik (`micrometer` entegrasyonu).
+- **Tracing:** W3C header'ları otomatik, ama **yalnız** client Boot'un enjekte ettiği `RestClient.Builder` (veya `@ImportHttpServices`) ile kurulduysa: `RestClient.builder()`/`RestClient.create()` observation customizer'ını atlar ve `traceparent` göndermez (iskelette mutasyonla gösterildi).
+- **Arka plan çağrısında kimlik:** worker'da HTTP isteği yoktur; interceptor'ın varsayılan "mevcut istekteki hesap" kaynağı boş kalır ve katılımcı `REQUIRED` delegasyonda 403 döner (her saga `MANUAL_REVIEW`'e düşer). Worker `sub`'ı yalnız kendi akışının kalıcı kaydından (saga/outbox satırı) aktarır; client `sub`'ı çağrı parametresinden alır.
 
 **Kaçın:** Karşı tarafta `@RequestHeader("X-Subject-Id")` beklemek. Interceptor bu header'ı sildiği için kimlik orada `@CurrentAccount` ile okunmalı. Sıcak yolda **okuma** amaçlı client çağrısı (Bölüm 4.6).
 
@@ -876,7 +880,7 @@ Her testten sonra appender ayrılır ve logger seviyesi geri yüklenir (Bölüm 
 ### 8.6 Tracing
 
 - Boot 4: **`spring-boot-starter-opentelemetry`** (OTel API + Micrometer tracing bridge + metrik ve trace için OTLP exporter'lar; ayarlar `management.*` altında, `otel.*` değil). Ayrı ayrı `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` eklemek 3.x kalıntısıdır.
-- `propagation.type: W3C`, `spring.reactor.context-propagation: auto`, HTTP client micrometer entegrasyonu açık
+- `propagation.type: W3C`, `spring.reactor.context-propagation: auto`, HTTP client micrometer entegrasyonu açık (client'lar Boot'un `RestClient.Builder` bean'inden kurulur, Bölüm 6.8). Test: katılımcının aldığı `traceparent` W3C biçiminde (`00-<32hex>-<16hex>-<2hex>`; flags `01` veya `03` olabilir) ve trace-id çağırana gelenle aynıdır.
 - **Sampling:** Uygulama %100 head sampling ile Alloy/OTel Collector'a gönderir; Collector **tail sampling** yapar: hatalı ve yavaş (p99 üstü) izlerin tamamı, kalanın %10'u (`tailsampling` processor; `decision_wait` 30 sn; bir izin tüm span'leri aynı collector'a gelmeli). Boot varsayılanı (%10 head) düşük trafikte yeterli olsa da hata izlerini kaybettirir.
 - **Asenkron sınırlar:** Outbox satırında `traceparent` ve `tracestate` kolonları tutulur. Poller trace'e bu değerlerden devam eder. MQ header'larına inject edilir. Redis zarfında trace metadata **HMAC kapsamına dahildir**. WebSocket handshake ve STOMP frame'leri için interceptor bulunur.
 - **Kural:** Trace id yetki sinyali değildir. Span attribute'larına PII konmaz. Route'lar static template olarak yazılır. Trace id Loki label'ı yapılmaz.
@@ -984,7 +988,7 @@ A servisi kendi anahtarıyla imzalayınca B, token'ın A'dan geldiğini doğrula
 | Çağıran (`act`) | Hedef işlem | Kullanıcı bağlamı (`sub`) | Kaynak yetkisi kontrolü | Bağlam kaynağı | Ele geçirilirse zarar |
 |---|---|---|---|---|---|
 | gateway | her public uç | zorunlu (user JWT'den) | hedef: ownership | kullanıcı isteği | tüm kullanıcı işlemleri → gateway en kritik bileşen |
-| order-service | `subscription: consume/confirm/compensate` | zorunlu; yalnız kendi sipariş akışındaki hesap | subscription: `operation_key` + hesap eşleşmesi | kullanıcı isteği (senkron) | yalnız hak tüketimi; başka işlem yok |
+| order-service | `subscription: consume/confirm/compensate/get` | zorunlu; yalnız kendi saga kaydındaki hesap | subscription: `operation_key` + hesap eşleşmesi | consume: kullanıcı isteği (senkron); confirm/compensate/get: recovery worker, `sub` = `saga.account_id` (isteğin `sub`'ı saga kaydında saklanır) | yalnız hak tüketimi; başka işlem yok |
 | order-service (worker) | `notification: commands` | opsiyonel | – | arka plan (outbox) | spam gönderimi → rate limit |
 | backoffice-service | `user: moderate` | yok (admin adına; admin id ayrı claim) | user: admin rolü + audit | panel isteği | moderasyon kararları |
 
@@ -1622,7 +1626,7 @@ POST /internal/<kaynak>/operations/{operationKey}/compensate
 | Parametre | Değer |
 |---|---|
 | deadline | 15 sn |
-| HTTP client timeout | 2 / 5 sn |
+| HTTP client timeout | Senkron consume: 0,5 / 1,5 sn (connect + read < gateway bütçesi); worker'ın confirm/compensate/get çağrıları: 2 / 5 sn |
 | poll | 5 sn |
 | lease | 60 sn |
 | max backoff | 5 dk |
@@ -1898,7 +1902,7 @@ management:
   tracing: { propagation.type: W3C, sampling.probability: <oran> }
   otlp.tracing.endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT}
 logging.pattern.correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
-app.http: { connect-timeout-ms: 2000, read-timeout-ms: 5000 }
+app.http: { connect-timeout-ms: 500, read-timeout-ms: 1500 }   # connect + read < gateway bütçesi (Bölüm 4.7); worker client'ları ayrı grupta 2000 / 5000
 ```
 
 Servis dosyası:
@@ -2971,7 +2975,7 @@ Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu 
 | Modulith `verify()` + negatif test, event publication registry atomikliği ve en-az-bir-kez teslimi, 2.1.1 `withMinAge` hatası (1.1, 11.2, 16) | 12 test, gömülü PostgreSQL 18; 5/5 mutasyon; ACCEPT | 1/2 | `modulith-example` |
 | OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 18.4, 20) | 16 test: baseline gate'i, 8 varyant, araç sınırları sabitlendi (3.1 tip körlüğü, opsiyonel istek alanı adı, operationId); 9 mutasyon, 8 yakalandı + 1 beklenen uyumlu; ACCEPT | 1 | `contract-example` |
 | gitleaks (geçmiş + çalışma ağacı, tarama hatası ayrımı) + config-lint (15.3, 18.3, 19.5) | 30 test, 10/11 mutasyon; CI adımları fail-closed; ACCEPT | Y | `blueprint/scripts` |
-| İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart (4.7, 9.2.1, 11.4) | *sprint koşuyor* | 3 | `runtime-example` (bekleniyor) |
+| İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart, trace yayılımı (4.7, 6.8, 8.6, 9.2.1, 11.4) | İki gerçek Boot uygulaması, gerçek HTTP + servis JWT + PostgreSQL; 8 senaryo, 7/8 mutasyon + 1 eşdeğer; ACCEPT. Bulgu: worker'ın `sub` kaynağı ve timeout/bütçe çelişkisi | 3 | `runtime-example` |
 | RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, consumer-timeout, broker down (12.3, 12.4) | 12 senaryo PASS: yerelde 4.3.0, CI'da 4.3.6 (Actions run 36554502553); 6 mutasyon yakalandı, 1 eşdeğer mutasyon açıklandı | 3 | `broker-example/BrokerBehaviourIT` |
 | Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | Headless `claude -p` oturumunda migration hook'u engelledi, review-gate sordu, damga skill çağrısıyla yazıldı; 7 kusur bulundu ve düzeltildi (hook alt dizin fail-open'ı dahil) | S | `blueprint/README.md` gerçek oturum tablosu |
 | 12 review skill'i gerçek bir PR'da (19.3) | Tohumlanmış kusurlu PR'da 67 beklenen eşleşmeden 63'ü yakalandı, 3 tuzağın hiçbiri işaretlenmedi; kaçırılanlar skill metinlerine işlendi (revize metin yeniden koşulmadı) | S | doguyaras/doguyaras PR #1 özet yorumu |
