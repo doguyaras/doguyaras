@@ -8,7 +8,8 @@ blueprint/
 ├── CLAUDE.md                         # Yalnız AGENTS.md'ye yönlendirir
 ├── .github/
 │   ├── copilot-instructions.md       # Yalnız AGENTS.md'ye yönlendirir
-│   └── PULL_REQUEST_TEMPLATE.md      # Çalıştırılan review skill'leri ve kararları burada kayda geçer
+│   ├── PULL_REQUEST_TEMPLATE.md      # Çalıştırılan review skill'leri ve kararları burada kayda geçer
+│   └── workflows/ci.yml              # PR gate: SHA-pinli action'lar, script/hook kuru çalıştırma, mvn verify (gömülü PG), RabbitMQ servis container'ı, test sayısı koruması — gerçek Actions'ta doğrulandı
 ├── docs/
 │   ├── ai/
 │   │   ├── repo-context.md           # Modül haritası, portlar, stack, yüksek sinyalli dosyalar, sıcak yol tablosu
@@ -16,6 +17,7 @@ blueprint/
 │   │   ├── context-boundaries.md     # Token ekonomisi: hariç klasörler, şartlı açılacak yüzeyler
 │   │   ├── review-checklist.md       # Değişiklik sonrası kontrol listesi (skill'lere link)
 │   │   └── operation-consistency.md  # Servisler arası tutarlılık standardı (outbox / event / saga)
+│   ├── versions.md                   # Tarihli sürüm/destek anlık görüntüsü (kurallar referans Bölüm 25'te)
 │   └── adr/
 │       └── 0000-template.md          # Architecture Decision Record şablonu
 ├── .agents/skills/                   # TEK KAYNAK — .claude/skills buna symlink'tir
@@ -39,8 +41,8 @@ blueprint/
 │       ├── review-stamp.sh           # PostToolUse(Skill): damga = epoch + çalışma ağacı içerik hash'i
 │       └── tree-state.sh             # ortak: git write-tree ile içerik kimliği (commit atmak damgayı bozmaz, dosya değiştirmek bozar)
 ├── scripts/
-│   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım
-│   └── flyway-immutability.test.js   # node --test
+│   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım (alt klasör/monorepo fail-open hatası düzeltildi)
+│   └── flyway-immutability.test.js   # node --test (13 test)
 ├── tests/                            # Makine zorlamalı kurallar için Java test şablonları (skeleton-example'da doğrulandı)
 │   ├── ArchitectureRulesTest.java    # ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
 │   ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik + blok + mesaj formatı
@@ -55,7 +57,7 @@ blueprint/
 
 | Seviye | Ne | Durum |
 |---|---|---|
-| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (12 test); hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
+| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (13 test; alt klasör regresyonu dahil); hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
 | **Davranışsal** (sistem koşarken tutarlılık güvenceleri) | outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, kira devri, inbox atomikliği, üretici sıralaması, lane izolasyonu, backoff/DEAD; saga: replay, eşzamanlı aynı key, çökme noktaları, yanıt kaybı, tombstone, istek-recovery yarışı, MANUAL_REVIEW, cleanup | **Doğrulandı** (2026-09-29, seviye 2, gerçek PostgreSQL 17.5, gömülü/Docker'sız): `OutboxBehaviourIT` 13 senaryo + `SagaBehaviourIT` 19 test (matris 1–20 + 21–32'nin outbox/inbox kısmı); 11 kasıtlı regresyon yakaladı (1 eşdeğer mutasyon). **Koşturulmadı:** katılımcı HTTP/JWT katmanı ve broker ile yeniden teslim (seviye 3), staging provası (seviye 4) — projede P0 çıkış koşulu |
 | **Skill'ler** | 12 skill metni | Gerçek bir PR üzerinde Claude Code oturumunda henüz koşturulmadı; ilk kullanımda karar formatlarının uyumu gözden geçirilir |
 
