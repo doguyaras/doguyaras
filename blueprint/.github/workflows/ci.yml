@@ -24,15 +24,23 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: '24' }
-      - name: script testleri (immutability, config-lint)
+      - name: gitleaks ikilisi (surum sabit; testler ve tarama ayni ikiliyi kullanir)
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          echo "GITLEAKS=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
+      - name: script testleri (immutability, config-lint, gitleaks sarmalayicisi)
+        # "test -f ... || true" kalibi kullanilmaz: script varken test kirmizisini da yutar (fail-open).
         run: |
           node --test scripts/flyway-immutability.test.js
-          test -f scripts/config-lint.test.js && node --test scripts/config-lint.test.js || true
+          node --test scripts/config-lint.test.js
+          node --test scripts/gitleaks-check.test.js
       - name: migration degismezligi (PR base'ine karsi)
         if: github.event_name == 'pull_request'
         run: node scripts/flyway-immutability.js check --base "origin/${{ github.base_ref }}"
-      - name: config lint (secret fallback yok)
-        run: test -f scripts/config-lint.js && node scripts/config-lint.js $(git ls-files 'services/*/*/src/main/resources/*.yml' 'services/*/*/src/main/resources/config/*.yml' 'deploy/*.env*' 2>/dev/null) || echo "config-lint yok"
+      - name: config lint (secret fallback / literal secret yok)
+        # dosya listesi bossa script exit 3 verir (dogrulanamadi); glob'lar proje yerlesimine gore uyarlanir
+        run: node scripts/config-lint.js $(git ls-files 'services/*/*/src/main/resources/*.yml' 'services/*/*/src/main/resources/config/*.yml' 'deploy/*.env*')
       - name: hook kuru calistirma (bozuk hook sessizce etkisiz kalmasin)
         run: |
           set -euo pipefail
@@ -48,10 +56,8 @@ jobs:
           fi
           # yeni V dosyasi: serbest (exit 0)
           echo '{"tool_input":{"file_path":"'"$PWD"'/x/src/main/resources/db/migration/V9999__new.sql"}}' | node .claude/hooks/flyway-immutability.js
-      - name: gitleaks (secret taramasi)
-        run: |
-          curl -sSL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
-          tar xzf gitleaks.tgz gitleaks && ./gitleaks git --no-banner --redact --exit-code 1 .
+      - name: gitleaks (tum gecmis + calisma agaci; 0 temiz, 1 bulgu, 3 dogrulanamadi)
+        run: bash scripts/gitleaks-check.sh all .
 
   backend:
     runs-on: ubuntu-latest
