@@ -17,3 +17,10 @@ spring:
       inventory: { base-url: "${INVENTORY_URL}", connect-timeout: 2s, read-timeout: 5s }
 services:
   inventory.base-url: ${INVENTORY_URL}
+# Structured (JSON) log: Loki json stage / OTLP alimi icin (referans Bolum 8.1). Local profil duz metin kalir.
+logging:
+  structured:
+    format:
+      console: ecs
+    json:
+      stacktrace: { root: first, max-length: 4000 }

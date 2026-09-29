@@ -1,0 +1,32 @@
+# Ortamdan bagimsiz taban ayarlar. Ortam degerleri config/order.yml (deploy) ve application-local.yml'dedir.
+spring:
+  application:
+    name: order
+  mvc:
+    apiversion:
+      # Spring Framework 7 versiyonlama (referans Bolum 20): minor surum API-Version header'indan; major /v1 path'te.
+      # required=true strateji tanimli TUM route'lara uygulanir (surumsuz handler ve ayni porttaki actuator dahil):
+      # eksik/desteklenmeyen surum 400 API_VERSION_INVALID doner. Path-segment cozumleme (use.path-segment) da
+      # bir Boot property'sidir ama /internal/** gibi surumsuz path'leri de surum olarak parse edecegi icin burada secilmedi.
+      use:
+        header: API-Version
+      required: true
+      supported: [ "1.0", "1.1" ]
+  datasource:
+    # Boot 4.1: baglanti yalniz ilk SQL'de havuzdan alinir; @Transactional read-only cache hit'leri havuzu tutmaz (Bolum 2.1)
+    connection-fetch: lazy
+  http:
+    clients:
+      # Auto-configured tum client'lar icin kisa timeout (Bolum 4.7, 9.11 madde 4)
+      connect-timeout: 2s
+      read-timeout: 5s
+api:
+  # Kaldirilacak surumler: Deprecation (@epoch), Sunset (HTTP-date) ve Link rel="deprecation" header'lari (Bolum 20)
+  deprecations:
+    - version: "1.0"
+      deprecated-at: "2026-09-01T00:00:00Z"
+      sunset-at: "2027-03-01T00:00:00Z"
+      link: "https://docs.acme.example/order/api/deprecations#v1-0"
+order:
+  worker:
+    retry-delay: 100ms
