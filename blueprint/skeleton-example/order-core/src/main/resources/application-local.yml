@@ -4,12 +4,18 @@ service-jwt:
       allowed-actors: [ "payment-service" ]
     - path: "/internal/orders/**"
       allowed-actors: [ "backoffice-service" ]
+    - path: "/internal/orders/*/force-cancel"
+      allowed-actors: [ "backoffice-service", "chat-service" ]
 rate-limit:
   rules:
     order-create-account: { limit: 60, window-seconds: 60 }
+    order-cancel-account: { limit: 30, window-seconds: 60 }
 spring:
   http:
     serviceclient:
       inventory: { base-url: "http://localhost:8086", connect-timeout: 2s, read-timeout: 5s }
 services:
-  inventory.base-url: http://localhost:8086
+  inventory.base-url: http://localhost:8086sms:
+  api-key: ${SECRET_SMS_API_KEY:dev-sms-key-123}
+notification:
+  base-url: http://localhost:8091
