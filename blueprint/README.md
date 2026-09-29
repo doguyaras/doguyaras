@@ -42,7 +42,11 @@ blueprint/
 │       └── tree-state.sh             # ortak: git write-tree ile içerik kimliği (commit atmak damgayı bozmaz, dosya değiştirmek bozar)
 ├── scripts/
 │   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım (alt klasör/monorepo fail-open hatası düzeltildi)
-│   └── flyway-immutability.test.js   # node --test (13 test)
+│   ├── flyway-immutability.test.js   # node --test (13 test)
+│   ├── config-lint.js                # Secret hijyeni: ${ENV:literal} fallback, local dışı düz secret, local-only "# lint:allow-secret-fallback <gerekçe>" (0/1/3)
+│   ├── config-lint.test.js           # node --test (20 test) + fixtures/config-lint/ (4 dosya)
+│   ├── gitleaks-check.sh             # gitleaks sarmalayıcısı: history (git) + tree (dir), --redact; "tarama yapılamadı" ≠ "temiz" (0/1/3)
+│   └── gitleaks-check.test.js        # GITLEAKS=<ikili> node --test (8 test; gerçek gitleaks 8.24.3, geçici git depoları)
 ├── tests/                            # Makine zorlamalı kurallar için Java test şablonları (skeleton-example'da doğrulandı)
 │   ├── ArchitectureRulesTest.java    # ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
 │   ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik + blok + mesaj formatı
@@ -57,7 +61,7 @@ blueprint/
 
 | Seviye | Ne | Durum |
 |---|---|---|
-| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (13 test; alt klasör regresyonu dahil); hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
+| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (13 test; alt klasör regresyonu dahil); `scripts/config-lint.js` (20 test: fallback, boş/iç içe fallback, düz secret, local profil, allow işareti, çoklu dosya, 0/1/3; skeleton config'i temiz) ve `scripts/gitleaks-check.sh` (8 test, gerçek gitleaks 8.24.3: gömülü sahte AWS anahtarı + private key → 1, temiz → 0, silinmiş secret yalnız geçmişte, depo değil → 3; skeleton ağacı ve repo geçmişi → 0) — 11 mutasyonun 10'u yakalandı, 1'i eşdeğer; hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
 | **Davranışsal** (sistem koşarken tutarlılık güvenceleri) | outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, kira devri, inbox atomikliği, üretici sıralaması, lane izolasyonu, backoff/DEAD; saga: replay, eşzamanlı aynı key, çökme noktaları, yanıt kaybı, tombstone, istek-recovery yarışı, MANUAL_REVIEW, cleanup | **Doğrulandı** (2026-09-29, seviye 2, gerçek PostgreSQL 17.5, gömülü/Docker'sız): `OutboxBehaviourIT` 13 senaryo + `SagaBehaviourIT` 19 test (matris 1–20 + 21–32'nin outbox/inbox kısmı); 11 kasıtlı regresyon yakaladı (1 eşdeğer mutasyon). **Koşturulmadı:** katılımcı HTTP/JWT katmanı ve broker ile yeniden teslim (seviye 3), staging provası (seviye 4) — projede P0 çıkış koşulu |
 | **Skill'ler** | 12 skill metni | Gerçek bir PR üzerinde Claude Code oturumunda henüz koşturulmadı; ilk kullanımda karar formatlarının uyumu gözden geçirilir |
 
@@ -76,6 +80,8 @@ chmod +x .claude/hooks/*.sh
 echo '.claude/.last-review-check' >> .gitignore   # review damgası yerel; commit'lenmez
 export FLYWAY_BASE_REF=origin/develop            # (opsiyonel) base branch adı; yoksa sırayla origin/develop, origin/main, origin/master, develop, main, master denenir
 node --test scripts/flyway-immutability.test.js  # script'in kendi testleri
+node --test scripts/config-lint.test.js          # config lint testleri (skeleton-example silindiyse son test yolunu uyarla)
+GITLEAKS=$(command -v gitleaks) node --test scripts/gitleaks-check.test.js && bash scripts/gitleaks-check.sh all .
 bash -n .claude/hooks/review-gate.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # hook kuru çalıştırma → "ask"
 echo '{"tool_input":{"skill":"proj-security-review"}}' | .claude/hooks/review-stamp.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # damga sonrası → sessiz (izin)
 ```

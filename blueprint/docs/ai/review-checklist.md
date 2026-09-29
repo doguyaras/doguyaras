@@ -22,7 +22,8 @@
 ```bash
 mvn -B -ntp verify -pl <değişen modüller> -amd          # testler + ArchUnit + ErrorCode tekilliği + config drift
 node scripts/flyway-immutability.js check --base origin/<hedef>
-gitleaks detect --no-banner
+node scripts/config-lint.js <değişen *.yml / *.properties / *.env* dosyaları>   # secret key'de ${ENV:literal} fallback ve local dışı düz secret yok (0/1/3)
+bash scripts/gitleaks-check.sh all .                   # gitleaks 8.24.3: tüm geçmiş (git) + çalışma ağacı (dir), --redact (0/1/3)
 npm --prefix <panel>-web run lint && npm --prefix <panel>-web run build && npm --prefix <panel>-web test
 ```
 
