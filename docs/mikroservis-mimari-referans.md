@@ -55,6 +55,7 @@
 24. [Ölçek Eşikleri ve Evrim Yolu](#24-ölçek-eşikleri-ve-evrim-yolu)
 25. [Sürüm ve Destek Takibi](#25-sürüm-ve-destek-takibi)
 26. [Mevcut Bir Projeye Uygulama Protokolü](#26-mevcut-bir-projeye-uygulama-protokolü)
+27. [Kanıt Haritası: Hangi İddia Nasıl Doğrulandı](#27-kanıt-haritası-hangi-iddia-nasıl-doğrulandı)
 - [Ek A — Sürüm Notları (tarihli anlık görüntü)](#ek-a--sürüm-notları-tarihli-anlık-görüntü)
 - [Ek B — Doğrulama Kaynakları](#ek-b--doğrulama-kaynakları-2026-09-29)
 
@@ -2895,6 +2896,38 @@ Her faz sonunda: uyum raporu güncellenir, ilgili review skill'leri çalıştır
 5. Onay sonrası: her PR için `docs/ai/review-checklist.md`'deki skill'ler ve PR şablonu.
 
 **Kaçın:** Tek dev PR ile "her şeyi düzenlemek"; ArchUnit'i ilk gün tüm kurallarla zorunlu yapıp build'i günlerce kırık bırakmak; upgrade'i test ağı olmadan yapmak; profil dışı altyapı (Kafka, k8s, Vault) kurmak; mevcut migration'lara dokunmak; secret değerlerini rapora yazmak.
+
+---
+
+## 27. Kanıt Haritası: Hangi İddia Nasıl Doğrulandı
+
+Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu yaklaşım şu koşulda çalışır). İddialar bu tabloda kanıtına bağlanır; kanıtı olmayan iddia açıkça "kanıt yok" diye işaretlenir. Seviyeler Bölüm 19.6'daki gibidir: **Y** yapısal (kural derlenir/ihlal yakalanır), **1** unit/MockMvc, **2** gerçek PostgreSQL/Redis/PgBouncer süreci, **3** iki süreç/uygulama gerçek HTTP/AMQP, **CI** GitHub Actions'ta koştu, **W** web kaynağıyla doğrulandı (Ek B), **S** gerçek Claude Code oturumu.
+
+| İddia (bölüm) | Kanıt | Seviye | Nerede |
+|---|---|---|---|
+| Katman/sınır kuralları makineyle zorlanır (3, 4, 19.5) | ArchUnit 8 kural + enforcer; 8 kasıtlı ihlal yakalandı | Y | `skeleton-example/order-core` `ArchitectureRulesTest` |
+| Hata kodu tekilliği, config drift, secret fallback yasağı (7.2, 15.2) | testler + kasıtlı ihlaller | Y | `ErrorCodeUniquenessTest`, `ConfigDriftTest` |
+| Migration değişmezliği hook + CI (10.2, 19.4) | 13 script testi; hook gerçek yolla exit 2/0; alt klasör fail-open hatası düzeltildi | Y, CI | `blueprint/scripts`, `.github/workflows/skeleton-ci.yml` |
+| Review damgası içerik hash'ine bağlı (19.4, 19.6) | 11 hook senaryosu | Y | `blueprint/.claude/hooks` |
+| Outbox: tekrar teslim tek etki, iki worker, kira devri, lane izolasyonu, üretici sıralaması, backoff/DEAD (11.2) | 13 senaryo + 5 mutasyon | 2 | `platform-messaging` `OutboxBehaviourIT` |
+| Inbox atomikliği ve handler kapsamlı dedup (11.3) | senaryo #22, #25 | 2 | `OutboxBehaviourIT` |
+| Local saga: begin/consume/success CAS, recovery, tombstone, yanıt kaybı, yarış, MANUAL_REVIEW, cleanup (11.4, 11.5) | 19 test, matris 1–20, 6 mutasyon yakalandı + 1 eşdeğer | 2 | `SagaBehaviourIT` |
+| Gömülü PostgreSQL non-root CI runner'da, RabbitMQ 4.3 servis container'ı, test sayısı koruması, SHA-pinli action'lar (16, 18.3) | run 2 yeşil, 44 test, 27 sn | CI | Actions run 36547695286 |
+| Sürüm/EOL/CVE iddiaları (2, Ek A) | 30+ kaynak | W | Ek B |
+| Servis JWT filtresi: EdDSA, kid rotasyonu, aud/iss/exp, path normalize, first-match allowlist, delegasyon matrisi (9.2–9.5) | *sprint koşuyor* | 1 | `platform-security` (bekleniyor) |
+| Read-model: kaynak başına revizyon, konumdan tazelik, delta boşluğu, deterministik rebuild (4.6) | *sprint koşuyor* | 2 | `platform-messaging/readmodel` (bekleniyor) |
+| DB rol ayrımı, default privileges, rol zaman aşımları, RLS SET LOCAL, `uuidv7()`, Flyway baseline güvenlik ağı, PgBouncer prepared statements (10.1–10.5) | *sprint koşuyor* | 2/3 | `db-security-example` (bekleniyor) |
+| Global handler, binding testi, log privacy, ECS log, API versiyonlama + Deprecation/Sunset, SSRF `InetAddressFilter`, lazy connection, `@Retryable`/`@ConcurrencyLimit` (6, 7.3, 8, 9.11, 20) | *sprint koşuyor* | 1 | `order-core` (bekleniyor) |
+| Parametre bounded-staleness (14) | *sprint koşuyor* | 1 | `platform-parameters` (bekleniyor) |
+| Redis Lua fixed-window rate limit, fail-open/closed (9.6) | *sprint koşuyor* | 2 | `rate-limit-example` (bekleniyor) |
+| Modulith `verify()` + event publication registry (1.1, 11.2) | *sprint koşuyor* | 1/2 | `modulith-example` (bekleniyor) |
+| OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 20) | *sprint koşuyor* | 1 | `contract-example` (bekleniyor) |
+| gitleaks + config-lint (15.3, 19.5) | *sprint koşuyor* | Y | `blueprint/scripts` (bekleniyor) |
+| İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart (4.7, 9.2.1, 11.4) | *sprint koşuyor* | 3 | `runtime-example` (bekleniyor) |
+| RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, broker down (12.3, 12.4) | *koşuyor* | 3 | `broker-example` (bekleniyor) |
+| Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | *koşuyor* | S | nested-session raporu (bekleniyor) |
+| 12 review skill'i gerçek bir PR'da (19.3) | *koşuyor* | S | PR #1 (bekleniyor) |
+| **Kanıtı olmayanlar** | — | — | `docker-rollout` sıfır kesinti (Docker yok), deploy script/rollback provası, Debezium CDC, WebSocket/Redis fan-out, ScyllaDB/OpenSearch eşikleri, k6 yük testi, SOPS/OpenBao akışı, App Store/Play doğrulama, KVKK silme saga'sı uçtan uca. Bunlar projede yazılır; bu referans yalnız desenleri verir. |
 
 ---
 
