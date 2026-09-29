@@ -1547,6 +1547,8 @@ commit
    - Hata veya belirsiz sonuçta önce `GET` ile katılımcının durumu sorgulanır; çelişki varsa `MANUAL_REVIEW`.
 5. `monitor`: 15 dk'dan eski çözülmemiş kayıtlar ERROR olarak raporlanır. `cleanup`: yalnız terminal kayıtlar 30 gün sonra silinir; `MANUAL_REVIEW` silinmez.
 
+**Çalışan hali:** `blueprint/skeleton-example/platform-messaging` — `saga/LocalSagaStore` (begin/success/fail, claim/prepare/complete/retry/manualReview, monitor/cleanup), `saga/SagaRecoveryWorker`, `db/platform/saga_coordinator.sql`; katılımcı örneği ve senaryolar `SagaBehaviourIT` (Bölüm 11.5).
+
 **Katılımcı sözleşmesi:**
 
 ```
@@ -1605,7 +1607,7 @@ Config key'leri `operation-consistency.*` altında tutulur.
 
 **Ek senaryolar (Bölüm 11.2–11.3, 4.6):** inbox satırı + iş aynı TX (handler ortasında exception → satır yok) · commit sonrası ack öncesi çökme → duplicate yutulur · iki poller instance'ı aynı aggregate'in sıralı iki satırı → tek worker, sıra korunur · bir lane'de takılı hedef diğer lane'i durdurmuyor · eski güvenlik kararı yeniden denemede yeni kararı ezmiyor (superseded + `source_revision`) · publisher confirm alınmış ama tüketici işlememiş → üretici "tamamlandı" saymıyor · delta olayında sıra boşluğu → uygulama durur, alarm · snapshot olayında küçük revizyon yok sayılır.
 
-**Çalışan örnek:** `blueprint/skeleton-example/platform-messaging/src/test/.../OutboxBehaviourIT.java` — outbox/inbox senaryolarının gerçek PostgreSQL üzerinde koşan hali (seviye 2). Saga senaryoları için henüz çalışan örnek yoktur.
+**Çalışan örnekler (seviye 2, gerçek PostgreSQL):** `blueprint/skeleton-example/platform-messaging/src/test/.../OutboxBehaviourIT.java` (outbox/inbox, 13 senaryo) ve `SagaBehaviourIT.java` (saga senaryoları 1–20, 19 test; koordinatör `LocalSagaStore` + `SagaRecoveryWorker`, katılımcı `QuotaParticipant` in-process, belirsizlikler `FlakyParticipant` ile). Katılımcının HTTP/JWT katmanı ve gerçek broker teslimi (seviye 3) bu örneklerin kapsamı dışındadır.
 
 **Kanıt seviyeleri** (kayıt biçimi Bölüm 19.6):
 1. Unit ve MVC testleri
@@ -2190,7 +2192,7 @@ Bu dokümanın ve `blueprint/`'in **iki farklı doğrulama seviyesi** vardır; i
 | Seviye | Ne kanıtlar | Bu referansta durumu |
 |---|---|---|
 | **Yapısal** | Kurallar derlenir ve ihlal yakalanır: ArchUnit, enforcer, ErrorCode tekilliği, config drift, immutability script/hook | `skeleton-example` ile **doğrulandı** (pozitif build + 8 kasıtlı ihlal); tarih README'sinde |
-| **Davranışsal** | Sistem koşarken tutarlılık güvenceleri sağlanır: outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira dolar ve iş devralınır, saga recovery telafi eder, inbox atomik | Outbox/inbox kısmı `skeleton-example/platform-messaging` içinde **gerçek PostgreSQL 17.5 üzerinde doğrulandı** (seviye 2; `OutboxBehaviourIT`, 13 senaryo: #21, #22, #25, #27, #28, #29, #32 + iki poller/300 satır, SKIP LOCKED, backoff, DEAD politikası, öncelik, kira güvenlik payı; 5 kasıtlı regresyon yakalandı — `skeleton-example/README.md`). **Koşturulmayan:** saga recovery (seviye 2), owner→participant runtime (seviye 3), broker ile gerçek yeniden teslim (seviye 3). Projede P0'ın çıkış koşulu: bu üçü de `PASS` ve kanıt kaydı dolu |
+| **Davranışsal** | Sistem koşarken tutarlılık güvenceleri sağlanır: outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira dolar ve iş devralınır, saga recovery telafi eder, inbox atomik | Outbox/inbox ve saga `skeleton-example/platform-messaging` içinde **gerçek PostgreSQL 17.5 üzerinde doğrulandı** (seviye 2): `OutboxBehaviourIT` 13 senaryo (#21, #22, #25, #27, #28, #29, #32 + iki poller/300 satır, SKIP LOCKED, backoff, DEAD politikası, öncelik, kira güvenlik payı) ve `SagaBehaviourIT` 19 test (senaryo 1–20: replay, eşzamanlı aynı key, çökme noktaları, yanıt kaybı + GET, tombstone, kira devri, istek-recovery yarışı, MANUAL_REVIEW, cleanup/monitor); toplam 11 kasıtlı regresyon yakalandı — `skeleton-example/README.md`. **Koşturulmayan:** owner→participant HTTP/JWT katmanı ve broker ile gerçek yeniden teslim (seviye 3), release/staging provası (seviye 4). Projede P0'ın çıkış koşulu: seviye 3 senaryoları `PASS` ve kanıt kaydı dolu |
 
 "Yapısal olarak doğrulanmış" bir kural davranışsal olarak da doğru olduğu anlamına gelmez (ArchUnit outbox'ın çift yayın yapmadığını söyleyemez). Doküman, blueprint README'si ve uyum raporu bu ayrımı açıkça yazar.
 
@@ -2984,7 +2986,7 @@ blueprint/
 └── skeleton-example/                 # Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı yapısal + 5 davranışsal ihlal yakalandı (README'sine bak)
     ├── pom.xml                       # BOM, ${revision}, enforcer (Java/Maven sürümü + core→core bannedDependencies), *IT dahil
     ├── platform-core/  order-api/  order-core/  deploy/prod.env.example
-    └── platform-messaging/           # Generic outbox/inbox (JDBC) + OutboxBehaviourIT: gerçek PostgreSQL üzerinde 13 davranışsal senaryo
+    └── platform-messaging/           # Generic outbox/inbox + local saga (JDBC); OutboxBehaviourIT (13) + SagaBehaviourIT (19): gerçek PostgreSQL üzerinde davranışsal senaryolar
 ```
 
 #### Doğrulama kapsamı (dürüst sınır — referans Bölüm 19.6)
@@ -2992,7 +2994,7 @@ blueprint/
 | Seviye | Ne | Durum |
 |---|---|---|
 | **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (12 test); hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
-| **Davranışsal** (sistem koşarken tutarlılık güvenceleri) | outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira devri, inbox atomikliği, üretici sıralaması, lane izolasyonu, backoff/DEAD, eski karar yeni kararı ezmez | **Outbox/inbox: doğrulandı** (2026-09-29, seviye 2) — `skeleton-example/platform-messaging/OutboxBehaviourIT`, gerçek PostgreSQL 17.5 (gömülü, Docker'sız), 13 senaryo (#21, #22, #25, #27, #28, #29, #32 + 6), 5 kasıtlı regresyon yakalandı. **Koşturulmadı:** saga recovery (seviye 2), owner→participant runtime ve broker ile yeniden teslim (seviye 3) — projede P0 çıkış koşulu |
+| **Davranışsal** (sistem koşarken tutarlılık güvenceleri) | outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, kira devri, inbox atomikliği, üretici sıralaması, lane izolasyonu, backoff/DEAD; saga: replay, eşzamanlı aynı key, çökme noktaları, yanıt kaybı, tombstone, istek-recovery yarışı, MANUAL_REVIEW, cleanup | **Doğrulandı** (2026-09-29, seviye 2, gerçek PostgreSQL 17.5, gömülü/Docker'sız): `OutboxBehaviourIT` 13 senaryo + `SagaBehaviourIT` 19 test (matris 1–20 + 21–32'nin outbox/inbox kısmı); 11 kasıtlı regresyon yakaladı (1 eşdeğer mutasyon). **Koşturulmadı:** katılımcı HTTP/JWT katmanı ve broker ile yeniden teslim (seviye 3), staging provası (seviye 4) — projede P0 çıkış koşulu |
 | **Skill'ler** | 12 skill metni | Gerçek bir PR üzerinde Claude Code oturumunda henüz koşturulmadı; ilk kullanımda karar formatlarının uyumu gözden geçirilir |
 
 Yapısal `PASS` davranışsal `PASS` değildir; uyum raporu ve PR şablonu ikisini ayrı yazar.
@@ -3564,6 +3566,8 @@ Somut servis adları ve operasyon tipleri (`repo-context.md`'de).
 İki seviye karıştırılmaz: **yapısal** (ArchUnit/enforcer/drift/immutability: kural derlenir ve ihlal yakalanır) ve **davranışsal** (sistem koşarken tekrar teslim çift iş üretmez, iki worker aynı satırı işlemez, restart sonrası iş devralınır). Yapısal `PASS` davranışsal `PASS` değildir.
 
 Her davranışsal `PASS` şu alanlarla kaydedilir: `senaryo · kanıt seviyesi · test/komut · commit SHA · ortam (CI job / Testcontainers sürümü) · sonuç (link) · tarih`. Testi olmayan senaryo `BLOCKED`; "yazılı ama koşulmamış" `PASS` sayılmaz. Review damgası (`review-gate` hook'u) kanıt değildir; zorunlu güvence CI'dır (test sayısı dahil: 0 test = başarısız).
+
+Başlangıç noktası: `blueprint/skeleton-example/platform-messaging` — `OutboxBehaviourIT` ve `SagaBehaviourIT` matrisin 1–32 satırlarının seviye 2 (gerçek PostgreSQL) halini içerir; projeye kopyalanıp katılımcı gerçek HTTP client'ıyla (seviye 3) genişletilir.
 
 ---
 
@@ -4164,7 +4168,9 @@ Her adım için "nerede" (dosya/paket) ve "kanıt" (satır) yazılır.
 | 31 | Delta olayında sıra boşluğu | uygulama durur, `readmodel_gap_total` artar, uzlaştırma | 2 | | |
 | 32 | Süreç öldürme: PUBLISHING satır + kira dolumu | ikinci instance devralır; ilk instance geri gelince yazamaz | 3 | | |
 
-Kanıt seviyeleri: 1 unit/MVC · 2 gerçek PostgreSQL (Testcontainers) · 3 owner→participant runtime (iki servis ayakta) · 4 release/staging.
+Kanıt seviyeleri: 1 unit/MVC · 2 gerçek PostgreSQL (Testcontainers veya gömülü PG) · 3 owner→participant runtime (iki servis ayakta) · 4 release/staging.
+
+Seviye 2 referans uygulaması: `skeleton-example/platform-messaging` (`SagaBehaviourIT` satır 1–20, `OutboxBehaviourIT` satır 21–32); senaryo → test adı eşlemesi test metotlarının `// #n` yorumlarında.
 
 #### 3. Sonuç
 
@@ -5353,6 +5359,14 @@ Spring Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı ihlal yaka
 
 ---
 
+### `skeleton-example/.gitignore`
+
+```
+target/
+```
+
+---
+
 ### `skeleton-example/README.md`
 
 ### skeleton-example — Doğrulanmış Boş İskelet
@@ -5360,7 +5374,7 @@ Spring Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı ihlal yaka
 `blueprint/tests/*.java` şablonlarının, enforcer kuralının ve **generic outbox/inbox'ın** gerçekten derlenip çalıştığı en küçük Maven multi-module projesi. Referans dokümanın (Bölüm 3, 4, 7, 11.2–11.3, 16, 19.5–19.6, 23.3–23.4) somut, çalışan karşılığı.
 
 - Spring Boot **4.1.1** BOM, Java 21 (25 ile de uyumlu), ArchUnit 1.5.1, Maven 3.9.11.
-- Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `platform-messaging` (generic outbox/inbox: `OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + yapısal testler).
+- Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `platform-messaging` (generic outbox/inbox: `OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`; local saga: `LocalSagaStore`, `SagaRecoveryWorker`, `SagaParticipant`, `db/platform/saga_coordinator.sql`), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + yapısal testler).
 - Config: `application-local.yml`, `config/order.yml`, `deploy/prod.env.example` (drift testi için).
 
 #### Doğrulama sonucu (2026-09-29)
@@ -5368,6 +5382,7 @@ Spring Boot 4.1.1 + ArchUnit 1.5.1 ile `mvn test` yeşil; 8 kasıtlı ihlal yaka
 ```
 mvn -B -ntp test   → BUILD SUCCESS
 platform-messaging  OutboxBehaviourIT      13 test  (davranışsal, gerçek PostgreSQL 17.5 — gömülü, Docker gerekmez)
+                    SagaBehaviourIT        19 test  (davranışsal, saga senaryoları 1–20; aynı gömülü PG)
 order-core          ArchitectureRulesTest   8 test  (katman, controller→repository, impl paketi, config/, core→core, döngü, @Valid, api→entity)
                     ConfigDriftTest         3 test  (key kümeleri, ${ENV} ↔ env şablonu, secret fallback)
                     ErrorCodeUniquenessTest 1 test  (global tekillik, blok, mesaj formatı)
@@ -5397,7 +5412,35 @@ order-core          ArchitectureRulesTest   8 test  (katman, controller→reposi
 
 **Negatif doğrulama (mutasyon):** kod kasıtlı bozuldu, testler yakaladı: (1) claim sorgusundan `NOT EXISTS` (üretici sıralaması) kaldırıldı → #27 FAIL; (2) `claim_token` koşulu kaldırıldı → #32 FAIL; (3) `SKIP LOCKED` kaldırıldı → SKIP LOCKED testi timeout; (4) inbox satırı ile iş ayrı TX'e alındı → #25 FAIL; (5) kira dolumu koşulu (`locked_until <= now`) kaldırıldı → #32 ve güvenlik payı testi FAIL. Geri alınınca yeşil.
 
-**Koşturulmayan (dürüst sınır):** saga recovery senaryoları (1–20), owner→participant runtime (seviye 3), gerçek broker ile yeniden teslim/ack (seviye 3). Bunlar projede yazılır; bu iskelet yalnız outbox/inbox tarafını kanıtlar.
+##### Davranışsal (seviye 2: gerçek PostgreSQL) — `SagaBehaviourIT`
+
+Koordinatör `order` şemasında (`saga`, `saga_steps`, `order_item`), katılımcı `subscription` şemasında (`quota`, `operation`) — aynı PG instance'ı, ayrı şemalar. Katılımcı in-process (`QuotaParticipant`); HTTP belirsizlikleri `FlakyParticipant` ile enjekte edilir (FAIL: istek ulaşmadı; LOSE_RESPONSE: katılımcı commit etti, yanıt kayboldu). Zaman deterministik `Clock` (deadline 15 sn, lease 60 sn, backoff `min(300, 2^n)`, uyarı 15 dk, retention 30 gün).
+
+| # (verification.md) | Senaryo | Sonuç |
+|---|---|---|
+| 1 | Normal başarı: SUCCEEDED → worker confirm → CONFIRMED; hak düştü; sipariş yazıldı | PASS |
+| 2 | Aynı key ile replay (confirm öncesi ve sonrası): aynı sonuç, ikinci consume yok | PASS |
+| 3 | Aynı key farklı body: ilk istek kazanır | PASS |
+| 4 | 8 thread eşzamanlı aynı key: tek saga, tek consume, tek sipariş; biri OK, diğerleri REPLAY/IN_PROGRESS | PASS |
+| 5 | Farklı key aynı kaynak: domain unique reddeder → `fail()` → recovery compensate → iade | PASS |
+| 6 / 18 | Aynı UUID farklı hesap → ayrı saga'lar; yanlış aktör (`chat-service`) → Forbidden, kayıt yok | PASS |
+| 7 / 11 | begin sonrası çökme: deadline dolmadan dokunulmaz; dolunca compensate → tombstone (CANCELLED); geç consume uygulanmaz; aynı key ile retry → OPERATION_CANCELLED | PASS |
+| 8 | Katılımcı commit + yanıt kaybı: istek 503; retry IN_PROGRESS; deadline sonrası recovery compensate → iade → COMPENSATED; retry → CANCELLED | PASS |
+| 8b | Katılımcıya hiç ulaşmadı: recovery tombstone ile kapatır | PASS |
+| 9 | Consume commit + domain yazılmadan çökme: iade | PASS |
+| 10 / 20 | Domain commit + confirm öncesi çökme; "restart" (yeni store/worker nesneleri, yalnız DB) → CONFIRMED | PASS |
+| 12 | confirm timeout: RETRY, attempt 1, `last_error_code`, backoff 2 sn; dolmadan alınmaz; sonra CONFIRMED. Yanıt kaybı: GET ile CONFIRMED görülür, retry yok | PASS |
+| 13 | Eşzamanlı confirm ve compensate (10 tur): ya CONFIRMED + MANUAL_REVIEW (iade yok) ya COMPENSATED + Conflict (tek iade); asla ikisi | PASS |
+| 14 | İki worker + expired lease: 59 sn'de devralınamaz, 61 sn'de devralınır; eski token ile complete/prepare boş | PASS |
+| 15a | Recovery önce iptal etti (domain TX açıkken başka thread'de): success() CAS kaybeder, sipariş rollback, iade | PASS |
+| 15b | Gerçek yarış, 20 tur, iki tarafa değişen gecikme: her tur ya (CONFIRMED, sipariş 1, kota 4) ya (COMPENSATED, sipariş 0, kota 5); üç koşuda 10/10, 8/12, 10/10 dağılım — iki dal da görüldü | PASS |
+| 16 | Tekrarlanan compensate: tek iade; confirm sonrası compensate → MANUAL_REVIEW, iade yok | PASS |
+| 17 | Eksik key / boş scope: saga açılmaz; TX dışında `success()` reddedilir (HTTP 400 binding'i MVC testinin işi) | PASS |
+| 19 | Monitor: 16 dk sonra yalnız STARTED sayılır; cleanup 31 gün sonra yalnız CONFIRMED'i siler, MANUAL_REVIEW kalır, adımlar CASCADE | PASS |
+
+**Negatif doğrulama (mutasyon):** (1) `success()` CAS koşulu kaldırıldı → 15a FAIL; (2) `prepare()` STARTED→CANCEL_REQUESTED yapmıyor → 7, 8, 8b, 9, 15a FAIL; (3) `complete()` lock_token koşulu kaldırıldı → 14 FAIL; (4) worker belirsizlikte GET sormuyor → 12 FAIL; (5) katılımcı tombstone yazmıyor → 7, 8b FAIL; (6) katılımcı advisory lock yok → 13 FAIL. (7) `refunded_at IS NULL` koşulu kaldırıldı → yakalanmadı: durum makinesi (`COMPENSATED` dalı replay) zaten çift iadeyi engelliyor, koşul yedek savunma — **eşdeğer mutasyon**, test açığı değil.
+
+**Koşturulmayan (dürüst sınır):** katılımcının gerçek HTTP/JWT katmanı (allowlist, `act` claim'i, 400/401/403 binding'leri — seviye 1 MVC ve seviye 3 runtime testleri projede yazılır), gerçek broker ile yeniden teslim/ack (seviye 3), staging provası (seviye 4). Bu iskelet outbox/inbox ve saga durum makinesinin PostgreSQL üzerindeki güvencelerini kanıtlar.
 
 #### Denemede öğrenilen dersler (şablonlara işlendi)
 
@@ -5410,7 +5453,10 @@ order-core          ArchitectureRulesTest   8 test  (katman, controller→reposi
 7. **Zaman kaynağı testte bile tuzaklı:** `next_retry_at = created_at` iken "gelecekte" oluşturulmuş satır claim edilmedi ve öncelik testi yanlış satırı gösterdi. Deterministik `Clock` + satır zamanlarını geçmişe koymak; testin kendi zamanı da kayıt altına alınır.
 8. **Gömülü PostgreSQL root ile çalışmaz** (`initdb` reddeder): CI runner'larında sorun yok; root container'da test ayrı bir kullanıcıyla koşturulur (`runuser -u <user> -- mvn …`). Docker varsa Testcontainers aynı testi koşturur.
 
-Bu dersler "yeşil build = kural çalışıyor" varsayımının yanlış olabileceğini gösterdi; bu yüzden `proj-release-readiness-review` ve CI, mimari testlerin **test sayısını** da doğrular (0 test = başarısız) ve davranışsal testler kasıtlı regresyonla (mutasyon) en az bir kez sınanır.
+9. **Recovery worker'ı istek TX'inin thread'inde çağırmak yanlış test verir:** `JdbcTemplate` thread'e bağlı bağlantıyı kullanır; claim istek TX'inin içinde kalır, `REQUIRES_NEW` prepare onu göremez → "recovery hiçbir şey yapmadı" gibi görünür. Yarış testlerinde worker ayrı thread'de koşar (üretimdeki gibi).
+10. **Yarış testinde iki dal da görülmeli:** worker'ı sabit anda başlatınca 20/20 hep aynı taraf kazandı (önce hep istek, sonra hep recovery). İki tarafa da değişen gecikme verilince dağılım ~10/10 oldu; test yalnız değişmezleri (invariant) doğrular, hangi tarafın kazandığını değil. Ayrıca `pastDeadline()` begin'den **sonra** çağrılmalı; önce çağrılınca adım hiç claim edilemedi (deadline saatle birlikte kaydı).
+
+Bu dersler "yeşil build = kural çalışıyor" varsayımının yanlış olabileceğini gösterdi; bu yüzden `proj-release-readiness-review` ve CI, mimari testlerin **test sayısını** da doğrular (0 test = başarısız) ve davranışsal testler kasıtlı regresyonla (mutasyon) en az bir kez sınanır; eşdeğer mutasyon (davranışı değiştirmeyen) test açığı sayılmaz ama yazılır.
 
 #### Çalıştırma
 
@@ -6431,6 +6477,496 @@ public class PermanentFailureException extends RuntimeException {
 
 ---
 
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/saga/LocalSagaStore.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.dao.support.DataAccessUtils;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * Local saga store (referans Bolum 11.4). Tek adim, tek katilimci; domain'den bagimsiz (step adi parametre).
+ * Zaman kaynagi disaridan verilen Clock (uretimde DB now() ile ayni saat; testte deterministik).
+ *
+ * Akis: begin() AYRI TX -> consume (TX disi) -> domain yazimi + success() AYNI TX (compare-and-set) ->
+ * recovery worker: claim -> prepare -> confirm/compensate -> complete (lock_token eslesmesi).
+ */
+public class LocalSagaStore {
+
+    public enum SagaStatus { STARTED, SUCCEEDED, CONFIRMED, CANCEL_REQUESTED, COMPENSATED, MANUAL_REVIEW }
+    public enum StepStatus { PENDING, RETRY, RUNNING, DONE, MANUAL_REVIEW }
+    public enum Action { CONFIRM, COMPENSATE }
+
+    public record Saga(UUID id, UUID accountId, String scope, UUID operationKey, SagaStatus status, String result,
+                       Instant createdAt, Instant updatedAt) {
+        public boolean isTerminal() {
+            return status == SagaStatus.CONFIRMED || status == SagaStatus.COMPENSATED || status == SagaStatus.MANUAL_REVIEW;
+        }
+    }
+
+    public record Step(UUID id, UUID sagaId, String stepName, Action nextAction, StepStatus status, int attempt,
+                       Instant nextAttemptAt, UUID lockToken, Instant lockedUntil, String lastErrorCode) {}
+
+    public record BeginResult(Saga saga, boolean created) {}
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final TransactionTemplate requiresNew;
+    private final String sagaTable;
+    private final String stepTable;
+    private final SagaProperties props;
+    private final Clock clock;
+
+    public LocalSagaStore(NamedParameterJdbcTemplate jdbc, PlatformTransactionManager tm, String schema,
+                          SagaProperties props, Clock clock) {
+        this.jdbc = jdbc;
+        this.requiresNew = new TransactionTemplate(tm);
+        this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.sagaTable = "\"" + schema + "\".saga";
+        this.stepTable = "\"" + schema + "\".saga_steps";
+        this.props = props;
+        this.clock = clock;
+    }
+
+    // ---------- istek yolu ----------
+
+    /**
+     * Ayri TX'te niyet kaydi. Yeni kayitta adim COMPENSATE/PENDING ve next_attempt_at = now + deadline: surec cokerse
+     * deadline dolunca otomatik telafi baslar. Kayit zaten varsa mevcut saga (replay/IN_PROGRESS karari cagirana ait).
+     */
+    public BeginResult begin(UUID accountId, String scope, UUID operationKey, String stepName) {
+        Objects.requireNonNull(accountId, "accountId"); Objects.requireNonNull(operationKey, "operationKey");
+        if (scope == null || scope.isBlank()) throw new IllegalArgumentException("scope");
+        return requiresNew.execute(st -> {
+            Instant now = clock.instant();
+            UUID id = UUID.randomUUID();
+            int inserted = jdbc.update("""
+                    INSERT INTO %s (id, account_id, scope, operation_key, status, created_at, updated_at)
+                    VALUES (:id, :account, :scope, :key, 'STARTED', :now, :now)
+                    ON CONFLICT (account_id, scope, operation_key) DO NOTHING""".formatted(sagaTable),
+                    params().addValue("id", id).addValue("account", accountId).addValue("scope", scope)
+                            .addValue("key", operationKey).addValue("now", ts(now)));
+            if (inserted == 1) {
+                jdbc.update("""
+                        INSERT INTO %s (id, saga_id, step_name, next_action, status, attempt, next_attempt_at, created_at, updated_at)
+                        VALUES (:id, :saga, :name, 'COMPENSATE', 'PENDING', 0, :next, :now, :now)""".formatted(stepTable),
+                        params().addValue("id", UUID.randomUUID()).addValue("saga", id).addValue("name", stepName)
+                                .addValue("next", ts(now.plusSeconds(props.deadlineSeconds()))).addValue("now", ts(now)));
+                return new BeginResult(new Saga(id, accountId, scope, operationKey, SagaStatus.STARTED, null, now, now), true);
+            }
+            return new BeginResult(find(accountId, scope, operationKey).orElseThrow(), false);
+        });
+    }
+
+    /**
+     * Domain TX'i ICINDE cagrilir (ayni TX; aktif TX yoksa hata). Compare-and-set STARTED -> SUCCEEDED: recovery araya girip
+     * iptal ettiyse (CANCEL_REQUESTED) SagaCancelledException -> domain yazimi rollback olur. Adim CONFIRM'e cevrilir ve
+     * hemen denenir. RUNNING adima dokunulmaz: recovery prepare() SUCCEEDED'i gorup CONFIRM'e uzlastirir.
+     */
+    public void success(UUID sagaId, String result) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("success() must run inside the domain transaction");
+        }
+        Instant now = clock.instant();
+        int n = jdbc.update("UPDATE %s SET status = 'SUCCEEDED', result = :r, updated_at = :now WHERE id = :id AND status = 'STARTED'"
+                .formatted(sagaTable), params().addValue("r", result).addValue("now", ts(now)).addValue("id", sagaId));
+        if (n == 0) throw new SagaCancelledException(sagaId);
+        jdbc.update("""
+                UPDATE %s SET next_action = 'CONFIRM', status = 'PENDING', next_attempt_at = :now, updated_at = :now
+                WHERE saga_id = :id AND status IN ('PENDING','RETRY')""".formatted(stepTable),
+                params().addValue("now", ts(now)).addValue("id", sagaId));
+    }
+
+    /** Istek yolu basarisiz (REJECTED, domain hatasi): ayri TX'te iptal iste; recovery hemen telafi eder. */
+    public void fail(UUID sagaId) {
+        requiresNew.executeWithoutResult(st -> {
+            Instant now = clock.instant();
+            jdbc.update("UPDATE %s SET status = 'CANCEL_REQUESTED', updated_at = :now WHERE id = :id AND status = 'STARTED'"
+                    .formatted(sagaTable), params().addValue("now", ts(now)).addValue("id", sagaId));
+            jdbc.update("""
+                    UPDATE %s SET next_action = 'COMPENSATE', next_attempt_at = :now, updated_at = :now
+                    WHERE saga_id = :id AND status IN ('PENDING','RETRY')""".formatted(stepTable),
+                    params().addValue("now", ts(now)).addValue("id", sagaId));
+        });
+    }
+
+    // ---------- recovery worker ----------
+
+    /** SKIP LOCKED + lock_token + lease. Kirasi dolan RUNNING adim (worker cokmesi) yeniden claim edilir. */
+    public List<Step> claimSteps(UUID lockToken, Instant now, Instant lockedUntil, int limit) {
+        return jdbc.query("""
+                WITH c AS (
+                    SELECT s.id FROM %1$s s
+                    WHERE (s.status IN ('PENDING','RETRY') AND s.next_attempt_at <= :now)
+                       OR (s.status = 'RUNNING' AND s.locked_until <= :now)
+                    ORDER BY s.next_attempt_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT :limit)
+                UPDATE %1$s s SET status = 'RUNNING', lock_token = :token, locked_until = :until, updated_at = :now
+                FROM c WHERE s.id = c.id
+                RETURNING s.*""".formatted(stepTable),
+                params().addValue("now", ts(now)).addValue("limit", limit).addValue("token", lockToken)
+                        .addValue("until", ts(lockedUntil)), STEP);
+    }
+
+    /**
+     * Sahiplik + durum uzlastirmasi (FOR UPDATE). STARTED saga'yi CANCEL_REQUESTED'a ceker (istek yolu success() CAS'i
+     * bunu gorur ve rollback olur). SUCCEEDED -> CONFIRM, CANCEL_REQUESTED -> COMPENSATE. Terminal saga -> adim DONE.
+     * Kira elden gitmisse (token eslesmez) bos doner.
+     */
+    public Optional<Action> prepare(Step step, UUID lockToken) {
+        return requiresNew.execute(st -> {
+            Instant now = clock.instant();
+            Saga saga = DataAccessUtils.singleResult(jdbc.query("SELECT * FROM %s WHERE id = :id FOR UPDATE".formatted(sagaTable),
+                    Map.of("id", step.sagaId()), SAGA));
+            Step owned = DataAccessUtils.singleResult(jdbc.query(
+                    "SELECT * FROM %s WHERE id = :id AND lock_token = :token AND status = 'RUNNING'".formatted(stepTable),
+                    params().addValue("id", step.id()).addValue("token", lockToken), STEP));
+            if (saga == null || owned == null) return Optional.<Action>empty();
+            Action action;
+            switch (saga.status()) {
+                case STARTED -> {
+                    jdbc.update("UPDATE %s SET status = 'CANCEL_REQUESTED', updated_at = :now WHERE id = :id".formatted(sagaTable),
+                            params().addValue("now", ts(now)).addValue("id", saga.id()));
+                    action = Action.COMPENSATE;
+                }
+                case CANCEL_REQUESTED -> action = Action.COMPENSATE;
+                case SUCCEEDED -> action = Action.CONFIRM;
+                default -> {                                             // terminal: adim kapatilir
+                    jdbc.update("UPDATE %s SET status = 'DONE', lock_token = NULL, locked_until = NULL, updated_at = :now WHERE id = :id AND lock_token = :token"
+                            .formatted(stepTable), params().addValue("now", ts(now)).addValue("id", step.id()).addValue("token", lockToken));
+                    return Optional.<Action>empty();
+                }
+            }
+            jdbc.update("UPDATE %s SET next_action = :a, updated_at = :now WHERE id = :id AND lock_token = :token".formatted(stepTable),
+                    params().addValue("a", action.name()).addValue("now", ts(now)).addValue("id", step.id()).addValue("token", lockToken));
+            return Optional.of(action);
+        });
+    }
+
+    /** Yalniz kira sahibi tamamlar. 0 satir = kira elden gitmis; sonuc yazilmaz. */
+    public boolean complete(Step step, UUID lockToken, Action action) {
+        return Boolean.TRUE.equals(requiresNew.execute(st -> {
+            Instant now = clock.instant();
+            int n = jdbc.update("UPDATE %s SET status = 'DONE', lock_token = NULL, locked_until = NULL, updated_at = :now WHERE id = :id AND lock_token = :token"
+                    .formatted(stepTable), params().addValue("now", ts(now)).addValue("id", step.id()).addValue("token", lockToken));
+            if (n == 0) return false;
+            String target = action == Action.CONFIRM ? "CONFIRMED" : "COMPENSATED";
+            jdbc.update("UPDATE %s SET status = :s, updated_at = :now WHERE id = :id AND status IN ('SUCCEEDED','CANCEL_REQUESTED')"
+                    .formatted(sagaTable), params().addValue("s", target).addValue("now", ts(now)).addValue("id", step.sagaId()));
+            return true;
+        }));
+    }
+
+    /** Gecici hata: RETRY + backoff min(maxBackoff, 2^n) sn; kira birakilir. */
+    public boolean retry(Step step, UUID lockToken, String errorCode) {
+        Instant now = clock.instant();
+        int attempt = step.attempt() + 1;
+        long backoff = Math.min(props.maxBackoffSeconds(), 1L << Math.min(attempt, 20));
+        return jdbc.update("""
+                UPDATE %s SET status = 'RETRY', attempt = :attempt, next_attempt_at = :next, lock_token = NULL, locked_until = NULL,
+                       last_error_code = :err, updated_at = :now
+                WHERE id = :id AND lock_token = :token""".formatted(stepTable),
+                params().addValue("attempt", attempt).addValue("next", ts(now.plusSeconds(backoff))).addValue("err", errorCode)
+                        .addValue("now", ts(now)).addValue("id", step.id()).addValue("token", lockToken)) == 1;
+    }
+
+    /** Celiski: insan karari gerekir. MANUAL_REVIEW cleanup'ta silinmez. */
+    public boolean manualReview(Step step, UUID lockToken, String reasonCode) {
+        return Boolean.TRUE.equals(requiresNew.execute(st -> {
+            Instant now = clock.instant();
+            int n = jdbc.update("""
+                    UPDATE %s SET status = 'MANUAL_REVIEW', lock_token = NULL, locked_until = NULL, last_error_code = :err, updated_at = :now
+                    WHERE id = :id AND lock_token = :token""".formatted(stepTable),
+                    params().addValue("err", reasonCode).addValue("now", ts(now)).addValue("id", step.id()).addValue("token", lockToken));
+            if (n == 0) return false;
+            jdbc.update("UPDATE %s SET status = 'MANUAL_REVIEW', updated_at = :now WHERE id = :id".formatted(sagaTable),
+                    params().addValue("now", ts(now)).addValue("id", step.sagaId()));
+            return true;
+        }));
+    }
+
+    // ---------- monitor / cleanup ----------
+
+    /** warnAfter'dan eski cozulmemis saga sayisi (ERROR log + saga_unresolved_total metrigi icin). */
+    public int countUnresolved() {
+        Instant threshold = clock.instant().minus(Duration.ofMinutes(props.warnAfterMinutes()));
+        return jdbc.queryForObject("""
+                SELECT count(*) FROM %s WHERE status NOT IN ('CONFIRMED','COMPENSATED','MANUAL_REVIEW') AND created_at < :t"""
+                .formatted(sagaTable), Map.of("t", ts(threshold)), Integer.class);
+    }
+
+    /** Yalniz terminal (CONFIRMED/COMPENSATED) kayitlar retention sonrasi silinir; MANUAL_REVIEW asla. Adimlar CASCADE. */
+    public int cleanup() {
+        Instant threshold = clock.instant().minus(Duration.ofDays(props.retentionDays()));
+        return jdbc.update("DELETE FROM %s WHERE status IN ('CONFIRMED','COMPENSATED') AND updated_at < :t".formatted(sagaTable),
+                Map.of("t", ts(threshold)));
+    }
+
+    // ---------- sorgular ----------
+
+    public Optional<Saga> find(UUID accountId, String scope, UUID operationKey) {
+        return Optional.ofNullable(DataAccessUtils.singleResult(jdbc.query(
+                "SELECT * FROM %s WHERE account_id = :a AND scope = :s AND operation_key = :k".formatted(sagaTable),
+                params().addValue("a", accountId).addValue("s", scope).addValue("k", operationKey), SAGA)));
+    }
+
+    public Optional<Saga> findById(UUID id) {
+        return Optional.ofNullable(DataAccessUtils.singleResult(jdbc.query(
+                "SELECT * FROM %s WHERE id = :id".formatted(sagaTable), Map.of("id", id), SAGA)));
+    }
+
+    public List<Step> stepsOf(UUID sagaId) {
+        return jdbc.query("SELECT * FROM %s WHERE saga_id = :id ORDER BY created_at".formatted(stepTable), Map.of("id", sagaId), STEP);
+    }
+
+    public int countSagas() { return jdbc.queryForObject("SELECT count(*) FROM " + sagaTable, Map.of(), Integer.class); }
+    public int countSteps() { return jdbc.queryForObject("SELECT count(*) FROM " + stepTable, Map.of(), Integer.class); }
+
+    private static MapSqlParameterSource params() { return new MapSqlParameterSource(); }
+    private static Timestamp ts(Instant i) { return Timestamp.from(i); }
+    private static Instant inst(Timestamp t) { return t == null ? null : t.toInstant(); }
+
+    static final RowMapper<Saga> SAGA = (ResultSet rs, int i) -> new Saga(
+            rs.getObject("id", UUID.class), rs.getObject("account_id", UUID.class), rs.getString("scope"),
+            rs.getObject("operation_key", UUID.class), SagaStatus.valueOf(rs.getString("status")), rs.getString("result"),
+            inst(rs.getTimestamp("created_at")), inst(rs.getTimestamp("updated_at")));
+
+    static final RowMapper<Step> STEP = (ResultSet rs, int i) -> new Step(
+            rs.getObject("id", UUID.class), rs.getObject("saga_id", UUID.class), rs.getString("step_name"),
+            Action.valueOf(rs.getString("next_action")), StepStatus.valueOf(rs.getString("status")), rs.getInt("attempt"),
+            inst(rs.getTimestamp("next_attempt_at")), rs.getObject("lock_token", UUID.class),
+            inst(rs.getTimestamp("locked_until")), rs.getString("last_error_code"));
+
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/saga/SagaCancelledException.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import java.util.UUID;
+
+/**
+ * success() compare-and-set kaybetti: recovery araya girip saga'yi iptal etti (CANCEL_REQUESTED/COMPENSATED).
+ * Domain TX'inde firlatilir; domain yazimi rollback olur (referans Bolum 11.4 adim 3).
+ */
+public class SagaCancelledException extends RuntimeException {
+    private final UUID sagaId;
+    public SagaCancelledException(UUID sagaId) { super("saga cancelled by recovery"); this.sagaId = sagaId; }
+    public UUID sagaId() { return sagaId; }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/saga/SagaParticipant.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * Katilimci sozlesmesi (referans Bolum 11.4): gercekte /internal/<kaynak>/operations/{operationKey}/{consume,confirm,compensate}
+ * ve GET; burada HTTP client'in arkasindaki arayuz. Tum islemler idempotent: ayni key ile tekrar cagri ayni sonucu dondurur.
+ *
+ * <pre>
+ * consume    kayit yok    -> APPLIED / REJECTED
+ * consume    kayit var    -> replay (mevcut durum; CANCELLED tombstone ise uygulanmaz)
+ * confirm    APPLIED      -> CONFIRMED
+ * compensate kayit yok    -> CANCELLED tombstone (gec gelen consume uygulanmaz)
+ * compensate APPLIED      -> iade -> COMPENSATED
+ * compensate CONFIRMED    -> MANUAL_REVIEW (iade yok)
+ * </pre>
+ */
+public interface SagaParticipant {
+
+    enum State { APPLIED, REJECTED, CONFIRMED, CANCELLED, COMPENSATED, MANUAL_REVIEW }
+
+    State consume(String callerService, UUID accountId, UUID operationKey, String operationType, int amount);
+
+    Optional<State> get(String callerService, UUID accountId, UUID operationKey);
+
+    State confirm(String callerService, UUID accountId, UUID operationKey);
+
+    State compensate(String callerService, UUID accountId, UUID operationKey);
+
+    /** Timeout, 5xx, baglanti hatasi: sonuc BELIRSIZ; koordinator GET ile sorar, sonra retry/backoff. */
+    class ParticipantUnavailableException extends RuntimeException {
+        public ParticipantUnavailableException(String message) { super(message); }
+    }
+
+    /** Katilimci istegi anlamsiz buldu (409): durumlar celisiyor; koordinator MANUAL_REVIEW'a alir. */
+    class ParticipantConflictException extends RuntimeException {
+        public ParticipantConflictException(String message) { super(message); }
+    }
+
+    /** Aktor bu islem tipi icin yetkili degil (403); saga acilmaz / adim MANUAL_REVIEW. */
+    class ParticipantForbiddenException extends RuntimeException {
+        public ParticipantForbiddenException(String message) { super(message); }
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/saga/SagaProperties.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+/**
+ * Baslangic ayarlari (referans Bolum 11.4 "Isletim degerleri"; Bolum 1.4: olcumle degisir).
+ * Config key'leri: operation-consistency.{deadline-seconds,lease-seconds,max-backoff-seconds,warn-after-minutes,retention-days,batch-size}
+ */
+public record SagaProperties(long deadlineSeconds, long leaseSeconds, long maxBackoffSeconds,
+                             long warnAfterMinutes, long retentionDays, int batchSize) {
+    public static SagaProperties defaults() { return new SagaProperties(15, 60, 300, 15, 30, 50); }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/saga/SagaRecoveryWorker.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import com.acme.platform.messaging.saga.LocalSagaStore.Action;
+import com.acme.platform.messaging.saga.LocalSagaStore.Saga;
+import com.acme.platform.messaging.saga.LocalSagaStore.Step;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantConflictException;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantForbiddenException;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantUnavailableException;
+import com.acme.platform.messaging.saga.SagaParticipant.State;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Recovery worker (referans Bolum 11.4 adim 4). Her instance'ta calisir; adimlar SKIP LOCKED + lock_token + lease ile
+ * claim edilir. Uzak cagri TX disinda. Hata veya belirsiz sonucta once GET ile katilimcinin durumu sorulur; celiski
+ * varsa MANUAL_REVIEW. Zamanlama (@Scheduled, poll 5 sn) disarida baglanir; runOnce() deterministik test edilir.
+ */
+public class SagaRecoveryWorker {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaRecoveryWorker.class);
+
+    public record RunResult(int claimed, int done, int retried, int manualReview, int skipped) {}
+
+    private final LocalSagaStore store;
+    private final SagaParticipant participant;
+    private final String callerService;
+    private final SagaProperties props;
+    private final Clock clock;
+
+    public SagaRecoveryWorker(LocalSagaStore store, SagaParticipant participant, String callerService,
+                              SagaProperties props, Clock clock) {
+        this.store = store;
+        this.participant = participant;
+        this.callerService = callerService;
+        this.props = props;
+        this.clock = clock;
+    }
+
+    public RunResult runOnce() {
+        UUID token = UUID.randomUUID();
+        Instant now = clock.instant();
+        List<Step> steps = store.claimSteps(token, now, now.plusSeconds(props.leaseSeconds()), props.batchSize());
+        int done = 0, retried = 0, manual = 0, skipped = 0;
+        for (Step step : steps) {
+            switch (process(step, token)) {
+                case DONE -> done++;
+                case RETRIED -> retried++;
+                case MANUAL_REVIEW -> manual++;
+                case SKIPPED -> skipped++;
+            }
+        }
+        if (!steps.isEmpty()) {
+            log.info("Saga recovery batch finished: claimed={} done={} retried={} manualReview={} skipped={}",
+                    steps.size(), done, retried, manual, skipped);
+        }
+        return new RunResult(steps.size(), done, retried, manual, skipped);
+    }
+
+    enum Outcome { DONE, RETRIED, MANUAL_REVIEW, SKIPPED }
+
+    Outcome process(Step step, UUID token) {
+        Optional<Action> prepared = store.prepare(step, token);
+        if (prepared.isEmpty()) return Outcome.SKIPPED;                 // kira elden gitti veya saga zaten terminal
+        Action action = prepared.get();
+        Saga saga = store.findById(step.sagaId()).orElse(null);
+        if (saga == null) return Outcome.SKIPPED;
+        try {
+            State state = action == Action.CONFIRM
+                    ? participant.confirm(callerService, saga.accountId(), saga.operationKey())
+                    : participant.compensate(callerService, saga.accountId(), saga.operationKey());
+            return settle(step, token, action, state);
+        } catch (ParticipantUnavailableException e) {
+            // Belirsiz sonuc: once GET ile sor (istek katilimcida commit olmus olabilir)
+            try {
+                Optional<State> remote = participant.get(callerService, saga.accountId(), saga.operationKey());
+                if (remote.isPresent()) return settle(step, token, action, remote.get());
+            } catch (ParticipantUnavailableException ignored) { /* asagida retry */ }
+            boolean ok = store.retry(step, token, e.getClass().getSimpleName());
+            log.warn("Saga step deferred; retry scheduled: sagaId={} step={} attempt={} exceptionType={}",
+                    saga.id(), step.stepName(), step.attempt() + 1, e.getClass().getSimpleName());
+            return ok ? Outcome.RETRIED : Outcome.SKIPPED;
+        } catch (ParticipantConflictException | ParticipantForbiddenException e) {
+            return manual(step, token, saga, e.getClass().getSimpleName());
+        }
+    }
+
+    /** Katilimcinin dondurdugu durum niyetle tutarli mi? Tutarsizsa insan karari. */
+    private Outcome settle(Step step, UUID token, Action action, State state) {
+        boolean consistent = switch (action) {
+            case CONFIRM -> state == State.CONFIRMED;
+            case COMPENSATE -> state == State.COMPENSATED || state == State.CANCELLED || state == State.REJECTED;
+        };
+        if (!consistent) {
+            Saga saga = store.findById(step.sagaId()).orElse(null);
+            return manual(step, token, saga, "STATE_" + state.name());
+        }
+        // Belirsizlikten sonra GET APPLIED dondurduyse is henuz yapilmamis demektir -> retry
+        return store.complete(step, token, action) ? Outcome.DONE : Outcome.SKIPPED;
+    }
+
+    private Outcome manual(Step step, UUID token, Saga saga, String reason) {
+        boolean ok = store.manualReview(step, token, reason);
+        log.error("Saga needs manual review: code=SAGA_MANUAL_REVIEW sagaId={} step={} reason={}",
+                saga == null ? null : saga.id(), step.stepName(), reason);
+        return ok ? Outcome.MANUAL_REVIEW : Outcome.SKIPPED;
+    }
+}
+```
+
+---
+
 ### `skeleton-example/platform-messaging/src/main/resources/db/platform/outbox_inbox.sql`
 
 ```
@@ -6466,6 +7002,44 @@ CREATE TABLE ${schema}.inbox_event (
   received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (handler, event_id)
 );
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/resources/db/platform/saga_coordinator.sql`
+
+```
+-- Local saga koordinator tablolari (referans Bolum 11.4). Koordinatorun KENDI semasinda; her servis kendi migration'inda
+-- ${schema} yerine kendi semasini yazar. Merkezi coordinator servisi yoktur.
+CREATE TABLE ${schema}.saga (
+  id             UUID PRIMARY KEY,
+  account_id     UUID NOT NULL,
+  scope          TEXT NOT NULL,                       -- 'ORDER_CREATE' (UPPER_SNAKE)
+  operation_key  UUID NOT NULL,                       -- X-Idempotency-Key
+  status         TEXT NOT NULL CHECK (status IN ('STARTED','SUCCEEDED','CONFIRMED','CANCEL_REQUESTED','COMPENSATED','MANUAL_REVIEW')),
+  result         TEXT,                                -- replay icin onceki sonuc (istemciye gosterilebilir kisa deger)
+  created_at     TIMESTAMPTZ NOT NULL,
+  updated_at     TIMESTAMPTZ NOT NULL,
+  CONSTRAINT uq_saga_key UNIQUE (account_id, scope, operation_key)
+);
+CREATE TABLE ${schema}.saga_steps (
+  id              UUID PRIMARY KEY,
+  saga_id         UUID NOT NULL REFERENCES ${schema}.saga(id) ON DELETE CASCADE,
+  step_name       TEXT NOT NULL,                      -- katilimci/adim adi ('quota'); cok adimli genelleme icin parametre
+  next_action     TEXT NOT NULL CHECK (next_action IN ('CONFIRM','COMPENSATE')),
+  status          TEXT NOT NULL CHECK (status IN ('PENDING','RETRY','RUNNING','DONE','MANUAL_REVIEW')),
+  attempt         INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL,               -- begin: now + deadline (surec cokerse otomatik telafi)
+  lock_token      UUID,
+  locked_until    TIMESTAMPTZ,
+  last_error_code VARCHAR(120),
+  created_at      TIMESTAMPTZ NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_saga_steps_claim ON ${schema}.saga_steps (status, next_attempt_at, locked_until);
+CREATE INDEX idx_saga_unresolved ON ${schema}.saga (created_at)
+  WHERE status NOT IN ('CONFIRMED','COMPENSATED','MANUAL_REVIEW');
+CREATE INDEX idx_saga_retention ON ${schema}.saga (updated_at) WHERE status IN ('CONFIRMED','COMPENSATED');
 ```
 
 ---
@@ -6845,6 +7419,773 @@ class OutboxBehaviourIT {
         assertThat(left.status()).isEqualTo("PUBLISHING");                         // kira dolunca baska instance alir
         clock.advance(Duration.ofSeconds(30));
         assertThat(poller(Map.of("EVENT", e -> {})).poll("EVENT").applied()).isEqualTo(1);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/test/java/com/acme/platform/messaging/SagaBehaviourIT.java`
+
+```java
+package com.acme.platform.messaging;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.acme.platform.messaging.saga.FlakyParticipant;
+import com.acme.platform.messaging.saga.LocalSagaStore;
+import com.acme.platform.messaging.saga.LocalSagaStore.Action;
+import com.acme.platform.messaging.saga.LocalSagaStore.SagaStatus;
+import com.acme.platform.messaging.saga.LocalSagaStore.Step;
+import com.acme.platform.messaging.saga.LocalSagaStore.StepStatus;
+import com.acme.platform.messaging.saga.OrderFlow;
+import com.acme.platform.messaging.saga.OrderFlow.CrashPoint;
+import com.acme.platform.messaging.saga.OrderFlow.Kind;
+import com.acme.platform.messaging.saga.OrderFlow.Result;
+import com.acme.platform.messaging.saga.QuotaParticipant;
+import com.acme.platform.messaging.saga.SagaParticipant;
+import com.acme.platform.messaging.saga.SagaParticipant.State;
+import com.acme.platform.messaging.saga.SagaProperties;
+import com.acme.platform.messaging.saga.SagaRecoveryWorker;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * DAVRANISSAL dogrulama (referans Bolum 11.4-11.5, 19.6 kanit seviyesi 2): local saga guvenceleri gercek PostgreSQL
+ * uzerinde. Katilimci in-process (HTTP/JWT katmani bu testin KAPSAMI DISINDA; belirsizlikler FlakyParticipant ile
+ * enjekte edilir). Metot basliklarindaki # numaralari operation-consistency skill'i verification.md matrisidir.
+ */
+class SagaBehaviourIT {
+
+    static EmbeddedPostgres pg;
+    static DataSource ds;
+    static NamedParameterJdbcTemplate jdbc;
+    static JdbcTransactionManager tm;
+    static TransactionTemplate tx;
+
+    static final class MutableClock extends Clock {
+        volatile Instant now = Instant.parse("2026-09-29T12:00:00Z");
+        @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
+        void advance(Duration d) { now = now.plus(d); }
+    }
+
+    MutableClock clock;
+    SagaProperties props;
+    LocalSagaStore store;
+    QuotaParticipant quota;
+    FlakyParticipant participant;
+    SagaRecoveryWorker worker;
+    OrderFlow flow;
+    UUID account;
+
+    @BeforeAll
+    static void startDb() throws Exception {
+        pg = EmbeddedPostgres.builder().start();
+        ds = pg.getPostgresDatabase();
+        jdbc = new NamedParameterJdbcTemplate(ds);
+        tm = new JdbcTransactionManager(ds);
+        tx = new TransactionTemplate(tm);
+        String ddl = new String(SagaBehaviourIT.class.getResourceAsStream("/db/platform/saga_coordinator.sql").readAllBytes(),
+                StandardCharsets.UTF_8).replace("${schema}", "\"order\"");
+        jdbc.getJdbcTemplate().execute("CREATE SCHEMA \"order\"");
+        jdbc.getJdbcTemplate().execute("CREATE SCHEMA subscription");
+        try (var conn = ds.getConnection()) {
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(ddl.getBytes(StandardCharsets.UTF_8)));
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(OrderFlow.DDL.getBytes(StandardCharsets.UTF_8)));
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(QuotaParticipant.DDL.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    @AfterAll
+    static void stopDb() throws Exception { if (pg != null) pg.close(); }
+
+    @BeforeEach
+    void setUp() {
+        jdbc.getJdbcTemplate().execute("TRUNCATE \"order\".saga, \"order\".saga_steps, \"order\".order_item, subscription.quota, subscription.operation");
+        clock = new MutableClock();
+        props = SagaProperties.defaults();                       // deadline 15 sn, lease 60 sn, backoff min(300, 2^n), uyari 15 dk, retention 30 gun
+        store = new LocalSagaStore(jdbc, tm, "order", props, clock);
+        quota = new QuotaParticipant(jdbc, tx);
+        participant = new FlakyParticipant(quota);
+        worker = new SagaRecoveryWorker(store, participant, "order-service", props, clock);
+        flow = new OrderFlow(store, participant, jdbc, tx);
+        account = UUID.randomUUID();
+        quota.grant(account, 5);
+    }
+
+    // ---------- yardimcilar ----------
+
+    SagaStatus sagaStatus(UUID sagaId) { return store.findById(sagaId).orElseThrow().status(); }
+    Step step(UUID sagaId) { return store.stepsOf(sagaId).get(0); }
+    State opState(UUID key) { return quota.get("order-service", account, key).orElse(null); }
+    void pastDeadline() { clock.advance(Duration.ofSeconds(props.deadlineSeconds() + 1)); }
+    static void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) { } }
+
+    // ---------- senaryolar ----------
+
+    @Test // #1 normal basari: saga CONFIRMED, hak tuketildi, domain yazildi
+    void normalSuccess() {
+        Result r = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID());
+        assertThat(r.kind()).isEqualTo(Kind.OK);
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.SUCCEEDED);
+        assertThat(step(r.sagaId()).nextAction()).isEqualTo(Action.CONFIRM);
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.CONFIRMED);
+        assertThat(step(r.sagaId()).status()).isEqualTo(StepStatus.DONE);
+        assertThat(quota.remaining(account)).isEqualTo(4);
+        assertThat(flow.orderCount(account)).isEqualTo(1);
+        assertThat(worker.runOnce().claimed()).isZero();
+    }
+
+    @Test // #2 ayni key ile replay: ayni sonuc, ikinci consume yok (confirm oncesi ve sonrasi)
+    void replayWithSameKey() {
+        UUID key = UUID.randomUUID(), resource = UUID.randomUUID();
+        Result first = flow.createOrder(account, key, resource);
+        Result beforeConfirm = flow.createOrder(account, key, resource);
+        worker.runOnce();
+        Result afterConfirm = flow.createOrder(account, key, resource);
+        assertThat(beforeConfirm.kind()).isEqualTo(Kind.REPLAY);
+        assertThat(afterConfirm.kind()).isEqualTo(Kind.REPLAY);
+        assertThat(afterConfirm.detail()).isEqualTo(first.detail());
+        assertThat(quota.consumeApplied.get()).isEqualTo(1);
+        assertThat(flow.orderCount(account)).isEqualTo(1);
+        assertThat(store.countSagas()).isEqualTo(1);
+    }
+
+    @Test // #3 ayni key farkli body: ilk istek kazanir (fingerprint tutulmaz, belgelenir)
+    void sameKeyDifferentBodyFirstWins() {
+        UUID key = UUID.randomUUID();
+        Result first = flow.createOrder(account, key, UUID.randomUUID());
+        Result second = flow.createOrder(account, key, UUID.randomUUID());
+        assertThat(second.kind()).isEqualTo(Kind.REPLAY);
+        assertThat(second.detail()).isEqualTo(first.detail());
+        assertThat(flow.orderCount(account)).isEqualTo(1);
+    }
+
+    @Test // #4 eszamanli ayni key: tek saga, tek consume, tek siparis
+    void concurrentSameKeyProducesSingleSaga() throws Exception {
+        UUID key = UUID.randomUUID(), resource = UUID.randomUUID();
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        List<Future<Result>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) futures.add(pool.submit(() -> { barrier.await(); return flow.createOrder(account, key, resource); }));
+        List<Kind> kinds = new ArrayList<>();
+        for (Future<Result> f : futures) kinds.add(f.get(30, TimeUnit.SECONDS).kind());
+        pool.shutdownNow();
+        assertThat(kinds).filteredOn(k -> k == Kind.OK).hasSize(1);
+        assertThat(kinds).allMatch(k -> k == Kind.OK || k == Kind.REPLAY || k == Kind.IN_PROGRESS);
+        assertThat(quota.consumeApplied.get()).isEqualTo(1);
+        assertThat(store.countSagas()).isEqualTo(1);
+        assertThat(flow.orderCount(account)).isEqualTo(1);
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        assertThat(quota.remaining(account)).isEqualTo(4);
+    }
+
+    @Test // #5 farkli key ayni kaynak: domain uniqueness reddeder, saga telafi edilir (iade)
+    void differentKeySameResourceIsCompensated() {
+        UUID resource = UUID.randomUUID();
+        Result first = flow.createOrder(account, UUID.randomUUID(), resource);
+        Result second = flow.createOrder(account, UUID.randomUUID(), resource);
+        assertThat(first.kind()).isEqualTo(Kind.OK);
+        assertThat(second.kind()).isEqualTo(Kind.DOMAIN_CONFLICT);
+        assertThat(sagaStatus(second.sagaId())).isEqualTo(SagaStatus.CANCEL_REQUESTED);
+        assertThat(quota.remaining(account)).isEqualTo(3);                 // ikinci consume uygulandi, henuz iade yok
+        SagaRecoveryWorker.RunResult r = worker.runOnce();                  // hem confirm (1.) hem compensate (2.)
+        assertThat(r.done()).isEqualTo(2);
+        assertThat(sagaStatus(first.sagaId())).isEqualTo(SagaStatus.CONFIRMED);
+        assertThat(sagaStatus(second.sagaId())).isEqualTo(SagaStatus.COMPENSATED);
+        assertThat(quota.remaining(account)).isEqualTo(4);
+        assertThat(quota.refunds.get()).isEqualTo(1);
+        assertThat(flow.orderCount(account)).isEqualTo(1);
+    }
+
+    @Test // #6 ayni UUID farkli hesap: ayri saga'lar; #18 yanlis aktor: yetki reddi, kayit yok
+    void sameKeyDifferentAccountIsSeparate_andWrongActorIsForbidden() {
+        UUID key = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        quota.grant(other, 5);
+        assertThat(flow.createOrder(account, key, UUID.randomUUID()).kind()).isEqualTo(Kind.OK);
+        assertThat(flow.createOrder(other, key, UUID.randomUUID()).kind()).isEqualTo(Kind.OK);
+        assertThat(store.countSagas()).isEqualTo(2);
+
+        UUID k2 = UUID.randomUUID();
+        assertThatThrownBy(() -> quota.consume("chat-service", account, k2, "ORDER_QUOTA", 1))
+                .isInstanceOf(SagaParticipant.ParticipantForbiddenException.class);
+        assertThat(quota.get("chat-service", account, k2)).isEmpty();
+        assertThat(quota.remaining(account)).isEqualTo(4);
+    }
+
+    @Test // #7 begin sonrasi, consume oncesi cokme: deadline -> otomatik telafi (tombstone); #11 gec gelen consume uygulanmaz
+    void crashAfterBeginIsCompensatedAfterDeadline_andLateConsumeHitsTombstone() {
+        UUID key = UUID.randomUUID();
+        flow.crashAt = CrashPoint.AFTER_BEGIN;
+        assertThatThrownBy(() -> flow.createOrder(account, key, UUID.randomUUID())).isInstanceOf(OrderFlow.SimulatedCrash.class);
+        UUID sagaId = store.find(account, "ORDER_CREATE", key).orElseThrow().id();
+        assertThat(sagaStatus(sagaId)).isEqualTo(SagaStatus.STARTED);
+        assertThat(worker.runOnce().claimed()).isZero();                    // deadline dolmadan dokunulmaz
+        pastDeadline();
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        assertThat(sagaStatus(sagaId)).isEqualTo(SagaStatus.COMPENSATED);
+        assertThat(opState(key)).isEqualTo(State.CANCELLED);                // tombstone
+        // gec gelen consume (ornegin agda takilmis istek): uygulanmaz, hak dusmez
+        assertThat(quota.consume("order-service", account, key, "ORDER_QUOTA", 1)).isEqualTo(State.CANCELLED);
+        assertThat(quota.remaining(account)).isEqualTo(5);
+        assertThat(quota.consumeApplied.get()).isZero();
+        // istemci ayni key ile tekrar denerse: OPERATION_CANCELLED (yeni niyet = yeni key)
+        flow.crashAt = CrashPoint.NONE;
+        assertThat(flow.createOrder(account, key, UUID.randomUUID()).kind()).isEqualTo(Kind.CANCELLED);
+    }
+
+    @Test // #8 katilimci commit etti, yanit kayboldu: istek 503; retry IN_PROGRESS; deadline sonrasi GET/compensate -> iade
+    void participantCommittedButResponseLost() {
+        UUID key = UUID.randomUUID();
+        participant.loseResponseNext("consume");
+        Result r = flow.createOrder(account, key, UUID.randomUUID());
+        assertThat(r.kind()).isEqualTo(Kind.UPSTREAM_UNAVAILABLE);
+        assertThat(quota.remaining(account)).isEqualTo(4);                  // katilimcida uygulandi
+        assertThat(flow.createOrder(account, key, UUID.randomUUID()).kind()).isEqualTo(Kind.IN_PROGRESS);
+        pastDeadline();
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.COMPENSATED);
+        assertThat(opState(key)).isEqualTo(State.COMPENSATED);
+        assertThat(quota.remaining(account)).isEqualTo(5);
+        assertThat(flow.orderCount(account)).isZero();
+        assertThat(flow.createOrder(account, key, UUID.randomUUID()).kind()).isEqualTo(Kind.CANCELLED);
+    }
+
+    @Test // #8b istek katilimciya hic ulasmadi (timeout): saga STARTED; recovery tombstone ile kapatir
+    void participantUnreachableIsCompensatedWithTombstone() {
+        UUID key = UUID.randomUUID();
+        participant.failNext("consume");
+        Result r = flow.createOrder(account, key, UUID.randomUUID());
+        assertThat(r.kind()).isEqualTo(Kind.UPSTREAM_UNAVAILABLE);
+        assertThat(quota.remaining(account)).isEqualTo(5);
+        pastDeadline();
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.COMPENSATED);
+        assertThat(opState(key)).isEqualTo(State.CANCELLED);
+    }
+
+    @Test // #9 consume commit + domain rollback (cokme): recovery compensate -> iade
+    void consumeCommittedThenDomainNeverWritten() {
+        UUID key = UUID.randomUUID();
+        flow.crashAt = CrashPoint.AFTER_CONSUME;
+        assertThatThrownBy(() -> flow.createOrder(account, key, UUID.randomUUID())).isInstanceOf(OrderFlow.SimulatedCrash.class);
+        assertThat(quota.remaining(account)).isEqualTo(4);
+        assertThat(flow.orderCount(account)).isZero();
+        pastDeadline();
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        UUID sagaId = store.find(account, "ORDER_CREATE", key).orElseThrow().id();
+        assertThat(sagaStatus(sagaId)).isEqualTo(SagaStatus.COMPENSATED);
+        assertThat(quota.remaining(account)).isEqualTo(5);
+        assertThat(quota.refunds.get()).isEqualTo(1);
+    }
+
+    @Test // #10 domain commit + confirm oncesi cokme; #20 restart: yeni instance'lar in-flight saga'yi kurtarir
+    void domainCommittedThenCrashBeforeConfirm_recoveredAfterRestart() {
+        Result r = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID());
+        assertThat(r.kind()).isEqualTo(Kind.OK);
+        // "restart": eski nesneler atilir; yalniz DB'deki durum kalir
+        LocalSagaStore freshStore = new LocalSagaStore(jdbc, tm, "order", props, clock);
+        SagaRecoveryWorker freshWorker = new SagaRecoveryWorker(freshStore, new QuotaParticipant(jdbc, tx), "order-service", props, clock);
+        assertThat(freshWorker.runOnce().done()).isEqualTo(1);
+        assertThat(freshStore.findById(r.sagaId()).orElseThrow().status()).isEqualTo(SagaStatus.CONFIRMED);
+        assertThat(opState(store.findById(r.sagaId()).orElseThrow().operationKey())).isEqualTo(State.CONFIRMED);
+        assertThat(quota.remaining(account)).isEqualTo(4);
+        assertThat(flow.orderCount(account)).isEqualTo(1);
+    }
+
+    @Test // #12 confirm timeout: retry + backoff; belirsizlikte GET (yanit kayboldu ama katilimci confirm etti -> retry yok)
+    void confirmTimeoutIsRetried_andLostResponseIsResolvedByGet() {
+        Result r = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID());
+        participant.failNext("confirm").failNext("get");                    // katilimci tamamen erisilemez
+        SagaRecoveryWorker.RunResult first = worker.runOnce();
+        assertThat(first.retried()).isEqualTo(1);
+        Step s = step(r.sagaId());
+        assertThat(s.status()).isEqualTo(StepStatus.RETRY);
+        assertThat(s.attempt()).isEqualTo(1);
+        assertThat(s.lastErrorCode()).isEqualTo("ParticipantUnavailableException");
+        assertThat(s.nextAttemptAt()).isEqualTo(clock.instant().plusSeconds(2));   // 2^1
+        assertThat(worker.runOnce().claimed()).isZero();                    // backoff dolmadan alinmaz
+        clock.advance(Duration.ofSeconds(3));
+        assertThat(worker.runOnce().done()).isEqualTo(1);
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.CONFIRMED);
+
+        // yanit kayboldu: katilimci confirm etti; worker GET ile CONFIRMED gorur ve retry yapmadan tamamlar
+        Result r2 = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID());
+        participant.loseResponseNext("confirm");
+        SagaRecoveryWorker.RunResult res = worker.runOnce();
+        assertThat(res.done()).isEqualTo(1);
+        assertThat(res.retried()).isZero();
+        assertThat(sagaStatus(r2.sagaId())).isEqualTo(SagaStatus.CONFIRMED);
+    }
+
+    @Test // #13 eszamanli confirm ve compensate (katilimci): tek sonuc; celiski MANUAL_REVIEW; cift iade yok
+    void concurrentConfirmAndCompensateYieldSingleOutcome() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 10; i++) {
+                UUID key = UUID.randomUUID();
+                assertThat(quota.consume("order-service", account, key, "ORDER_QUOTA", 1)).isEqualTo(State.APPLIED);
+                int before = quota.remaining(account);
+                CyclicBarrier barrier = new CyclicBarrier(2);
+                Future<Object> c = pool.submit(() -> { barrier.await(); try { return quota.confirm("order-service", account, key); } catch (RuntimeException e) { return e; } });
+                Future<Object> k = pool.submit(() -> { barrier.await(); try { return quota.compensate("order-service", account, key); } catch (RuntimeException e) { return e; } });
+                Object confirmRes = c.get(30, TimeUnit.SECONDS), compRes = k.get(30, TimeUnit.SECONDS);
+                State finalState = opState(key);
+                if (finalState == State.MANUAL_REVIEW) {                        // confirm once kazandi: iade yok, insan karari
+                    assertThat(confirmRes).isEqualTo(State.CONFIRMED);
+                    assertThat(compRes).isEqualTo(State.MANUAL_REVIEW);
+                    assertThat(quota.remaining(account)).isEqualTo(before);
+                } else {                                                        // compensate once kazandi: iade; confirm celiski
+                    assertThat(finalState).isEqualTo(State.COMPENSATED);
+                    assertThat(compRes).isEqualTo(State.COMPENSATED);
+                    assertThat(confirmRes).isInstanceOf(SagaParticipant.ParticipantConflictException.class);
+                    assertThat(quota.remaining(account)).isEqualTo(before + 1);
+                }
+                quota.grant(account, 5);                                        // sonraki tur icin sifirla
+            }
+        } finally { pool.shutdownNow(); }
+        assertThat(quota.refunds.get()).isLessThanOrEqualTo(10);
+    }
+
+    @Test // #14 iki worker + expired lease: eski worker complete edemez
+    void expiredLeaseIsTakenOverAndOldWorkerCannotComplete() {
+        Result r = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID());
+        UUID tokenA = UUID.randomUUID();
+        List<Step> byA = store.claimSteps(tokenA, clock.instant(), clock.instant().plusSeconds(props.leaseSeconds()), 10);
+        assertThat(byA).hasSize(1);                                          // A claim etti ve "coktu"
+        clock.advance(Duration.ofSeconds(props.leaseSeconds() - 1));
+        assertThat(worker.runOnce().claimed()).isZero();
+        clock.advance(Duration.ofSeconds(2));
+        assertThat(worker.runOnce().done()).isEqualTo(1);                    // B devraldi
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.CONFIRMED);
+        assertThat(store.complete(byA.get(0), tokenA, Action.CONFIRM)).isFalse();   // A geri geldi: token eslesmez
+        assertThat(store.prepare(byA.get(0), tokenA)).isEmpty();
+        assertThat(step(r.sagaId()).status()).isEqualTo(StepStatus.DONE);
+    }
+
+    @Test // #15a recovery once iptal etti: istek yolunun success() CAS'i kaybeder, domain yazimi rollback olur
+    void recoveryCancelBeforeSuccessRollsBackDomainWrite() {
+        UUID key = UUID.randomUUID();
+        flow.beforeSuccess = () -> {                                          // domain TX acikken recovery BASKA thread'de kosar
+            pastDeadline();
+            ExecutorService other = Executors.newSingleThreadExecutor();
+            try { assertThat(other.submit(worker::runOnce).get(30, TimeUnit.SECONDS).done()).isEqualTo(1); }
+            catch (Exception e) { throw new IllegalStateException(e); }
+            finally { other.shutdownNow(); }
+        };
+        Result r = flow.createOrder(account, key, UUID.randomUUID());
+        assertThat(r.kind()).isEqualTo(Kind.CANCELLED);
+        assertThat(flow.orderCount(account)).isZero();                        // rollback
+        assertThat(sagaStatus(r.sagaId())).isEqualTo(SagaStatus.COMPENSATED);
+        assertThat(quota.remaining(account)).isEqualTo(5);                    // iade edildi
+        assertThat(opState(key)).isEqualTo(State.COMPENSATED);
+    }
+
+    @Test // #15b gercek yaris: istek ile recovery paralel; her turda tutarli uc sonuctan biri, asla yarim durum
+    void requestSuccessVersusRecoveryCancelRaceIsAlwaysConsistent() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        int confirmed = 0, compensated = 0;
+        try {
+            for (int i = 0; i < 20; i++) {
+                UUID key = UUID.randomUUID();
+                CountDownLatch begun = new CountDownLatch(1);
+                // Iki tarafa da degisen gecikme: bazen istek, bazen recovery once davranir; her iki dal da gorulmeli
+                final long requestJitter = (i % 4) * 3L, workerDelay = ((i + 2) % 5) * 4L;
+                flow.beforeSuccess = () -> sleep(requestJitter);
+                flow.afterBegin = () -> { pastDeadline(); begun.countDown(); };   // begin commit oldu; deadline gecmis sayilir; worker baslayabilir
+                Future<Result> req = pool.submit(() -> flow.createOrder(account, key, UUID.randomUUID()));
+                begun.await();
+                Future<SagaRecoveryWorker.RunResult> rec = pool.submit(() -> { sleep(workerDelay); return worker.runOnce(); });
+                Result r = req.get(30, TimeUnit.SECONDS);
+                rec.get(30, TimeUnit.SECONDS);
+                for (int n = 0; n < 3; n++) worker.runOnce();                   // kalan adimi kapat
+                SagaStatus status = sagaStatus(r.sagaId());
+                int orders = flow.orderCount(account), remaining = quota.remaining(account);
+                if (status == SagaStatus.CONFIRMED) {
+                    confirmed++;
+                    assertThat(r.kind()).isEqualTo(Kind.OK);
+                    assertThat(orders).isEqualTo(1);
+                    assertThat(remaining).isEqualTo(4);
+                } else {
+                    compensated++;
+                    assertThat(status).isEqualTo(SagaStatus.COMPENSATED);
+                    assertThat(r.kind()).isIn(Kind.CANCELLED, Kind.REJECTED);
+                    assertThat(orders).isZero();
+                    assertThat(remaining).isEqualTo(5);
+                }
+                jdbc.getJdbcTemplate().execute("TRUNCATE \"order\".order_item");
+                quota.grant(account, 5);
+            }
+        } finally { pool.shutdownNow(); flow.afterBegin = () -> {}; }
+        assertThat(confirmed + compensated).isEqualTo(20);
+        System.out.println("RACE_OUTCOMES confirmed=" + confirmed + " compensated=" + compensated);
+    }
+
+    @Test // #16 tekrarlanan compensate: idempotent, tek iade
+    void repeatedCompensateRefundsOnce() {
+        UUID key = UUID.randomUUID();
+        assertThat(quota.consume("order-service", account, key, "ORDER_QUOTA", 1)).isEqualTo(State.APPLIED);
+        assertThat(quota.compensate("order-service", account, key)).isEqualTo(State.COMPENSATED);
+        assertThat(quota.compensate("order-service", account, key)).isEqualTo(State.COMPENSATED);
+        assertThat(quota.remaining(account)).isEqualTo(5);
+        assertThat(quota.refunds.get()).isEqualTo(1);
+        // confirm sonrasi compensate: iade yok, MANUAL_REVIEW
+        UUID k2 = UUID.randomUUID();
+        quota.consume("order-service", account, k2, "ORDER_QUOTA", 1);
+        quota.confirm("order-service", account, k2);
+        assertThat(quota.compensate("order-service", account, k2)).isEqualTo(State.MANUAL_REVIEW);
+        assertThat(quota.remaining(account)).isEqualTo(4);
+    }
+
+    @Test // #17 eksik/bozuk key: saga acilmaz (HTTP 400 binding'i MVC testinin isi; burada store seviyesi)
+    void missingKeyOrScopeIsRejectedBeforeAnySideEffect() {
+        assertThatThrownBy(() -> store.begin(account, "ORDER_CREATE", null, "quota")).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> store.begin(account, " ", UUID.randomUUID(), "quota")).isInstanceOf(IllegalArgumentException.class);
+        assertThat(store.countSagas()).isZero();
+        assertThatThrownBy(() -> store.success(UUID.randomUUID(), "x")).isInstanceOf(IllegalStateException.class);  // TX disinda success yok
+    }
+
+    @Test // #19 monitor: 15 dk'dan eski cozulmemis kayit sayilir; cleanup: terminal 30 gun sonra silinir, MANUAL_REVIEW asla
+    void monitorCountsUnresolved_andCleanupKeepsManualReview() {
+        Result ok = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID());     // -> CONFIRMED
+        worker.runOnce();
+        Result manual = flow.createOrder(account, UUID.randomUUID(), UUID.randomUUID()); // katilimci disaridan compensate edilmis -> confirm celiskisi
+        quota.compensate("order-service", account, store.findById(manual.sagaId()).orElseThrow().operationKey());
+        assertThat(worker.runOnce().manualReview()).isEqualTo(1);
+        assertThat(sagaStatus(manual.sagaId())).isEqualTo(SagaStatus.MANUAL_REVIEW);
+        flow.crashAt = CrashPoint.AFTER_BEGIN;
+        UUID stuckKey = UUID.randomUUID();
+        assertThatThrownBy(() -> flow.createOrder(account, stuckKey, UUID.randomUUID())).isInstanceOf(OrderFlow.SimulatedCrash.class);
+
+        assertThat(store.countUnresolved()).isZero();                         // henuz 15 dk gecmedi
+        clock.advance(Duration.ofMinutes(16));
+        assertThat(store.countUnresolved()).isEqualTo(1);                     // yalniz STARTED; MANUAL_REVIEW cozulmus sayilir (insan)
+        assertThat(store.cleanup()).isZero();                                 // 30 gun gecmedi
+        clock.advance(Duration.ofDays(31));
+        assertThat(store.cleanup()).isEqualTo(1);                             // yalniz CONFIRMED
+        assertThat(store.findById(ok.sagaId())).isEmpty();
+        assertThat(store.findById(manual.sagaId())).isPresent();
+        assertThat(store.countSagas()).isEqualTo(2);
+        assertThat(store.countSteps()).isEqualTo(2);                          // CASCADE
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/test/java/com/acme/platform/messaging/saga/FlakyParticipant.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Hata enjeksiyonu: gercek HTTP katmaninin uretecegi belirsizlikleri taklit eder.
+ * FAIL: istek katilimciya hic ulasmadi (timeout/baglanti). LOSE_RESPONSE: katilimci commit etti, yanit kayboldu.
+ */
+public class FlakyParticipant implements SagaParticipant {
+
+    enum Fault { FAIL, LOSE_RESPONSE }
+
+    private final SagaParticipant delegate;
+    private final Map<String, Deque<Fault>> faults = new ConcurrentHashMap<>();
+
+    public FlakyParticipant(SagaParticipant delegate) { this.delegate = delegate; }
+
+    public FlakyParticipant failNext(String method) { faults.computeIfAbsent(method, k -> new ArrayDeque<>()).add(Fault.FAIL); return this; }
+    public FlakyParticipant loseResponseNext(String method) { faults.computeIfAbsent(method, k -> new ArrayDeque<>()).add(Fault.LOSE_RESPONSE); return this; }
+
+    private <T> T call(String method, java.util.function.Supplier<T> real) {
+        Deque<Fault> q = faults.get(method);
+        Fault f = q == null ? null : q.poll();
+        if (f == Fault.FAIL) throw new ParticipantUnavailableException(method + " timeout");
+        T result = real.get();
+        if (f == Fault.LOSE_RESPONSE) throw new ParticipantUnavailableException(method + " response lost");
+        return result;
+    }
+
+    @Override public State consume(String c, UUID a, UUID k, String t, int n) { return call("consume", () -> delegate.consume(c, a, k, t, n)); }
+    @Override public Optional<State> get(String c, UUID a, UUID k) { return call("get", () -> delegate.get(c, a, k)); }
+    @Override public State confirm(String c, UUID a, UUID k) { return call("confirm", () -> delegate.confirm(c, a, k)); }
+    @Override public State compensate(String c, UUID a, UUID k) { return call("compensate", () -> delegate.compensate(c, a, k)); }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/test/java/com/acme/platform/messaging/saga/OrderFlow.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import com.acme.platform.messaging.saga.LocalSagaStore.BeginResult;
+import com.acme.platform.messaging.saga.SagaParticipant.ParticipantUnavailableException;
+import com.acme.platform.messaging.saga.SagaParticipant.State;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * Koordinator tarafindaki istek akisi (referans Bolum 11.4 adim 1-3): begin (ayri TX) -> consume (TX disi) ->
+ * domain yazimi + success() (ayni TX). Test icin "cokme noktalari" enjekte edilebilir.
+ */
+public class OrderFlow {
+
+    public enum Kind { OK, REPLAY, IN_PROGRESS, CANCELLED, REJECTED, UPSTREAM_UNAVAILABLE, DOMAIN_CONFLICT }
+    public record Result(Kind kind, String detail, UUID sagaId) {}
+    public enum CrashPoint { NONE, AFTER_BEGIN, AFTER_CONSUME }
+    public static class SimulatedCrash extends RuntimeException { SimulatedCrash(String p) { super("crash at " + p); } }
+
+    static final String CALLER = "order-service", SCOPE = "ORDER_CREATE", STEP = "quota";
+    public static final String DDL = """
+            CREATE TABLE "order".order_item (id UUID PRIMARY KEY, account_id UUID NOT NULL, resource_id UUID NOT NULL UNIQUE,
+                                             operation_key UUID NOT NULL);
+            """;
+
+    private final LocalSagaStore store;
+    private final SagaParticipant participant;
+    private final NamedParameterJdbcTemplate jdbc;
+    private final TransactionTemplate tx;
+    public volatile CrashPoint crashAt = CrashPoint.NONE;
+    public volatile Runnable beforeSuccess = () -> {};          // yaris testleri icin kanca
+    public volatile Runnable afterBegin = () -> {};
+
+    public OrderFlow(LocalSagaStore store, SagaParticipant participant, NamedParameterJdbcTemplate jdbc, TransactionTemplate tx) {
+        this.store = store; this.participant = participant; this.jdbc = jdbc; this.tx = tx;
+    }
+
+    public Result createOrder(UUID account, UUID operationKey, UUID resourceId) {
+        BeginResult b = store.begin(account, SCOPE, operationKey, STEP);
+        UUID sagaId = b.saga().id();
+        if (!b.created()) {
+            return switch (b.saga().status()) {                                   // idempotent replay
+                case SUCCEEDED, CONFIRMED -> new Result(Kind.REPLAY, b.saga().result(), sagaId);
+                case COMPENSATED, MANUAL_REVIEW -> new Result(Kind.CANCELLED, "OPERATION_CANCELLED", sagaId);
+                default -> new Result(Kind.IN_PROGRESS, "OPERATION_IN_PROGRESS", sagaId);
+            };
+        }
+        afterBegin.run();
+        if (crashAt == CrashPoint.AFTER_BEGIN) throw new SimulatedCrash("AFTER_BEGIN");
+
+        State state;
+        try {
+            state = participant.consume(CALLER, account, operationKey, "ORDER_QUOTA", 1);   // TX disi, ayni operationKey
+        } catch (ParticipantUnavailableException e) {
+            return new Result(Kind.UPSTREAM_UNAVAILABLE, "UPSTREAM_UNAVAILABLE", sagaId);  // saga STARTED kalir; deadline -> recovery
+        }
+        if (state != State.APPLIED) {
+            store.fail(sagaId);                                                   // REJECTED/CANCELLED: telafi (no-op/tombstone)
+            return new Result(Kind.REJECTED, "QUOTA_" + state, sagaId);
+        }
+        if (crashAt == CrashPoint.AFTER_CONSUME) throw new SimulatedCrash("AFTER_CONSUME");
+
+        try {
+            return tx.execute(st -> {                                              // domain yazimi + success() AYNI TX
+                UUID id = UUID.randomUUID();
+                jdbc.update("INSERT INTO \"order\".order_item (id, account_id, resource_id, operation_key) VALUES (:id, :a, :r, :k)",
+                        Map.of("id", id, "a", account, "r", resourceId, "k", operationKey));
+                beforeSuccess.run();
+                store.success(sagaId, "ORDER:" + id);                              // CAS; recovery iptal ettiyse exception -> rollback
+                return new Result(Kind.OK, "ORDER:" + id, sagaId);
+            });
+        } catch (SagaCancelledException e) {
+            return new Result(Kind.CANCELLED, "OPERATION_CANCELLED", sagaId);
+        } catch (DuplicateKeyException e) {
+            store.fail(sagaId);                                                   // domain uniqueness reddetti -> telafi
+            return new Result(Kind.DOMAIN_CONFLICT, "RESOURCE_ALREADY_ORDERED", sagaId);
+        }
+    }
+
+    public int orderCount(UUID account) {
+        return jdbc.queryForObject("SELECT count(*) FROM \"order\".order_item WHERE account_id = :a", Map.of("a", account), Integer.class);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/test/java/com/acme/platform/messaging/saga/QuotaParticipant.java`
+
+```java
+package com.acme.platform.messaging.saga;
+
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.dao.support.DataAccessUtils;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * Katilimci ornegi (referans Bolum 11.4 "Katilimci sozlesmesi"): abonelik/kota servisinin kendi semasinda.
+ * Gercekte HTTP arkasindadir; burada in-process. Tekillik UNIQUE(caller_service, account_id, operation_key);
+ * caller_service JWT act claim'inden gelir (burada parametre). Iki katmanli yetki: allowlist (HTTP filtresi, burada yok)
+ * + kod ici aktor -> izinli islem tipi haritasi. Kilit: advisory lock (islem anahtari) + FOR UPDATE (kota satiri).
+ */
+public class QuotaParticipant implements SagaParticipant {
+
+    static final Map<String, Set<String>> ALLOWED_OPERATIONS = Map.of("order-service", Set.of("ORDER_QUOTA"));
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final TransactionTemplate tx;
+    public final AtomicInteger consumeApplied = new AtomicInteger(), refunds = new AtomicInteger();
+
+    public QuotaParticipant(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx) {
+        this.jdbc = jdbc;
+        this.tx = tx;
+    }
+
+    public static final String DDL = """
+            CREATE TABLE subscription.quota (account_id UUID PRIMARY KEY, remaining INT NOT NULL CHECK (remaining >= 0));
+            CREATE TABLE subscription.operation (
+              caller_service TEXT NOT NULL, account_id UUID NOT NULL, operation_key UUID NOT NULL,
+              op_type TEXT NOT NULL, status TEXT NOT NULL, amount INT NOT NULL,
+              refunded_at TIMESTAMPTZ,
+              PRIMARY KEY (caller_service, account_id, operation_key));
+            """;
+
+    public void grant(UUID accountId, int remaining) {
+        jdbc.update("INSERT INTO subscription.quota (account_id, remaining) VALUES (:a, :r) ON CONFLICT (account_id) DO UPDATE SET remaining = :r",
+                new MapSqlParameterSource().addValue("a", accountId).addValue("r", remaining));
+    }
+
+    public int remaining(UUID accountId) {
+        return jdbc.queryForObject("SELECT remaining FROM subscription.quota WHERE account_id = :a", Map.of("a", accountId), Integer.class);
+    }
+
+    @Override
+    public State consume(String caller, UUID account, UUID key, String opType, int amount) {
+        if (!ALLOWED_OPERATIONS.getOrDefault(caller, Set.of()).contains(opType)) {
+            throw new ParticipantForbiddenException("actor not allowed for operation type");   // kod ici aktor -> islem tipi
+        }
+        return tx.execute(st -> {
+            lock(caller, account, key);
+            State existing = status(caller, account, key);
+            if (existing != null) return existing;                     // replay (CANCELLED tombstone dahil: uygulanmaz)
+            Integer remaining = DataAccessUtils.singleResult(jdbc.queryForList(
+                    "SELECT remaining FROM subscription.quota WHERE account_id = :a FOR UPDATE", Map.of("a", account), Integer.class));
+            State result;
+            if (remaining != null && remaining >= amount) {
+                jdbc.update("UPDATE subscription.quota SET remaining = remaining - :n WHERE account_id = :a",
+                        Map.of("n", amount, "a", account));
+                result = State.APPLIED;
+                consumeApplied.incrementAndGet();
+            } else {
+                result = State.REJECTED;
+            }
+            insert(caller, account, key, opType, result, amount);
+            return result;
+        });
+    }
+
+    @Override
+    public Optional<State> get(String caller, UUID account, UUID key) { return Optional.ofNullable(status(caller, account, key)); }
+
+    @Override
+    public State confirm(String caller, UUID account, UUID key) {
+        return tx.execute(st -> {
+            lock(caller, account, key);
+            State s = status(caller, account, key);
+            if (s == null) throw new ParticipantConflictException("confirm without consume");
+            return switch (s) {
+                case APPLIED -> { setStatus(caller, account, key, State.CONFIRMED); yield State.CONFIRMED; }
+                case CONFIRMED -> State.CONFIRMED;                                       // replay
+                default -> throw new ParticipantConflictException("confirm on " + s);   // CANCELLED/COMPENSATED/REJECTED
+            };
+        });
+    }
+
+    @Override
+    public State compensate(String caller, UUID account, UUID key) {
+        return tx.execute(st -> {
+            lock(caller, account, key);
+            State s = status(caller, account, key);
+            if (s == null) {                                                            // gec gelen consume uygulanmasin
+                insert(caller, account, key, "TOMBSTONE", State.CANCELLED, 0);
+                return State.CANCELLED;
+            }
+            return switch (s) {
+                case APPLIED -> {                                                       // iade; cift iade refunded_at ile engellenir
+                    int n = jdbc.update("""
+                            UPDATE subscription.operation SET status = 'COMPENSATED', refunded_at = now()
+                            WHERE caller_service = :c AND account_id = :a AND operation_key = :k AND refunded_at IS NULL""",
+                            Map.of("c", caller, "a", account, "k", key));
+                    if (n == 1) {
+                        Integer amount = jdbc.queryForObject("SELECT amount FROM subscription.operation WHERE caller_service = :c AND account_id = :a AND operation_key = :k",
+                                Map.of("c", caller, "a", account, "k", key), Integer.class);
+                        jdbc.update("UPDATE subscription.quota SET remaining = remaining + :n WHERE account_id = :a", Map.of("n", amount, "a", account));
+                        refunds.incrementAndGet();
+                    }
+                    yield State.COMPENSATED;
+                }
+                case COMPENSATED, CANCELLED, REJECTED -> s == State.REJECTED ? State.CANCELLED : s;   // replay / no-op
+                case CONFIRMED -> { setStatus(caller, account, key, State.MANUAL_REVIEW); yield State.MANUAL_REVIEW; }  // iade yok
+                case MANUAL_REVIEW -> State.MANUAL_REVIEW;
+            };
+        });
+    }
+
+    private void lock(String caller, UUID account, UUID key) {
+        jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtext(:k))", Map.of("k", caller + ":" + account + ":" + key), Object.class);
+    }
+
+    private State status(String caller, UUID account, UUID key) {
+        String s = DataAccessUtils.singleResult(jdbc.queryForList(
+                "SELECT status FROM subscription.operation WHERE caller_service = :c AND account_id = :a AND operation_key = :k",
+                Map.of("c", caller, "a", account, "k", key), String.class));
+        return s == null ? null : State.valueOf(s);
+    }
+
+    private void insert(String caller, UUID account, UUID key, String opType, State status, int amount) {
+        jdbc.update("INSERT INTO subscription.operation (caller_service, account_id, operation_key, op_type, status, amount) VALUES (:c, :a, :k, :t, :s, :n)",
+                new MapSqlParameterSource().addValue("c", caller).addValue("a", account).addValue("k", key)
+                        .addValue("t", opType).addValue("s", status.name()).addValue("n", amount));
+    }
+
+    private void setStatus(String caller, UUID account, UUID key, State status) {
+        jdbc.update("UPDATE subscription.operation SET status = :s WHERE caller_service = :c AND account_id = :a AND operation_key = :k",
+                Map.of("s", status.name(), "c", caller, "a", account, "k", key));
     }
 }
 ```

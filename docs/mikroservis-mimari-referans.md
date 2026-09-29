@@ -1539,6 +1539,8 @@ commit
    - Hata veya belirsiz sonuçta önce `GET` ile katılımcının durumu sorgulanır; çelişki varsa `MANUAL_REVIEW`.
 5. `monitor`: 15 dk'dan eski çözülmemiş kayıtlar ERROR olarak raporlanır. `cleanup`: yalnız terminal kayıtlar 30 gün sonra silinir; `MANUAL_REVIEW` silinmez.
 
+**Çalışan hali:** `blueprint/skeleton-example/platform-messaging` — `saga/LocalSagaStore` (begin/success/fail, claim/prepare/complete/retry/manualReview, monitor/cleanup), `saga/SagaRecoveryWorker`, `db/platform/saga_coordinator.sql`; katılımcı örneği ve senaryolar `SagaBehaviourIT` (Bölüm 11.5).
+
 **Katılımcı sözleşmesi:**
 
 ```
@@ -1597,7 +1599,7 @@ Config key'leri `operation-consistency.*` altında tutulur.
 
 **Ek senaryolar (Bölüm 11.2–11.3, 4.6):** inbox satırı + iş aynı TX (handler ortasında exception → satır yok) · commit sonrası ack öncesi çökme → duplicate yutulur · iki poller instance'ı aynı aggregate'in sıralı iki satırı → tek worker, sıra korunur · bir lane'de takılı hedef diğer lane'i durdurmuyor · eski güvenlik kararı yeniden denemede yeni kararı ezmiyor (superseded + `source_revision`) · publisher confirm alınmış ama tüketici işlememiş → üretici "tamamlandı" saymıyor · delta olayında sıra boşluğu → uygulama durur, alarm · snapshot olayında küçük revizyon yok sayılır.
 
-**Çalışan örnek:** `blueprint/skeleton-example/platform-messaging/src/test/.../OutboxBehaviourIT.java` — outbox/inbox senaryolarının gerçek PostgreSQL üzerinde koşan hali (seviye 2). Saga senaryoları için henüz çalışan örnek yoktur.
+**Çalışan örnekler (seviye 2, gerçek PostgreSQL):** `blueprint/skeleton-example/platform-messaging/src/test/.../OutboxBehaviourIT.java` (outbox/inbox, 13 senaryo) ve `SagaBehaviourIT.java` (saga senaryoları 1–20, 19 test; koordinatör `LocalSagaStore` + `SagaRecoveryWorker`, katılımcı `QuotaParticipant` in-process, belirsizlikler `FlakyParticipant` ile). Katılımcının HTTP/JWT katmanı ve gerçek broker teslimi (seviye 3) bu örneklerin kapsamı dışındadır.
 
 **Kanıt seviyeleri** (kayıt biçimi Bölüm 19.6):
 1. Unit ve MVC testleri
@@ -2182,7 +2184,7 @@ Bu dokümanın ve `blueprint/`'in **iki farklı doğrulama seviyesi** vardır; i
 | Seviye | Ne kanıtlar | Bu referansta durumu |
 |---|---|---|
 | **Yapısal** | Kurallar derlenir ve ihlal yakalanır: ArchUnit, enforcer, ErrorCode tekilliği, config drift, immutability script/hook | `skeleton-example` ile **doğrulandı** (pozitif build + 8 kasıtlı ihlal); tarih README'sinde |
-| **Davranışsal** | Sistem koşarken tutarlılık güvenceleri sağlanır: outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira dolar ve iş devralınır, saga recovery telafi eder, inbox atomik | Outbox/inbox kısmı `skeleton-example/platform-messaging` içinde **gerçek PostgreSQL 17.5 üzerinde doğrulandı** (seviye 2; `OutboxBehaviourIT`, 13 senaryo: #21, #22, #25, #27, #28, #29, #32 + iki poller/300 satır, SKIP LOCKED, backoff, DEAD politikası, öncelik, kira güvenlik payı; 5 kasıtlı regresyon yakalandı — `skeleton-example/README.md`). **Koşturulmayan:** saga recovery (seviye 2), owner→participant runtime (seviye 3), broker ile gerçek yeniden teslim (seviye 3). Projede P0'ın çıkış koşulu: bu üçü de `PASS` ve kanıt kaydı dolu |
+| **Davranışsal** | Sistem koşarken tutarlılık güvenceleri sağlanır: outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, süreç ölünce kira dolar ve iş devralınır, saga recovery telafi eder, inbox atomik | Outbox/inbox ve saga `skeleton-example/platform-messaging` içinde **gerçek PostgreSQL 17.5 üzerinde doğrulandı** (seviye 2): `OutboxBehaviourIT` 13 senaryo (#21, #22, #25, #27, #28, #29, #32 + iki poller/300 satır, SKIP LOCKED, backoff, DEAD politikası, öncelik, kira güvenlik payı) ve `SagaBehaviourIT` 19 test (senaryo 1–20: replay, eşzamanlı aynı key, çökme noktaları, yanıt kaybı + GET, tombstone, kira devri, istek-recovery yarışı, MANUAL_REVIEW, cleanup/monitor); toplam 11 kasıtlı regresyon yakalandı — `skeleton-example/README.md`. **Koşturulmayan:** owner→participant HTTP/JWT katmanı ve broker ile gerçek yeniden teslim (seviye 3), release/staging provası (seviye 4). Projede P0'ın çıkış koşulu: seviye 3 senaryoları `PASS` ve kanıt kaydı dolu |
 
 "Yapısal olarak doğrulanmış" bir kural davranışsal olarak da doğru olduğu anlamına gelmez (ArchUnit outbox'ın çift yayın yapmadığını söyleyemez). Doküman, blueprint README'si ve uyum raporu bu ayrımı açıkça yazar.
 

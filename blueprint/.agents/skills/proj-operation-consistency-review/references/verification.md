@@ -48,7 +48,9 @@
 | 31 | Delta olayında sıra boşluğu | uygulama durur, `readmodel_gap_total` artar, uzlaştırma | 2 | | |
 | 32 | Süreç öldürme: PUBLISHING satır + kira dolumu | ikinci instance devralır; ilk instance geri gelince yazamaz | 3 | | |
 
-Kanıt seviyeleri: 1 unit/MVC · 2 gerçek PostgreSQL (Testcontainers) · 3 owner→participant runtime (iki servis ayakta) · 4 release/staging.
+Kanıt seviyeleri: 1 unit/MVC · 2 gerçek PostgreSQL (Testcontainers veya gömülü PG) · 3 owner→participant runtime (iki servis ayakta) · 4 release/staging.
+
+Seviye 2 referans uygulaması: `skeleton-example/platform-messaging` (`SagaBehaviourIT` satır 1–20, `OutboxBehaviourIT` satır 21–32); senaryo → test adı eşlemesi test metotlarının `// #n` yorumlarında.
 
 ## 3. Sonuç
 

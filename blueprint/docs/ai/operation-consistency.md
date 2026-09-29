@@ -72,3 +72,5 @@ Somut servis adları ve operasyon tipleri (`repo-context.md`'de).
 İki seviye karıştırılmaz: **yapısal** (ArchUnit/enforcer/drift/immutability: kural derlenir ve ihlal yakalanır) ve **davranışsal** (sistem koşarken tekrar teslim çift iş üretmez, iki worker aynı satırı işlemez, restart sonrası iş devralınır). Yapısal `PASS` davranışsal `PASS` değildir.
 
 Her davranışsal `PASS` şu alanlarla kaydedilir: `senaryo · kanıt seviyesi · test/komut · commit SHA · ortam (CI job / Testcontainers sürümü) · sonuç (link) · tarih`. Testi olmayan senaryo `BLOCKED`; "yazılı ama koşulmamış" `PASS` sayılmaz. Review damgası (`review-gate` hook'u) kanıt değildir; zorunlu güvence CI'dır (test sayısı dahil: 0 test = başarısız).
+
+Başlangıç noktası: `blueprint/skeleton-example/platform-messaging` — `OutboxBehaviourIT` ve `SagaBehaviourIT` matrisin 1–32 satırlarının seviye 2 (gerçek PostgreSQL) halini içerir; projeye kopyalanıp katılımcı gerçek HTTP client'ıyla (seviye 3) genişletilir.
