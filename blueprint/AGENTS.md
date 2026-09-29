@@ -14,7 +14,7 @@ Bu dosya tüm AI kodlama ajanları (Claude Code, Codex, Copilot, Cursor vb.) iç
 | Değişiklik bitince | `docs/ai/review-checklist.md` (hangi skill'ler çalışacak) |
 | Servisler arası yazma, outbox, event, saga | `docs/ai/operation-consistency.md` |
 | Mimari karar (yeni servis, yeni altyapı bileşeni, veri ayrımı) | `docs/adr/` (mevcut ADR'leri oku, yenisini şablondan aç) |
-| Mimari referans (nasıl inşa edilir) | `docs/mikroservis-mimari-referans.md` — yalnız ilgili bölüm |
+| Mimari referans (nasıl inşa edilir) | `docs/mikroservis-mimari-referans.md` — yalnız ilgili bölüm. Dosya repoda yoksa **aramaya tur harcama**: ilgili maddeyi "net kanıt bulunamadı (referans yok)" diye işaretle ve `docs/ai/*` ile devam et |
 
 ## 2. Temel Kurallar
 

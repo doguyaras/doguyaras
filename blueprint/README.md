@@ -66,16 +66,34 @@ Yapısal `PASS` davranışsal `PASS` değildir; uyum raporu ve PR şablonu ikisi
 ## Kurulum
 
 ```bash
-cp -r blueprint/. <yeni-repo>/
+rsync -a --exclude 'skeleton-example/*/target' blueprint/ <yeni-repo>/      # build artefaktları kopyalanmaz
+cp docs/mikroservis-mimari-referans.md <yeni-repo>/docs/                     # AGENTS.md ve skill'ler bu dosyaya "referans Bölüm N" diye gönderir
 cd <yeni-repo>
+for d in .agents/skills/proj-*; do mv "$d" ".agents/skills/<proje>-${d##*/proj-}"; done   # Claude Code skill'i KLASÖR adıyla kaydeder; yalnız frontmatter'ı değiştirmek yetmez
 grep -rl "proj-\|<proje>" . --exclude-dir=.git | xargs sed -i 's/proj-/<proje>-/g; s/<proje>/<proje-adı>/g'
-ln -s ../.agents/skills .claude/skills          # kopya değil, symlink
+ln -s ../.agents/skills .claude/skills          # kopya değil, symlink (CLI symlink'i takip eder — gerçek oturumda doğrulandı)
 chmod +x .claude/hooks/*.sh
 echo '.claude/.last-review-check' >> .gitignore   # review damgası yerel; commit'lenmez
+export FLYWAY_BASE_REF=origin/develop            # (opsiyonel) base branch adı; yoksa sırayla origin/develop, origin/main, origin/master, develop, main, master denenir
 node --test scripts/flyway-immutability.test.js  # script'in kendi testleri
 bash -n .claude/hooks/review-gate.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # hook kuru çalıştırma → "ask"
 echo '{"tool_input":{"skill":"proj-security-review"}}' | .claude/hooks/review-stamp.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # damga sonrası → sessiz (izin)
 ```
+
+## Gerçek Claude Code oturumunda doğrulananlar (2026-09-29, claude 2.1.284, headless `claude -p`)
+
+| Test | Sonuç |
+|---|---|
+| Base'teki `V1__init.sql`'e Edit denemesi | PreToolUse hook exit 2 ile engelledi; model hook mesajını aynen aktardı; dosya değişmedi |
+| Yeni `V2__*.sql` yazma | Hook sessizce izin verdi (exit 0), dosya oluştu |
+| Review çalışmadan `git push` | review-gate "ask" → headless modda reddedildi; remote değişmedi |
+| Aynı içerikte review sonrası `git push` | sessiz izin; remote güncellendi |
+| Review sonrası içerik değişince `git push` | "içerik değişti" gerekçesiyle yeniden sordu |
+| `CLAUDE.md` → `AGENTS.md` yönlendirmesi | model AGENTS.md'yi okuyup 5. kuralı (sıcak yol) doğru aktardı |
+| Skill keşfi | 12 `proj-*` skill symlink üzerinden yüklendi |
+| `/proj-db-migration-review` slash komutu | skill formatında tam rapor üretti (immutability komutunu koştu, `Nihai karar` ile bitti) — ama **damga yazılmadı**: kullanıcı slash komutu Skill aracını çağırmaz. Düzeltme: `UserPromptSubmit` hook'u eklendi (settings.json); damga artık her iki yolda yazılır |
+
+Bulunan diğer kusurlar ve düzeltmeleri: skill klasör adları `sed` ile değişmiyordu (Kurulum'a `mv` adımı eklendi); referans doküman blueprint kopyasında yoktu ve ajan onu aramakla tur harcadı (Kurulum'a `cp` adımı, AGENTS.md'ye "yoksa net kanıt bulunamadı yaz" notu); hook mesajı base bulunamayınca `origin/develop` yazıyordu (gerçek kullanılan ref yazılır); dar `--allowedTools` ile `; echo $?` gibi bileşik komutlar reddediliyordu (settings.json'a okuma amaçlı `permissions.allow` listesi eklendi; script'ler zaten `OK/IHLAL/DOGRULANAMADI` basar, çıkış kodu yakalamak gerekmez). Headless kullanımda review skill'i için `--max-turns` ≥ 20 verilmelidir (okuma sırası + komutlar 15–19 tur sürdü).
 
 ## İlkeler
 

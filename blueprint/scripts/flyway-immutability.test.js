@@ -113,6 +113,27 @@ test('proje koku repo kokunun alt klasoruyse (monorepo) base dosyasi yine korunu
   assert.equal(n.protected, false);
 });
 
+test('acik base yoksa aday zinciri: origin/develop yok, local main var → main kullanilir', () => {
+  delete process.env.FLYWAY_BASE_REF;
+  git('branch', '-m', 'develop', 'main');                       // base branch'in adi main
+  write('svc/src/main/resources/db/migration/V1__init.sql', 'CREATE SCHEMA s; -- changed');
+  const r = script.check({ cwd: repo });                        // ne arguman ne env
+  assert.equal(r.base, 'main');
+  assert.equal(r.violations.length, 1);
+  const f = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V1__init.sql'), { cwd: repo });
+  assert.equal(f.protected, true);
+  assert.equal(f.base, 'main');
+});
+
+test('hicbir aday yoksa: head → base HEAD olarak raporlanir', () => {
+  delete process.env.FLYWAY_BASE_REF;
+  git('branch', '-m', 'develop', 'trunk');                      // adaylardan hicbiri yok
+  const f = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V1__init.sql'), { onMissingBase: 'head', cwd: repo });
+  assert.equal(f.protected, true);
+  assert.equal(f.base, 'HEAD');
+  assert.throws(() => script.check({ cwd: repo }));             // fail modu: exit 3'e karsilik hata
+});
+
 test('base yoksa: fail → hata; head → HEAD agacina gore', () => {
   assert.throws(() => script.check({ baseRef: 'no-such-branch', cwd: repo }));
   const r = script.checkFile('svc/src/main/resources/db/migration/V1__init.sql', {

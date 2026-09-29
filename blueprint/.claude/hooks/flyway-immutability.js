@@ -4,7 +4,8 @@
  * Kuralin tek kaynagi scripts/flyway-immutability.js'dir; bu dosya yalnizca adaptordur.
  *
  * Fail-closed: beklenmeyen hata veya bozuk girdi de engeller (exit 2). stderr Claude'a gider.
- * Base: FLYWAY_BASE_REF yoksa origin/develop; origin yoksa HEAD agacina gore korur.
+ * Base: FLYWAY_BASE_REF; yoksa sirayla origin/develop, origin/main, origin/master, develop, main, master;
+ * hicbiri yoksa HEAD agacina gore korur (mesajda gercekten kullanilan ref yazilir).
  */
 'use strict';
 const path = require('node:path');
@@ -38,7 +39,8 @@ process.stdin.on('end', () => {
   try {
     const r = script.checkFile(filePath, { baseRef: process.env.FLYWAY_BASE_REF, onMissingBase: 'head', cwd: root });
     if (r.protected) {
-      fail(`${r.file} base branch'te (${r.base}) mevcut bir Flyway migration'i; degistirilemez/silinemez. Degisikligi yeni bir V<sonraki>__*.sql dosyasiyla yap.`);
+      const where = r.base === 'HEAD' ? 'HEAD agacinda (base branch bulunamadi, FLYWAY_BASE_REF ayarlanabilir)' : `base branch'te (${r.base})`;
+      fail(`${r.file} ${where} mevcut bir Flyway migration'i; degistirilemez/silinemez. Degisikligi yeni bir V<sonraki>__*.sql dosyasiyla yap.`);
     }
     process.exit(0);
   } catch (e) {

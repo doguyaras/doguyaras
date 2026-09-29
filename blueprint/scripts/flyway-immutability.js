@@ -41,24 +41,36 @@ function assertSafeRef(ref) {
   return ref;
 }
 
+/** Acik ref (arguman/env) verilmisse yalniz o; verilmemisse sirayla denenecek adaylar (ilk bulunan kazanir). */
+const FALLBACK_BASES = ['origin/develop', 'origin/main', 'origin/master', 'develop', 'main', 'master'];
+
 function resolveBase(explicit) {
   return assertSafeRef(explicit || process.env.FLYWAY_BASE_REF || DEFAULT_BASE);
 }
 
-/** merge-base bulunamazsa: 'fail' → hata (exit 3), 'head' → HEAD agacina gore koru. */
-function resolveComparePoint({ baseRef, onMissingBase = 'fail', cwd }) {
-  try {
-    return git(['merge-base', baseRef, 'HEAD'], { cwd }).trim();
-  } catch (err) {
-    if (onMissingBase === 'head') {
-      try {
-        return git(['rev-parse', 'HEAD'], { cwd }).trim();
-      } catch (e2) {
-        throw new Error(`HEAD cozumlenemedi: ${e2.message}`);
-      }
-    }
-    throw new Error(`merge-base bulunamadi (base=${baseRef}): ${err.message}`);
+function mergeBaseOf(ref, cwd) {
+  try { return git(['merge-base', ref, 'HEAD'], { cwd }).trim(); } catch (e) { return null; }
+}
+
+/**
+ * Karsilastirma noktasi: acik ref varsa onun merge-base'i; yoksa FALLBACK_BASES sirayla denenir.
+ * Hicbiri yoksa: 'fail' → hata (exit 3), 'head' → HEAD agacina gore koru (base='HEAD').
+ * Donus: { point, base } — base, GERCEKTEN kullanilan ref'tir (hata mesajlari yaniltmasin diye).
+ */
+function resolveComparePoint({ baseRef, onMissingBase = 'fail', cwd, explicit = true }) {
+  const candidates = explicit ? [baseRef] : [baseRef, ...FALLBACK_BASES.filter((b) => b !== baseRef)];
+  for (const ref of candidates) {
+    const point = mergeBaseOf(ref, cwd);
+    if (point) return { point, base: ref };
   }
+  if (onMissingBase === 'head') {
+    try {
+      return { point: git(['rev-parse', 'HEAD'], { cwd }).trim(), base: 'HEAD' };
+    } catch (e2) {
+      throw new Error(`HEAD cozumlenemedi: ${e2.message}`);
+    }
+  }
+  throw new Error(`merge-base bulunamadi (denenen: ${candidates.join(', ')})`);
 }
 
 function repoRoot(cwd) {
@@ -76,8 +88,8 @@ function toRepoRelative(filePath, cwd) {
  * --no-renames: yeniden adlandirma D + A olarak gorunur; D ihlaldir.
  */
 function check({ baseRef, onMissingBase = 'fail', cwd } = {}) {
-  const base = resolveBase(baseRef);
-  const point = resolveComparePoint({ baseRef: base, onMissingBase, cwd });
+  const explicit = Boolean(baseRef || process.env.FLYWAY_BASE_REF);
+  const { point, base } = resolveComparePoint({ baseRef: resolveBase(baseRef), onMissingBase, cwd, explicit });
   const out = git(['diff', '--name-status', '--no-renames', '-z', point], { cwd });
   const parts = out.split('\0').filter((s) => s.length > 0);
   const violations = [];
@@ -95,8 +107,8 @@ function check({ baseRef, onMissingBase = 'fail', cwd } = {}) {
 function checkFile(filePath, { baseRef, onMissingBase = 'fail', cwd } = {}) {
   const rel = toRepoRelative(filePath, cwd);
   if (!isMigrationPath(rel)) return { protected: false, file: rel };
-  const base = resolveBase(baseRef);
-  const point = resolveComparePoint({ baseRef: base, onMissingBase, cwd });
+  const explicit = Boolean(baseRef || process.env.FLYWAY_BASE_REF);
+  const { point, base } = resolveComparePoint({ baseRef: resolveBase(baseRef), onMissingBase, cwd, explicit });
   // ls-tree pathspec'i calisilan dizine goredir: proje koku repo kokunun alt klasoruyse (monorepo) yanlis yol
   // aranir ve base dosyasi "yok" sanilir (fail-open). Bu yuzden git her zaman repo kokunde calistirilir.
   const root = repoRoot(cwd);
@@ -149,7 +161,7 @@ function main(argv) {
   }
 }
 
-module.exports = { MIGRATION_RE, isMigrationPath, resolveBase, check, checkFile, main };
+module.exports = { MIGRATION_RE, FALLBACK_BASES, isMigrationPath, resolveBase, resolveComparePoint, check, checkFile, main };
 
 if (require.main === module) {
   process.exit(main(process.argv.slice(2)));
