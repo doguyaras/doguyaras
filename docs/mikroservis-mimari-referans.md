@@ -87,7 +87,7 @@ Bu doküman "mikroservis referansı" ama ilk karar **kaç deploy birimi** olaca�
 
 | Şekil | Ne zaman | Nasıl |
 |---|---|---|
-| **A. Modüler monolit** | Ekip ≤ 5 kişi, tek host, ölçek profili homojen, ürün henüz kanıtlanmamış | Aynı `*-api`/`*-core` sınırları tek Spring Boot uygulamasında **Spring Modulith** modülleri olur. Şema/modül ayrımı, `ApplicationModules.verify()` + ArchUnit ile zorlanır. Servisler arası çağrı in-process; **modüller arası** olaylar için Modulith event publication registry (tamamlama tablosu = in-process outbox). Uygulama dışına giden her mesaj (notification sağlayıcısı, ayrı bir servis, analytics) yine `outbox_event` + RabbitMQ ile (Bölüm 11.2) — Modulith externalization da bu tabloyu kullanır. Gateway ve service JWT gereksiz. Bu dokümanın kalan bölümleri (sınırlar, outbox, idempotency, güvenlik, veri, log) **aynen** geçerli kalır. |
+| **A. Modüler monolit** | Ekip ≤ 5 kişi, tek host, ölçek profili homojen, ürün henüz kanıtlanmamış | Aynı `*-api`/`*-core` sınırları tek Spring Boot uygulamasında **Spring Modulith** modülleri olur. Şema/modül ayrımı, `ApplicationModules.verify()` + ArchUnit ile zorlanır. Servisler arası çağrı in-process; **modüller arası** olaylar için Modulith event publication registry: olay kaydı (`event_publication`) iş satırıyla **aynı transaction'da** yazılır, birlikte commit/rollback olur (in-process outbox). Teslim ise en-az-bir-kezdir: Modulith "tamamlandı" bilgisini dinleyicinin transaction'ı commit olduktan **sonra** ayrı bir yazımla işaretler; arada çöküş ya da çalışan bir teslim sırasında yapılan resubmit aynı olayı yeniden teslim eder. Bu yüzden `@ApplicationModuleListener` dinleyicileri de idempotent yazılır (Bölüm 11.3). Uygulama dışına giden her mesaj (notification sağlayıcısı, ayrı bir servis, analytics) yine `outbox_event` + RabbitMQ ile (Bölüm 11.2). Modulith externalization gönderim kaydını `event_publication`'da tutar, `outbox_event`'i kullanmaz; ikisi birlikte kullanılacaksa dışa gönderimin tek kaynağı ADR ile seçilir. Gateway ve service JWT gereksiz. Bu dokümanın kalan bölümleri (sınırlar, outbox, idempotency, güvenlik, veri, log) **aynen** geçerli kalır. |
 | **B. Mikroservis** | Birden fazla ekip, ayrı release kadansı, farklı ölçek profilleri (örn. WebSocket yoğun bir servis), ayrı hata izolasyonu ihtiyacı | Bu dokümanın tamamı. Sıcak yolda senkron zincir **yok** (Bölüm 4.6); diğer servisin verisi event ile replike edilir. |
 | **C. Hibrit** (çoğu proje için önerilen başlangıç) | Küçük ekip ama ölçek profili farklı 1–2 alan var (realtime/chat, dış sağlayıcı entegrasyonu, yönetim paneli) | Senkron bağımlı çekirdek domain'ler (kimlik, kullanıcı, ana iş akışı, abonelik) **tek** uygulamada modül olarak; realtime, notification ve backoffice ayrı servis. Modül sınırları ilk günden korunduğu için ileride herhangi bir modül ayrı servise çıkarılabilir. |
 
@@ -198,7 +198,7 @@ Kural: **Yalnız OSS desteği süren sürümle başlanır** (Bölüm 25). Aşağ
 | Gateway | Spring Cloud Gateway Server WebFlux | `RequestRateLimiter` (Redis token bucket) gateway'de |
 | Config | Compose `env_file` + Spring config tree; Config Server **opsiyonel** | Bölüm 15 |
 | Servis çağrısı | Spring HTTP Service Clients (`@HttpExchange` + `@ImportHttpServices`, `RestClient`) | OpenFeign, Spring Cloud 2022.0'dan beri "feature-complete" (yalnız bugfix); mevcut projelerde kalabilir, yeni projede tercih edilmez. |
-| Dayanıklılık | Resilience4j (circuit breaker, bulkhead, time limiter) veya Spring Framework 7 `@Retryable`/`@ConcurrencyLimit` | Bölüm 4.7 |
+| Dayanıklılık | Resilience4j (circuit breaker, bulkhead, time limiter) veya Spring Framework 7 `@Retryable(includes = …, maxRetries = 2, …)`/`@ConcurrencyLimit` (`@EnableResilientMethods` şart; `maxAttempts` niteliği yoktur, `maxRetries` ilk denemeyi saymaz: 2 = toplam 3 deneme; `includes` verilmezse kalıcı hatalar da tekrarlanır) | Bölüm 4.7 |
 | Güvenlik | Spring Security 7 + özel filtreler | Passkey/WebAuthn desteği (6.4+) admin 2FA için |
 | JWT | Nimbus JOSE+JWT | **EdDSA (Ed25519) / ES256**, servis başına anahtar çifti, JWKS + `kid`. HS256 yalnız tek uygulamalı monolitte kabul edilebilir. |
 | Persistence | Spring Data JPA / Hibernate 7 | `@UuidGenerator(style = VERSION_7)` |
@@ -214,7 +214,7 @@ Kural: **Yalnız OSS desteği süren sürümle başlanır** (Bölüm 25). Aşağ
 | Ödeme / mağaza | Apple App Store Server API + Notifications V2, Google Play `subscriptionsv2` + RTDN; veya RevenueCat/Adapty | Mock yalnız `@Profile("local|test")` |
 | Boilerplate | Lombok | Constructor injection |
 | Mapping | Manuel (builder + `toResponse`) | MapStruct opsiyonel |
-| API doküman | springdoc-openapi | Prod'da kapalı; CI'da OpenAPI çıktısı üretilir ve istemci client'ı generate edilir (Bölüm 20) |
+| API doküman | springdoc-openapi **3.x** (Boot 4 hattı; Boot 4.1 için 3.1.x, 3.0.2 de doğrulandı; Boot 3 hattı 2.8.x ile karıştırılmaz), `springdoc-openapi-starter-webmvc-api` (swagger-ui prod'a girmez) | Prod'da kapalı; CI'da OpenAPI çıktısı testte üretilir (varsayılan 3.1; diff gate'i 3.0 çıktısıyla, Bölüm 16) ve istemci client'ı generate edilir (Bölüm 20) |
 | Tracing / metrik | Micrometer Tracing OTel bridge + OTLP exporter, Micrometer Prometheus + Actuator | Structured logging (`logging.structured.format.console=ecs`) |
 | Test | JUnit 5, Mockito, AssertJ, MockMvc, Logback `ListAppender`, **Testcontainers 2.x** (`@ServiceConnection`), **ArchUnit** | Gerçek DB testleri CI'da koşar |
 | Feature flag / deney | OpenFeature SDK + Unleash/GrowthBook veya parametre kataloğunun flag tipi | Bölüm 14.4 |
@@ -576,7 +576,7 @@ Sıra (Nygard, *Release It!*): önce **her hop'ta sert timeout**, sonra **bağı
 |---|---|
 | Servis URL | `services.<servis>.base-url` (→ `spring.http.serviceclient.<servis>.base-url`) |
 | JWT | `service-jwt.*`, `user-jwt.*`, `admin-jwt.*` |
-| Rate limit | `rate-limit.rules.<scope>.{limit,window-seconds}`; scope kebab-case (`login-ip`, `order-create-account`) |
+| Rate limit | `rate-limit.rules.<scope>.{limit,window-seconds,fail-policy}`; scope kebab-case (`login-ip`, `order-create-account`) |
 | Poller | `<servis>.outbox.poll-interval-ms` (tek outbox); cron: `<servis>.<iş>.retention-cron` |
 | Saga | `operation-consistency.{deadline-ms,lease-ms,poll-ms,monitor-ms,cleanup-cron}` |
 | Ortam değişkeni | UPPER_SNAKE (`DB_HOST`, `REDIS_PASS`, `SERVICE_JWT_SECRET`) |
@@ -748,13 +748,14 @@ Tablo README'de tek yerde tutulur. Bir unit test tüm enum'ların çakışmadı�
 | `NoResourceFoundException` / 405 / 415 / `MaxUploadSizeExceeded` | 404 / 405 / 415 / 413 | ilgili kod | WARN |
 | `AccessDeniedException` | 403 | security | WARN |
 | `OptimisticLockException` | 409 | `CONCURRENT_UPDATE` | WARN |
-| `Exception` | 500 | system | ERROR + sanitize edilmiş özet + stack trace |
+| `MissingApiVersionException`, `InvalidApiVersionException` | 400 | validation (`API_VERSION_INVALID`) | WARN |
+| `Exception` | 500 | system | ERROR; `exceptionType=` + sanitize edilmiş root-cause özeti. Ham throwable log olayına **eklenmez**: stack trace mesaj zincirini (PG DETAIL, URL, token, telefon) taşır (Bölüm 8.4). Stack trace gerekiyorsa mesajları sanitize eden bir throwable converter ile yazılır. |
 
 Her yanıta `X-Trace-Id` header'ı eklenir. `traceId` aktif span'den alınır.
 
 **RFC 9457 (Problem Details) notu:** Spring `ProblemDetail` (`application/problem+json`) standarttır ve dış/ortak API'lerde tercih edilebilir; bu referans mobil istemci ve panelin **tek** zarfı için kendi `ErrorResponse`'unu kullanır. Karar ADR'ye yazılır; ikisi karıştırılmaz (filtre redleri dahil tek biçim).
 
-**Kaçın:** Standart MVC hatalarının 500'e düşmesi. Handler'ı `ResponseEntityExceptionHandler`'dan türetin veya bu tipleri açıkça eşleyin.
+**Kaçın:** Standart MVC hatalarının 500'e düşmesi. Handler `ResponseEntityExceptionHandler`'dan türetilir ve tek zarf `handleExceptionInternal` override'ında üretilir (400/404/405/406/413/415 ve API version hataları tek noktadan geçer; türetme kaldırılınca 17 test 500 gördü). `ConstraintViolationException` taban sınıfta **yoktur**; `@ExceptionHandler` ile ayrıca eşlenir. Bilinmeyen path Boot 4'te `NoResourceFoundException` → 404.
 
 ### 7.4 `safeLogReason` Ayrımı (Katı Kural)
 
@@ -1079,18 +1080,24 @@ service-jwt:
 
 ```lua
 local current = redis.call('INCRBY', KEYS[1], ARGV[2])
-if current == tonumber(ARGV[2]) then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return current
+local pttl = redis.call('PTTL', KEYS[1])
+if pttl < 0 then redis.call('EXPIRE', KEYS[1], ARGV[1]); pttl = tonumber(ARGV[1]) * 1000 end
+return { current, pttl }
 ```
 
-- Key formatı `rl:<scope>:<sha256(scope \0 key)>`; ham PII Redis'e yazılmaz.
-- Config: `rate-limit.rules.<scope>.{limit,window-seconds}`.
+- EXPIRE koşulu `current == maliyet` değil `PTTL < 0`'dır: TTL'siz kalmış bir sayaç (eski sürüm, INCR ile EXPIRE arasında çöken istemci, elle `SET`) bir sonraki vuruşta iyileşir; aksi halde özne sonsuza dek kilitli kalır (gerçek Redis 7'de mutasyonla gösterildi).
+- Script `[sayaç, kalan_ms]` döner; `Retry-After = max(1, ceil(kalan_ms/1000))` ek bir round-trip olmadan hesaplanır.
+- Script `SCRIPT LOAD` ile yüklenip `EVALSHA` ile çağrılır; `NOSCRIPT` gelirse (Redis restart/failover sonrası script cache boştur) yeniden yüklenir ve bir kez tekrar denenir. Bu yapılmazsa restart sonrası fail-open scope süresiz limitsiz, fail-closed scope süresiz 503 kalır.
+
+- Key formatı `rl:<scope>:<hex(HMAC-SHA256(pepper, scope \0 özne))>`; `pepper` secret store'dan gelir (`SECRET_RATE_LIMIT_PEPPER`), rotasyonda sayaçlar sıfırlanır (kabul edilebilir). Düz `sha256` ham metni gizler ama telefon/IPv4 uzayı küçük olduğu için saniyeler içinde geri çözülür; bu yüzden RDB/AOF yedekleri ve replikalar PII taşıyor sayılır.
+- Config: `rate-limit.rules.<scope>.{limit, window-seconds, fail-policy}`; `fail-policy` = `OPEN` | `CLOSED` ve **varsayılanı yoktur**: eksikse uygulama açılışta hata verir (varsayılan ya limitsiz geçiş ya da kesintide tüm yüzeyin 503'ü demektir).
+- Rate limit Redis bağlantısı sıcak yoldadır: komut timeout'u kısa (50–250 ms), kopukken komutlar kuyruğa alınmaz, hemen reddedilir (Lettuce `DisconnectedBehavior.REJECT_COMMANDS`), yeniden bağlanma gecikmesi en fazla 1 sn. Lettuce varsayılanında kopukken komutlar timeout'a kadar bekler; fail-open scope bile her istekte o kadar gecikir.
 - Fail davranışı:
 
 | Durum | Sonuç |
 |---|---|
 | Kural tanımlı değil | 503 (fail-closed) — config hatası, üretime çıkmadan yakalanmalı |
-| Redis hatası | Scope başına karar: güvenlik yüzeyleri (OTP, login, refresh) **fail-closed 503**; iş yüzeyleri (arama, listeleme) **fail-open** + `rate_limit_store_failures_total` metriği ve alarm (Stripe'ın rate limiter'ları bilinçli fail-open'dır) |
+| Redis hatası | Scope başına karar: güvenlik yüzeyleri (OTP, login, refresh) **fail-closed 503 + Retry-After** (`rate_limit_fail_closed_total{scope}`); iş yüzeyleri (arama, listeleme) **fail-open** (`rate_limit_fail_open_total{scope}`) ve alarm; sayaçlar açılışta her scope için 0 ile kaydedilir (ilk kesintiyi `increase()` alarmı yakalasın) (Stripe'ın rate limiter'ları bilinçli fail-open'dır) |
 | Limit aşıldı | 429 + `Retry-After` header'ı |
 
 - Scope'lar anahtar tipine göre ayrılır: `<aksiyon>-ip`, `<aksiyon>-account`, `<aksiyon>-transaction`, `<aksiyon>-device`.
@@ -1235,7 +1242,7 @@ Güvenlik bir review skill'i değil, süreçtir. Asgari döngü:
 
 Kullanıcıdan gelen bir URL'yi sunucunun çağırdığı her yer (webhook adresi, avatar/önizleme URL'si, OIDC discovery, dosya içe aktarma) SSRF yüzeyidir: iç ağ (`10/8`, `172.16/12`, `192.168/16`), link-local metadata (`169.254.169.254`), localhost, config-server ve actuator portları hedef olur.
 
-- **Zorunlu güvence:** kullanıcı kaynaklı URL ile giden her istek (1) şema `https` ve host allowlist/denylist, (2) **DNS çözümü sonrası** IP kontrolü (DNS rebinding'e karşı; Boot 4.1 `InetAddressFilter` bunu client seviyesinde yapar: `InetAddressFilter.externalAddresses()` bean'i tüm auto-configured `RestClient`/`WebClient`'lara uygulanır), (3) redirect takibinde de aynı kontrol, (4) kısa timeout ve boyut sınırı, (5) ayrı bir egress client (iç servis client'ıyla aynı bean değil).
+- **Zorunlu güvence:** kullanıcı kaynaklı URL ile giden her istek (1) şema `https` ve host allowlist/denylist, (2) **DNS çözümü sonrası** IP kontrolü (DNS rebinding'e karşı; Boot 4.1 `InetAddressFilter` (`org.springframework.boot.http.client`) bean'i auto-configured `RestClient.Builder`/`WebClient.Builder` üzerinden bu builder'lardan üretilen **tüm** client'lara uygulanır; engellenen istek `FilteredHostException` ile bağlantı kurulmadan kesilir), (3) redirect takibinde de aynı kontrol, (4) kısa timeout ve boyut sınırı, (5) iç servis client'larıyla izolasyon: bean global olduğu için iç ağ adresine giden client'lar aynı builder'ı kullanıyorsa onlar da kesilir. Ya filtre iç hedefleri açıkça izinler (`externalAddresses().or("10.0.0.0/8", …)`), ya da iç client'lar filtresiz ayrı bir `ClientHttpRequestFactory` ile kurulur; ayrı bir egress bean'i **tek başına** izolasyon sağlamaz (iskelette doğrulandı).
 - Webhook hedefleri kayıt anında doğrulanır (challenge) ve değişince yeniden; gönderim outbox `kind=HTTP` lane'inden, imzalı (HMAC) ve yeniden denemeli.
 - Config Server ve actuator portları yalnız iç ağda; SSRF'e açık servislerden erişilemez (Bölüm 15.2).
 - Test: iç IP'ye, metadata adresine ve DNS ile iç IP'ye çözülen host'a giden istek reddediliyor.
@@ -1515,6 +1522,8 @@ CREATE INDEX idx_outbox_event_claim ON <schema>.outbox_event (kind, status, next
 
 Bölüm 23.3–23.4'teki kod şablonları bu generic tabloyu ve lane'li poller'ı gösterir.
 
+**Şekil A'da Modulith registry'nin işletimi:** `event_publication` tablosu uygulamanın kendi Flyway migration'ıdır (Modulith jar'ındaki `schemas/v2/schema-postgresql.sql` birebir kopyalanır; `spring.modulith.events.jdbc.schema-initialization.enabled=false` kalır). `completion-mode=update` ise tamamlanan satırlar `CompletedEventPublications.deletePublicationsOlderThan(...)` ile periyodik silinir. Tamamlanmamış kayıtları tek bir zamanlanmış iş (advisory lock ile tek instance) `IncompleteEventPublications.resubmitIncompletePublicationsOlderThan(eşik)` ile yeniden gönderir; `republish-outstanding-events-on-restart` çoklu instance'ta kapalı tutulur. **Uyarı (Modulith 2.1.1 JDBC):** `resubmitIncompletePublications(ResubmissionOptions.withMinAge(d))` FAILED kayıtlarda yaş eşiğini yok sayar (SQL'de parantez hatası; 1 dk'lık kayıt 5 dk eşiğine rağmen yeniden teslim edildi); yaş eşiği için `resubmitIncompletePublicationsOlderThan` kullanılır. `modulith-example`'daki `knownDefect_` testi sürüm yükseltmesinde durumu gösterir.
+
 ### 11.3 Idempotent Consumer (Inbox)
 
 At-least-once teslimde aynı mesaj birden çok kez gelir (yeniden teslim, tüketici çökmesi, poller yeniden denemesi). **Zorunlu güvence:** tekrar teslim çift iş üretmez. Bunun için **inbox satırı ile iş değişikliği aynı transaction'da** olmak zorundadır; aksi halde "inbox'a yazdı, işi yapmadan çöktü" (olay kaybı) veya "işi yaptı, inbox'a yazmadan çöktü" (çift iş) pencereleri açık kalır.
@@ -1770,6 +1779,8 @@ Realtime yayını outbox'lı olmadığı için kaybolabilir. İstemci tasarımı
 
 Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek listesi) **config veya env'e konmaz**. Yönetim servisindeki parametre kataloğunda tutulur.
 
+### 14.1 Sahiplik ve Contract
+
 | Rol | Bileşen |
 |---|---|
 | Sahip | Yönetim servisi: `SystemParameterService`, `ParameterDefinitionRegistry` (tip ve sınır doğrulaması), internal controller |
@@ -1780,12 +1791,14 @@ Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek liste
 | Tüketici | Servis başına tek `BackofficeParameterClient` + `SystemParameterProvider` |
 | Kayma tespiti | Açılış kontrolü (ERROR log) + health indicator DOWN + enum↔seed↔registry↔frontend tutarlılık testleri |
 
-**İsim ve tip:**
+### 14.2 İsim ve Tip
+
 - Group: kebab-case. Key: `<alan>.<ad>` snake_case. Enum sabiti: UPPER_SNAKE.
 - Tipler: `INTEGER` (+unit), `DURATION` (her zaman saniye), `OPTION_LIST` (`code`, `labels.tr/en`, `order`, `active`).
 - Yayınlanmış key yeniden adlandırılmaz. `usage_status`: `DEFINED_ONLY` / `ACTIVE` / `PARTIAL`.
 
-**Okuma kuralları:**
+### 14.3 Okuma Kuralları: Fail-Closed ve Bounded Staleness
+
 - **Doğruluk hataları fail-closed:**
 
 | Durum | Hata |
@@ -1796,8 +1809,9 @@ Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek liste
   Kod içi default değer, yml fallback ve hatayı yutmak yasaktır: parametre tanımsızsa bu bir **deploy hatasıdır** ve açılış kontrolünde yakalanır.
 
 - **Erişilemezlik: bounded staleness (static stability).** Parametre kaynağı bir *control plane*'dir; düştüğünde *data plane* (tüm servisler) durmamalıdır. "5 sn cache + 503" modeli yönetim servisini her servisin tier-0 bağımlılığı yapar (yönetim paneli restart olurken ana iş akışı 503 döner). Kural:
-  - Tüketici son başarılı `ParameterGroupDto`'yu (revizyonuyla) **bellekte ve diskte** (local snapshot; soğuk açılışta kaynak yoksa bile ayağa kalkar) tutar.
-  - Kaynak erişilemezse grup başına tanımlı **en fazla T** süre boyunca son bilinen değer kullanılır (örn. hak limitleri 10 dk, yaş/uygunluk kuralları 1 sa); `parameter_staleness_seconds{group}` metriği yayınlanır ve eşik alarmı vardır.
+  - Tüketici son başarılı `ParameterGroupDto`'yu revizyonu ve **alınma anıyla** (`fetchedAt`) birlikte **bellekte ve diskte** (local snapshot; soğuk açılışta kaynak yoksa bile ayağa kalkar) tutar; staleness = `now − fetchedAt`. Disk snapshot'ı grup başına bir JSON dosyasıdır, atomik yazılır (tmp + rename), instance'a özel kalıcı volume'de durur; dosya adı yalnız kebab-case grup adından üretilir (diğer adlar reddedilir: path traversal).
+  - **Soğuk açılışta snapshot yoksa** ve kaynak erişilemiyorsa grup, kritikliğinden bağımsız `PARAMETER_UNAVAILABLE` (503) döner; kod içi default burada da yasaktır. İlk deploy'da snapshot dizini boş olduğundan açılış kontrolü kaynağın en az bir kez ulaşılabilir olmasını fiilen zorunlu kılar.
+  - Kaynak erişilemezse grup başına tanımlı **en fazla T** süre boyunca son bilinen değer kullanılır (örn. hak limitleri 10 dk, yaş/uygunluk kuralları 1 sa). `parameter_staleness_seconds{group}` gauge'u her okumada güncellenir (son başarılı fetch'ten geçen saniye; başarılı fetch'te 0); alarm eşiği grup başına T'nin altında seçilir (örn. %80). Micrometer gauge'u zayıf referans tuttuğundan durum nesnesi provider'da güçlü referansla tutulur (aksi halde metrik NaN olur).
   - T aşılınca yalnız **güvenlik-kritik** olarak işaretli gruplar `PARAMETER_UNAVAILABLE` (503) döner; diğerleri son bilinen değerle devam eder. Hangi grubun kritik olduğu katalogda `criticality` alanıyla tanımlıdır.
   - Bu, tutarlılığı bozmaz: kalıcı sonuç yazılırken kullanılan revizyon zaten snapshot olarak kaydedilir. AWS "static stability" ilkesi ve tüm feature-flag SDK'ları (Unleash: 15 sn poll + disk yedeği + sunucu yoksa yedekten servis; OpenFeature: provider hatasında default) aynı modeli uygular.
   - Alternatif/ek: parametre revizyonları **event** olarak yayınlanır (Bölüm 12), tüketiciler local tabloda tutar; yönetim servisi yalnız yazma yoludur.
@@ -1805,12 +1819,14 @@ Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek liste
 - **Tazelik:**
   - `group(...)`: 5 sn'lik instance cache (+ bounded-staleness fallback).
   - `freshGroup`: kullanıcı girdisini doğrulayan yazma akışları (kaynak erişilemezse fallback **yok**, 503).
-  - `freshGroupSince(revision)`: eski revizyonlu kayıtları kırpmak (clamp).
+  - `freshGroupSince(revision)`: kaynaktan okur; dönen revizyon istenenden küçükse (replika gecikmesi) `PARAMETER_REVISION_STALE` (503) ile reddeder, fallback yoktur. Kullanım: eski revizyonlu kayıtları kırparken (clamp) kararın en az o revizyonla verilmesini garanti etmek.
   - `groupAt(instant)`: geçmiş bir anın değeri.
 - Birlikte anlamlı key'ler aynı revizyondan okunur. Kalıcı sonuçlara değer ve **revizyon snapshot'ı** yazılır.
 - Parametre TX ve lock dışında okunur. `@Value` / `@PostConstruct` ile bağlanmaz. Worker her turda yeniden okur.
 - Değer düşürüldüğünde mevcut veriyi uzlaştıran bir worker gerekir.
-- Loglara parametre değeri, ham yanıt ve key adı yazılmaz.
+- Loglara parametre değeri ve ham yanıt yazılmaz. Grup ve key adı yalnız hata kodu mesajlarında (`PARAMETER_NOT_DEFINED`, `PARAMETER_VALUE_INVALID`, açılış kontrolü) yer alır; olağan okuma loglarında yer almaz.
+
+**Çalışan hali (seviye 1):** `skeleton-example/platform-parameters` (23 test, 6 mutasyonun 6'sı yakalandı).
 
 ### 14.4 Feature Flag ve Deney
 
@@ -1923,7 +1939,7 @@ services:
 **Kurallar:**
 - Secret hiçbir zaman: repoda düz metin, Config Server'da, Dockerfile `ENV`'inde, image katmanında, log'da, `.env` build context'inde.
 - `.dockerignore`: `.env*`, `secrets/`, `.git`, `**/target`, `node_modules`.
-- **gitleaks** hem pre-commit hem **CI**'da; tarama geçmişi de kapsar (`--log-opts`).
+- **gitleaks** hem pre-commit hem **CI**'da, iki modda: `gitleaks git` (tüm geçmiş, silinmiş secret dahil; `--log-opts` yalnız aralığı daraltır) ve `gitleaks dir` (commit'lenmemiş çalışma ağacı); ikisi birbirinin açığını kapatır. `detect`/`protect` 8.19+'da gizli/eski komutlardır. `--redact` ile secret log'a yazılmaz. gitleaks tarama hatasında da exit 1 döner ("no leaks found in partial scan"); sarmalayıcı (`scripts/gitleaks-check.sh`) JSON raporda bulgu yoksa sonucu "doğrulanamadı" (exit 3) sayar.
 - Rotasyon prosedürü yazılıdır: hangi secret, kim, ne sıklıkla, nasıl (JWT anahtarları `kid` ile kesintisiz; DB parolaları PgBouncer üzerinden çift kullanıcı ile).
 - Secret'ın nereden geldiği izlenebilir (CI secret adı → compose secret adı → property adı eşlemesi README'de).
 
@@ -1941,14 +1957,14 @@ services:
 | JPQL doğrulama | DB'siz: `EntityManagerFactory` açılır, sorgular parse edilir |
 | Gerçek DB | **Testcontainers 2.x** (`testcontainers-postgresql`, `-redis`/valkey, `-rabbitmq`) + Spring Boot **`@ServiceConnection`** (`@DynamicPropertySource` yerine), gerçek Flyway migration'ları. CI'da `ubuntu-latest` runner'da Docker hazırdır; "reuse" modu deneyseldir ve **CI için değildir** — Spring context cache + JVM başına tek container yeter. Daha ucuz alternatif: workflow `services:` bloğu. **Kural:** gerçek DB testleri CI'da **her PR'da** koşar; env ile açılıp CI'da atlanan test yok sayılır. |
 | Concurrency | `CountDownLatch` + executor. İki paralel claim'in ayrık satırlar aldığı, eşzamanlı ikinci insert'in reddedildiği kanıtlanır. |
-| Mimari kurallar | **ArchUnit** (`layeredArchitecture()`, `noClasses().that().resideInAPackage("..controller..").should().dependOnClassesThat().resideInAPackage("..repository..")`, `slices().should().beFreeOfCycles()`, `@Configuration` yalnız `config/`, `service.impl`'de yalnız `*ServiceImpl`, `@RequestBody` → `@Valid`). Modüler monolitte ek olarak Spring Modulith `ApplicationModules.of(App.class).verify()` + `spring.modulith.runtime.verification-enabled`. Maven enforcer `bannedDependencies` ile `*-core` → `*-core` yasağı. |
+| Mimari kurallar | **ArchUnit** (`layeredArchitecture()`, `noClasses().that().resideInAPackage("..controller..").should().dependOnClassesThat().resideInAPackage("..repository..")`, `slices().should().beFreeOfCycles()`, `@Configuration` yalnız `config/`, `service.impl`'de yalnız `*ServiceImpl`, `@RequestBody` → `@Valid`). Modüler monolitte ek olarak Spring Modulith `ApplicationModules.of(App.class).verify()` testi **ve negatif eşi**: test kaynaklarında bir modülün paketinde başka modülün internal sınıfına bağımlı kasıtlı bir sınıf; yalnız o paketi içeren bir `ImportOption` ile kurulan `verify()`'ın `Violations` fırlattığı ve mesajın o bağımlılığı adlandırdığı doğrulanır (negatif test olmadan yeşil `verify()` bir şey kanıtlamaz). İzinli bağımlılıklar `@ApplicationModule(allowedDependencies = …)` ile açıkça yazılır; boş dizi "hiçbiri", varsayılan "hepsi" demektir. Çalışma zamanı doğrulaması (`spring.modulith.runtime.verification-enabled`) istenirse `spring-modulith-runtime` ayrıca eklenir; starter-core/-jdbc onu getirmez. Maven enforcer `bannedDependencies` ile `*-core` → `*-core` yasağı. |
 | Tutarlılık / sınır | Enum↔seed↔registry↔frontend eşleşmesi. Migration'larda başka schema adı yok. Client'ta yanlış modül DTO'su yok. Hata kodu çakışması yok. |
 | Statik config | yml ve alarm kuralı dosyalarını okuyup doğrulayan testler. Local ↔ deploy config drift testi. Hook komutlarının örnek girdiyle testi. |
 | Dayanıklılık | Her HTTP client için "hedef yanıt vermiyor" testi: timeout bütçesi, circuit açılması, tanımlı hata (Bölüm 4.7). |
 | Mutasyon | Kritik modüllerde (outbox, saga, güvenlik filtreleri, para hesabı) **PIT** (`pitest-maven` + `pitest-junit5-plugin`; plugin yoksa 0 test bulur ve sessiz geçebilir) ile testlerin gerçekten yakaladığı doğrulanır; hedef mutasyon skoru README'de (başlangıç ≥ %80 kritik paketlerde). CI'da haftalık; PR gate'te değil (süre). `skeleton-example`'daki elle mutasyonlar bu pratiğin küçük hali. |
 | Yük | k6/Gatling senaryoları staging'de (haftalık ve release öncesi): p99 ve hata oranı SLO'ya karşı; sonuç kapasite planına (Bölüm 24) yazılır. |
 | Contract (servisler arası) | Monorepo'da derleme zamanı tip kontrolü yeter; Pact'in kendi karşılaştırması bile "iki tarafı aynı ekip aynı repoda yazıyorsa az katkı" der. Polyrepo'ya geçilirse Pact/Spring Cloud Contract. |
-| İstemci contract | CI'da her servisin `/v3/api-docs` çıktısı üretilir, birleştirilir, `openapi-diff` ile breaking change yakalanır, `openapi-generator` ile istemci client'ı (örn. `dart-dio`, `typescript-fetch`) üretilir (Bölüm 20). |
+| İstemci contract | CI'da her servisin OpenAPI çıktısı testte üretilir (prod'da `api-docs` kapalı; test `springdoc.api-docs.enabled=true` ile açar) ve repoda commit'li baseline ile `openapi-diff` karşılaştırılır; kırıcı fark PR gate'ini kırar. **Dikkat:** openapi-diff 2.1.x OpenAPI 3.1 belgede şema tipini okumaz (string → integer "değişiklik yok" çıkar); gate springdoc'un **3.0 çıktısını** (`springdoc.api-docs.version=openapi_3_0`) karşılaştırır, istemciye 3.1 belge yayınlanır. Araç opsiyonel istek alanının yeniden adlandırılmasını/kaldırılmasını ve `operationId` değişikliğini kırıcı saymaz; bunlar review'da yakalanır (`operationId` `@Operation` ile sabitlenir). Baseline yalnız bilinçli komutla güncellenir ve PR diff'inde görünür. İstemci client'ı `openapi-generator` ile (örn. `dart-dio`, `typescript-fetch`) üretilir (Bölüm 20). |
 
 **Kurallar:**
 - Önce davranış ve edge case'ler belirlenir.
@@ -2046,7 +2062,7 @@ JDK 25 notları: `-XX:+UseCompactObjectHeaders` (JEP 519, final) heap'i %10–20
 
 | Workflow | İçerik |
 |---|---|
-| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`; SHA'lar `git ls-remote --tags` ile alınır); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks, config drift, OpenAPI diff, hook testleri. |
+| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`; SHA'lar `git ls-remote --tags` ile alınır); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks (`scripts/gitleaks-check.sh all .`: geçmiş + çalışma ağacı), config lint (`scripts/config-lint.js`), config drift, OpenAPI diff, hook testleri. CI adımlarında `test -f X && çalıştır || true` kalıbı kullanılmaz: script varken kırmızı sonucu da yutar (fail-open). |
 | `migration-immutability` | PR tetikler (`edited` dahil). Head SHA ve `fetch-depth: 0` ile checkout; `node scripts/<migration>-immutability.js check --base origin/$BASE_REF`; script'in kendi testleri. |
 | `build-images` | `develop`/`release`/`main` push. Değişen servislerin image'ları Jib ile build → GHCR push → cosign imza + SBOM. Çıktı: `<servis>@sha256:…` listesi (artifact). |
 | `deploy` | `release` → staging (otomatik), `main` → production (**GitHub environment protection** ile onay). Sunucuya SSH: yalnız `docker compose pull` + `docker-rollout`. Registry, digest ve imza doğrulaması. |
@@ -2076,6 +2092,7 @@ JDK 25 notları: `-XX:+UseCompactObjectHeaders` (JEP 519, final) heap'i %10–20
 | **Şema: kolon silme / tip değişimi** (contract) | Expand (yeni kolon) → uygulama iki kolonu da yazar → backfill → uygulama yalnız yeniye geçer → **sonraki release'te** contract | N ve N-1 image aynı şemayla | Contract'tan sonra rollback **yoktur**; bu yüzden ayrı release |
 | **Enum/parametre değeri** ekleme | Tüketen tüm servisler önce (bilinmeyen değeri tanısın) → üreten | eski tüketici bilinmeyen değeri reddedebilir → ekleme öncesi `from()` toleransı | Değer üretimi durdurulur |
 | **JWT claim ekleme/kaldırma** | Doğrulayan (tüketen) önce → basan | eski doğrulayan bilmediği claim'i yok sayar | Basan rollback yeterli; kaldırmada tersi |
+| **Public API (istemci) alan değişikliği** | Opsiyonel yanıt alanı ekleme: serbest. Yanıt alanı kaldırma/yeniden adlandırma, istek alanını zorunlu yapma, yeni zorunlu istek alanı, yanıtta yeni enum değeri: **kırıcı** → yeni sürüm yanında açılır, eski sürüm `Deprecation`/`Sunset` ile yaşar (Bölüm 20) | eski istemci ↔ yeni sunucu (mağazadaki eski uygulama) | Sunucu rollback'i yeni alanı kaldırır; eski alan sunset'ten önce kaldırılmaz |
 | **Allowlist / config** | Config değişikliği ilgili servis restart'ıyla; **kod ile aynı deploy'da** ise önce config | – | Config geri alınır (versiyonlu) |
 
 **Uyumluluk matrisi** her kırıcı değişiklik için PR'a yazılır (dört hücre): `yeni üretici → eski tüketici`, `eski üretici → yeni tüketici`, `yeni → yeni`, `eski → eski`. Bir hücre "çalışmaz" ise çift yayın veya feature flag ile kapatılır; "çalışmaz"ı kabul eden rollout planı `proj-release-readiness-review`'da `FAIL`.
@@ -2221,7 +2238,7 @@ Dokümandaki bir kural, AI ajanı veya geliştirici unutsa bile **bir şey kırm
 | `@RequestBody` → `@Valid` | ArchUnit veya ErrorProne özel kontrolü |
 | throw öncesi structured log | Checkstyle/ErrorProne özel kontrolü ya da review skill |
 | Migration değişmezliği | script + CI + hook |
-| Secret literal fallback yok | gitleaks + config lint (regex `\$\{[A-Z_]+:[^}]+\}` secret key'lerinde) |
+| Secret literal fallback yok; local dışında düz secret yok | `scripts/config-lint.js`: secret görünümlü key veya env adında `${AD:...}` fallback'i (boş ve iç içe fallback, rakamlı env adı ve küçük harfli property placeholder dahil) ihlaldir; local profil dışında düz secret değeri ihlaldir; yalnız local'de `# lint:allow-secret-fallback <gerekçe>`. gitleaks düşük entropili sahte değerleri (`changeme`) **yakalamaz**; yüksek entropili gerçek anahtarlar için ayrı kontroldür. |
 | Local ↔ deploy config drift | `scripts/config-drift-check` CI |
 | Hata kodu çakışması | unit test (tüm `ErrorCode` enum'ları) |
 | Sıcak yol: gecikme bütçesi ve bağımlılık listesi yazılı; varsayılan (≤1 uzak çağrı) aşılıyorsa ADR | kritik akış kaydı (`repo-context.md`) + review skill; otomatik: trace'te uzak span sayısı testi (kayıttaki listeyle eşit) + p99 yük testi eşiği |
@@ -2261,17 +2278,17 @@ Bu dokümanın ve `blueprint/`'in **iki farklı doğrulama seviyesi** vardır; i
 | Konu | Pratik |
 |---|---|
 | Branch | `feature/<kişi>-<açıklama>` → PR `develop`'a. `release` test ortamına, `main` production'a deploy edilir. |
-| PR kontrolleri | Testler, migration immutability, secret taraması |
+| PR kontrolleri | Testler, migration immutability, secret taraması, config lint, OpenAPI diff (kırıcı değişiklikte gate kırılır; bilinçli baseline güncellemesi PR diff'inde görünür) |
 | Commit | Conventional (`fix(<modül>): …`, `feat(<modül>): …`), ekibin dilinde |
 | Push öncesi | İlgili review skill'leri çalıştırılır |
 | Doğrulama | Değişiklik izole bir DB'ye karşı servis gerçekten ayağa kaldırılarak doğrulanır |
 | API sözleşmesi (tek kaynak) | **OpenAPI üretilir, elle yazılmaz.** CI her servisin `/v3/api-docs` çıktısını alır, tek `<proje>-api.yaml`'a birleştirir, `openapi-diff` ile breaking change'i PR'da işaretler, `openapi-generator` ile istemci client paketini üretir (Flutter: `dart-dio` stable; web: `typescript-fetch`). Postman/Bruno koleksiyonu OpenAPI'den türetilir; elle üçüncü kopya tutulmaz. |
-| API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Spring Framework 7 versiyonlamayı **birinci sınıf** destekler: `@GetMapping(version = "1.1")`, `ApiVersionConfigurer` (path/header/query/media type'tan çözümleme), `SemanticApiVersionParser`; RestClient/HTTP Service Client ve MockMvc tarafında da aynı sürüm desteği. Kırıcı değişiklik yeni versiyon; eski versiyon **`Deprecation` (RFC 9745) + `Sunset` (RFC 8594) + `Link rel="deprecation"`** header'larıyla en az N ay yaşar, sunset sonrası 410. |
+| API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Spring Framework 7 versiyonlamayı **birinci sınıf** destekler: `@GetMapping(version = "1.1")`; Boot 4.1'de çözümleme kodsuz property ile: `spring.mvc.apiversion.use.header=API-Version` (veya `use.path-segment`, `use.query-parameter`, `use.media-type-parameter`), `required`, `supported`, `default`, `detect-supported`. **Dikkat:** `required=true` stratejili DispatcherServlet'teki sürümsüz route'lara da (`/internal/**`, aynı porttaki actuator) uygulanır; actuator ayrı management portunda çalışır ya da `required=false` + `default` seçilir. `supported` birebir eşler (1.0.7, 1.0 değildir). Kırıcı değişiklik yeni versiyon; kaldırılacak sürüm `StandardApiVersionDeprecationHandler` bean'iyle **`Deprecation: @<epoch>` (RFC 9745) + `Sunset` (RFC 8594) + `Link rel="deprecation"`** taşır ve en az N ay yaşar. Bu handler yalnız header ekler; sunset sonrası 410 ayrıca uygulanır (sürüm `supported`'dan çıkarılır ve 410 dönen bir filtre/handler eklenir). |
 | İstemci handoff | İstemciyi etkileyen her değişiklik için versiyonlu entegrasyon dokümanı yazılır (şablon aşağıda) — endpoint/alan listesi OpenAPI'den gelir, doküman **davranış, ekran akışı ve hata kodu → ekran** eşlemesine odaklanır |
 | Mimari plan | Büyük alanlar için modül içi `docs/` planı; kodla farkları periyodik güncellenir |
 | **ADR** (Architecture Decision Record) | Mimari şekil, veri ayrımı, yeni altyapı bileşeni, versiyonlama, güvenlik modeli gibi geri alması pahalı her karar `docs/adr/NNNN-<baslik>.md` olarak yazılır (şablon: `blueprint/docs/adr/0000-template.md`): bağlam, seçenekler, karar, sonuçlar, **yeniden değerlendirme eşiği** (Bölüm 24). ADR'siz mimari değişiklik PR'ı `REQUEST CHANGES`. |
 | Local geliştirme | `docker compose -f deploy/docker-compose.local.yml up -d` altyapıyı (Postgres, Valkey ×2, RabbitMQ, Alloy/Grafana) kaldırır; servisler IDE'den `local` profiliyle; Testcontainers dev-time desteği (`SpringApplication.from(App::main).with(LocalContainers.class)`) alternatif. Seed verisi `db/seed-local`. `make up / test / lint / check` hedefleri README'de. İlk kurulum 30 dakikayı geçmemeli; geçiyorsa `docs/onboarding.md` güncellenir. |
-| Deploy sırası | Contract, enum veya event tipi ekleyen taraf tüketiciden **önce** deploy edilir |
+| Deploy sırası | Değişiklik türüne göre Bölüm 18.4 tablosu geçerlidir: yeni enum değeri / olay tipi için **tüketici önce**, yeni internal uç için **sağlayıcı önce**, opsiyonel alan eklemede sıra serbest. Yanıtta yeni enum değeri `openapi-diff`'te kırıcı görünür; istemci bilinmeyen değeri tolere eden sürümle önce yayınlanır. |
 | Bağımlılık hijyeni | Renovate/Dependabot haftalık; çeyrekte bir Bölüm 25 EOL kontrolü; destek dışı sürüm PR gate'te uyarı |
 | Dokümantasyon hijyeni | README kimlik/sıcak yol/fail politikası/kapasite tabloları, `docs/ai/repo-context.md`, `docs/versions.md` her release'te; runbook'lar her yeni alarmda; bu referans dokümanı çeyreklik gözden geçirme |
 
@@ -2722,7 +2739,11 @@ class OrderControllerTest {
     private final MockMvc mockMvc = MockMvcBuilders
             .standaloneSetup(new OrderController(orderService))
             .setCustomArgumentResolvers(new CurrentAccountArgumentResolver())
-            .setControllerAdvice(new GlobalServiceExceptionHandler())
+            .setControllerAdvice(new GlobalServiceExceptionHandler(Clock.fixed(NOW, ZoneOffset.UTC)))
+            // Controller'da @GetMapping(version=...) varsa strateji sart; yoksa kurulum
+            // "API version specified, but no ApiVersionStrategy configured" ile kirilir. Her istek API-Version header'i tasir.
+            .setApiVersionStrategy(new DefaultApiVersionStrategy(List.of(new HeaderApiVersionResolver("API-Version")),
+                    new SemanticApiVersionParser(), true, null, true, null, null))
             .build();
 
     private final UUID accountId = UUID.randomUUID();
@@ -2763,6 +2784,8 @@ class OrderControllerTest {
 }
 ```
 
+Kimlikler ayırt edici sentetik sabitlerdir (`aaaaaaaa-…a001`, sahte `bbbbbbbb-…b002`); `randomUUID` ile kimliğin yanlış kaynaktan geldiği ayırt edilemez. Ek zorunlu senaryolar: geçersiz body → 400 + `verifyNoInteractions(service)`; aynı istekte query/header/body'de sahte accountId gönderilir ve servis yalnız `x.accountId` attribute'undaki kimlikle çağrılır (`verify(service, never()).create(eq(spoofed), any(), any())`). **Çalışan hali (seviye 1):** `order-core` web katmanı testleri (20 test, 11 mutasyonun 11'i yakalandı).
+
 ### 23.6 Log Privacy Testi
 
 ```java
@@ -2794,6 +2817,8 @@ void create_logsOutcomeWithoutAccountIdOrSensitiveInput() {
             .noneMatch(m -> m.contains(accountId.toString()) || m.contains(marker));     // kimlik/hassas veri YOK
 }
 ```
+
+Şablon ret yolunu da kapsar: istemci serbest metni (örn. `sku`) içine CR/LF + sentetik telefon (`+905551234567`), e-posta (`jane.doe@example.com`) ve `token=SECRET-TOKEN-MARKER-…` gömülür. `outcome=REJECTED` satırının ve maskeli hallerin (`+90********67`, `j***@e***.com`, `token=[REDACTED]`) **varlığı**, ham işaretlerle accountId'nin ise rendered mesaj, `getArgumentArray()`, `getMDCPropertyMap()` ve `getThrowableProxy()` zincirinde **yokluğu** assert edilir; yalnız `getFormattedMessage` kontrolü argüman ve exception zincirindeki sızıntıyı görmez.
 
 ### 23.7 Migration
 
@@ -2933,18 +2958,18 @@ Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu 
 | Broker senaryoları ve kaos testi (`stop_app`/`start_app`) CI servis container'ında (`docker exec`) | run 36554502553 yeşil; ilk koşu (36552830835) iki sürüme bağlı varsayımı yakaladı: 4.3.6 policy ile gecikmeli retry'ı kabul eder, broker durunca `AmqpIOException` da gelir | CI | Actions run 36554502553 |
 | Sürüm/EOL/CVE iddiaları (2, Ek A) | 30+ kaynak | W | Ek B |
 | Servis JWT filtresi: EdDSA, kid rotasyonu, aud/iss/exp, path normalize, first-match allowlist, delegasyon matrisi (9.2–9.5) | *sprint koşuyor* | 1 | `platform-security` (bekleniyor) |
-| Read-model: kaynak başına revizyon, konumdan tazelik, delta boşluğu, deterministik rebuild (4.6) | *sprint koşuyor* | 2 | `platform-messaging/readmodel` (bekleniyor) |
+| Read-model: kaynak başına revizyon, konumdan tazelik, delta boşluğu, deterministik rebuild (4.6) | 15 test, 6 mutasyon; ACCEPT | 2 | `platform-messaging/readmodel` (`ReadModelBehaviourIT`) |
 | DB rol ayrımı, default privileges, rol zaman aşımları, RLS SET LOCAL, `uuidv7()`, Flyway baseline güvenlik ağı, PgBouncer prepared statements (10.1–10.5) | *sprint koşuyor* | 2/3 | `db-security-example` (bekleniyor) |
-| Global handler, binding testi, log privacy, ECS log, API versiyonlama + Deprecation/Sunset, SSRF `InetAddressFilter`, lazy connection, `@Retryable`/`@ConcurrencyLimit` (6, 7.3, 8, 9.11, 20) | *sprint koşuyor* | 1 | `order-core` (bekleniyor) |
-| Parametre bounded-staleness (14) | *sprint koşuyor* | 1 | `platform-parameters` (bekleniyor) |
-| Redis Lua fixed-window rate limit, fail-open/closed (9.6) | *sprint koşuyor* | 2 | `rate-limit-example` (bekleniyor) |
-| Modulith `verify()` + event publication registry (1.1, 11.2) | *sprint koşuyor* | 1/2 | `modulith-example` (bekleniyor) |
-| OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 20) | *sprint koşuyor* | 1 | `contract-example` (bekleniyor) |
-| gitleaks + config-lint (15.3, 19.5) | *sprint koşuyor* | Y | `blueprint/scripts` (bekleniyor) |
+| Global handler, binding testi, log privacy, ECS log, API versiyonlama + Deprecation/Sunset, SSRF `InetAddressFilter`, lazy connection, `@Retryable`/`@ConcurrencyLimit` (6, 7.3, 8, 9.11, 20) | 20 test, 11/11 mutasyon; bağımsız doğrulama ACCEPT | 1 | `order-core` |
+| Parametre bounded-staleness, soğuk açılış, `freshGroupSince`, staleness metriği (14.3) | 23 test, 6/6 mutasyon; ACCEPT | 1 | `platform-parameters` |
+| Redis Lua fixed-window rate limit, TTL iyileşmesi, `NOSCRIPT`, fail-open/closed, kopuk bağlantı gecikmesi (9.6) | 15 test gerçek Redis 7 ile, 12/12 mutasyon; ACCEPT | 2 | `rate-limit-example` |
+| Modulith `verify()` + negatif test, event publication registry atomikliği ve en-az-bir-kez teslimi, 2.1.1 `withMinAge` hatası (1.1, 11.2, 16) | 12 test, gömülü PostgreSQL 18; 5/5 mutasyon; ACCEPT | 1/2 | `modulith-example` |
+| OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 18.4, 20) | 16 test: baseline gate'i, 8 varyant, araç sınırları sabitlendi (3.1 tip körlüğü, opsiyonel istek alanı adı, operationId); 9 mutasyon, 8 yakalandı + 1 beklenen uyumlu; ACCEPT | 1 | `contract-example` |
+| gitleaks (geçmiş + çalışma ağacı, tarama hatası ayrımı) + config-lint (15.3, 18.3, 19.5) | 30 test, 10/11 mutasyon; CI adımları fail-closed; ACCEPT | Y | `blueprint/scripts` |
 | İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart (4.7, 9.2.1, 11.4) | *sprint koşuyor* | 3 | `runtime-example` (bekleniyor) |
 | RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, consumer-timeout, broker down (12.3, 12.4) | 12 senaryo PASS: yerelde 4.3.0, CI'da 4.3.6 (Actions run 36554502553); 6 mutasyon yakalandı, 1 eşdeğer mutasyon açıklandı | 3 | `broker-example/BrokerBehaviourIT` |
-| Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | *koşuyor* | S | nested-session raporu (bekleniyor) |
-| 12 review skill'i gerçek bir PR'da (19.3) | *koşuyor* | S | PR #1 (bekleniyor) |
+| Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | Headless `claude -p` oturumunda migration hook'u engelledi, review-gate sordu, damga skill çağrısıyla yazıldı; 7 kusur bulundu ve düzeltildi (hook alt dizin fail-open'ı dahil) | S | `blueprint/README.md` gerçek oturum tablosu |
+| 12 review skill'i gerçek bir PR'da (19.3) | Tohumlanmış kusurlu PR'da 67 beklenen eşleşmeden 63'ü yakalandı, 3 tuzağın hiçbiri işaretlenmedi; kaçırılanlar skill metinlerine işlendi (revize metin yeniden koşulmadı) | S | doguyaras/doguyaras PR #1 özet yorumu |
 | **Kanıtı olmayanlar** | — | — | `docker-rollout` sıfır kesinti (Docker yok), deploy script/rollback provası, Debezium CDC, WebSocket/Redis fan-out, ScyllaDB/OpenSearch eşikleri, k6 yük testi, SOPS/OpenBao akışı, App Store/Play doğrulama, KVKK silme saga'sı uçtan uca. Bunlar projede yazılır; bu referans yalnız desenleri verir. |
 
 ---
