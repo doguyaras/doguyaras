@@ -56,12 +56,15 @@ jobs:
         with: { distribution: temurin, java-version: '21', cache: maven }
       - name: local infra binaries used by tests (redis-server, pgbouncer)
         run: sudo apt-get update -q && sudo apt-get install -y -q redis-server pgbouncer && sudo systemctl stop redis-server pgbouncer || true
-      - name: build and test (embedded PostgreSQL 18 runs as the non-root runner user)
+      - name: build and test (embedded PostgreSQL 18 runs as the non-root runner user; broker chaos test reaches rabbitmqctl inside the service container)
+        env:
+          BVT_RABBITMQCTL: docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl
+          BVT_RABBITMQ_NODE: local
         run: mvn -B -ntp -f blueprint/skeleton-example/pom.xml verify
       - name: test count guard (0 test = failure is per module; here the total must not silently shrink)
         run: |
           total=$(grep -ho 'tests="[0-9]*"' blueprint/skeleton-example/*/target/surefire-reports/TEST-*.xml | grep -o '[0-9]*' | paste -sd+ | bc)
-          echo "total tests: $total"; test "$total" -ge 40
+          echo "total tests: $total"; test "$total" -ge 50
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with: { name: surefire-reports, path: blueprint/skeleton-example/*/target/surefire-reports/ }

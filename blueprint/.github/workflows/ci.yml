@@ -4,7 +4,7 @@
 #           (4) mimari/tutarlilik testleri "0 test = basarisiz" (failIfNoTests + toplam sayi korumasi),
 #           (5) migration degismezligi PR'in base'ine karsi, (6) hook'lar kuru calistirilir (bozuk hook = sessiz gate).
 # Dogrulama: ayni yapi doguyaras/doguyaras deposunda .github/workflows/skeleton-ci.yml olarak gercek GitHub Actions'ta kostu
-# (RabbitMQ 4.3 servis container'i, gomulu PostgreSQL 18, 44+ test, ~30 sn).
+# (RabbitMQ 4.3 servis container'i, gomulu PostgreSQL 18, 56+ test; broker senaryolari dahil ~2 dk).
 name: ci
 on:
   pull_request:
@@ -68,7 +68,10 @@ jobs:
         with: { distribution: temurin, java-version: '21', cache: maven }
       - name: testlerin kullandigi yerel ikililer (redis-server, pgbouncer)
         run: sudo apt-get update -q && sudo apt-get install -y -q redis-server pgbouncer && (sudo systemctl stop redis-server pgbouncer || true)
-      - name: build + test (gercek DB testleri dahil; ArchUnit, ErrorCode tekilligi, config drift)
+      - name: build + test (gercek DB testleri dahil; ArchUnit, ErrorCode tekilligi, config drift, gercek broker senaryolari)
+        env:
+          BVT_RABBITMQCTL: docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl   # kaos senaryosu (stop_app/start_app) servis container'inin icinde kosar
+          BVT_RABBITMQ_NODE: local                                                   # container icinde yerel node; "-n" verilmez
         run: mvn -B -ntp verify
       - name: toplam test sayisi korumasi (sessiz kucultme yok; esik projeye gore)
         run: |

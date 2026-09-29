@@ -125,6 +125,7 @@ cd blueprint/skeleton-example
 mvn -B -ntp test                     # yapısal + davranışsal; gömülü PG binary'si Maven Central'dan gelir (io.zonky.test)
 # broker-example icin lokal RabbitMQ 4.3+ (5672, management 15672 guest/guest) ve kaos senaryosu (h) icin rabbitmqctl gerekir:
 #   -Dbvt.rabbitmqctl=/path/to/rabbitmqctl -Dbvt.rabbitmq.node=rabbit@localhost -Dbvt.erlang.bin=/path/to/erlang/bin
+#   broker container'daysa (CI servis container'i): BVT_RABBITMQCTL="docker exec <container> rabbitmqctl" BVT_RABBITMQ_NODE=local
 # root kullanıcıdaysan (initdb root'u reddeder):
 runuser -u <non-root-user> --preserve-environment -- mvn -B -ntp -Dmaven.repo.local=$HOME/.m2/repository test
 ```
