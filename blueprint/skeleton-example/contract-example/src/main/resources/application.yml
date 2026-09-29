@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: contract-example
+# Prod varsayilani: api-docs KAPALI (referans 15.1). Spec CI'da testte ozellikle acilarak uretilir; prod yuzeyi
+# genisletilmez. Testler springdoc.api-docs.enabled=true ile acar (OpenApiSpecSupport).
+springdoc:
+  api-docs:
+    enabled: false
+  # Anahtar sirasi sabit: commit'lenen baseline'in git diff'i yalniz gercek degisikligi gosterir
+  writer-with-order-by-keys: true

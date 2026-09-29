@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>contract-example</artifactId>
+  <!-- Istemci contract kaniti (referans Bolum 16 "Istemci contract", 20 "API sozlesmesi", 18.4): OpenAPI koddan
+       URETILIR (springdoc), repoda tutulan baseline ile openapi-diff karsilastirilir; kirici degisiklik PR gate'ini
+       kirar. Baseline bilincli guncellenir (komut: OpenApiContractGateTest javadoc'u). -->
+  <properties>
+    <!-- springdoc 3.x Boot 4 hattidir (3.0.2'nin parent'i Boot 4.0.3); Boot 4.1.1 ile calistigi bu modulun
+         testleriyle dogrulanir. 3.1.x'in parent'i Boot 4.1.0'dir ve ayni testler onunla da yesildir
+         (-Dspringdoc.version=3.1.1); Boot 4.1 hattinda yukseltme adayi. Boot 3.x icin 2.8.x, hatlar karistirilmaz.
+         openapi-diff 2.1.7 de denendi: 3.1 belgede tip korlugu ayni (OpenApiContract javadoc'u). -->
+    <springdoc.version>3.0.2</springdoc.version>
+    <openapi-diff.version>2.1.2</openapi-diff.version>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <!-- "-api" varyanti: yalniz /v3/api-docs; swagger-ui prod yuzeyine hic girmez -->
+    <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-api</artifactId><version>${springdoc.version}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc-test</artifactId><scope>test</scope></dependency>
+    <!-- Kirici degisiklik tespiti yalniz test/CI zamaninda; uygulama runtime'ina girmez -->
+    <dependency><groupId>org.openapitools.openapidiff</groupId><artifactId>openapi-diff-core</artifactId><version>${openapi-diff.version}</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 5) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
