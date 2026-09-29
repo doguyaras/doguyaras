@@ -26,6 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
 /**
  * DAVRANISSAL dogrulama (referans Bolum 10.1, 10.2, 10.3, 10.5, 10.6; kanit seviyesi 2 ve 3): rol ayrimi, default
@@ -255,11 +256,12 @@ class DbRoleSecurityIT {
                 String state = sqlState(() -> {
                     try (var ps = appConn.prepareStatement("UPDATE \"order\".order_item SET resource = 'x' WHERE id = ?")) {
                         ps.setObject(1, id);
+                        ps.setQueryTimeout(5);   // lock_timeout yoksa sonsuza kadar bekler: test asmasin, 57014 ile FAIL etsin
                         ps.executeUpdate();
                     }
                 });
                 Duration elapsed = Duration.ofNanos(System.nanoTime() - t0);
-                assertThat(state).isEqualTo("55P03");
+                assertThat(state).as("lock_timeout rol ayari 55P03 vermeli (57014 = surucu iptali, ayar yok)").isEqualTo("55P03");
                 assertThat(elapsed).isBetween(Duration.ofMillis(800), Duration.ofMillis(2500));
                 appConn.rollback();
             }
@@ -304,6 +306,16 @@ class DbRoleSecurityIT {
         assertThat(seenByA).isEqualTo(2);
         assertThat(seenByB).isEqualTo(1);
         assertThat(count(app)).as("baglamsiz = kapali").isZero();
+        // Havuz simulasyonu (tek baglanti tekrar tekrar verilir): AccountScope'un baglami TX ile bitmeli, oturumda kalmamali.
+        // Havuzsuz DataSource'ta SET ile SET LOCAL ayirt edilemez; bu kontrol M5 mutasyonunu (is_local=false) yakalar.
+        SingleConnectionDataSource reused = new SingleConnectionDataSource(jdbcUrl, spec.appRole(), APP_PW, true);
+        try {
+            Integer inScope = new AccountScope(reused).inAccount(ACCOUNT_A, j -> count(j));
+            assertThat(inScope).isEqualTo(2);
+            assertThat(count(new JdbcTemplate(reused))).as("havuzdan geri gelen baglantida baglam kalmadi").isZero();
+        } finally {
+            reused.destroy();
+        }
         // USING ifadesi WITH CHECK olarak da uygulanir: A baglaminda B'ye satir yazilamaz
         assertThat(sqlState(() -> scope.inAccount(ACCOUNT_A, j -> j.update(
                 "INSERT INTO \"order\".order_item (account_id, resource) VALUES (?, 'x')", ACCOUNT_B)))).isEqualTo("42501");
