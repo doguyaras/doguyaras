@@ -9,10 +9,12 @@ repo=pathlib.Path(__file__).resolve().parent.parent
 root=repo/'blueprint'
 order=['README.md','AGENTS.md','CLAUDE.md','.github/copilot-instructions.md','.github/PULL_REQUEST_TEMPLATE.md',
  'docs/ai/repo-context.md','docs/ai/security-rules.md','docs/ai/context-boundaries.md','docs/ai/review-checklist.md','docs/ai/operation-consistency.md',
- 'docs/adr/0000-template.md']
+ 'docs/adr/0000-template.md','docs/versions.md','.github/workflows/ci.yml']
 skills=sorted(p for p in root.glob('.agents/skills/**/*.md'))
 rest=['.claude/settings.json','.claude/hooks/flyway-immutability.js','.claude/hooks/review-gate.sh','.claude/hooks/review-stamp.sh','.claude/hooks/tree-state.sh',
  'scripts/flyway-immutability.js','scripts/flyway-immutability.test.js',
+ 'scripts/config-lint.js','scripts/config-lint.test.js','scripts/gitleaks-check.sh','scripts/gitleaks-check.test.js',
+ 'scripts/fixtures/config-lint/application-local.yml','scripts/fixtures/config-lint/prod.env.example','scripts/fixtures/config-lint/service-bad.yml','scripts/fixtures/config-lint/service-ok.yml',
  'tests/ArchitectureRulesTest.java','tests/ErrorCodeUniquenessTest.java','tests/ConfigDriftTest.java']
 skeleton=sorted(p for p in (root/'skeleton-example').rglob('*') if p.is_file() and 'target' not in p.parts)
 files=[root/p for p in order]+skills+[root/p for p in rest]+skeleton

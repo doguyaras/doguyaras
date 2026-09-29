@@ -63,6 +63,7 @@
 24. [Ölçek Eşikleri ve Evrim Yolu](#24-ölçek-eşikleri-ve-evrim-yolu)
 25. [Sürüm ve Destek Takibi](#25-sürüm-ve-destek-takibi)
 26. [Mevcut Bir Projeye Uygulama Protokolü](#26-mevcut-bir-projeye-uygulama-protokolü)
+27. [Kanıt Haritası: Hangi İddia Nasıl Doğrulandı](#27-kanıt-haritası-hangi-iddia-nasıl-doğrulandı)
 - [Ek A — Sürüm Notları (tarihli anlık görüntü)](#ek-a--sürüm-notları-tarihli-anlık-görüntü)
 - [Ek B — Doğrulama Kaynakları](#ek-b--doğrulama-kaynakları-2026-09-29)
 
@@ -94,7 +95,7 @@ Bu doküman "mikroservis referansı" ama ilk karar **kaç deploy birimi** olaca�
 
 | Şekil | Ne zaman | Nasıl |
 |---|---|---|
-| **A. Modüler monolit** | Ekip ≤ 5 kişi, tek host, ölçek profili homojen, ürün henüz kanıtlanmamış | Aynı `*-api`/`*-core` sınırları tek Spring Boot uygulamasında **Spring Modulith** modülleri olur. Şema/modül ayrımı, `ApplicationModules.verify()` + ArchUnit ile zorlanır. Servisler arası çağrı in-process; **modüller arası** olaylar için Modulith event publication registry (tamamlama tablosu = in-process outbox). Uygulama dışına giden her mesaj (notification sağlayıcısı, ayrı bir servis, analytics) yine `outbox_event` + RabbitMQ ile (Bölüm 11.2) — Modulith externalization da bu tabloyu kullanır. Gateway ve service JWT gereksiz. Bu dokümanın kalan bölümleri (sınırlar, outbox, idempotency, güvenlik, veri, log) **aynen** geçerli kalır. |
+| **A. Modüler monolit** | Ekip ≤ 5 kişi, tek host, ölçek profili homojen, ürün henüz kanıtlanmamış | Aynı `*-api`/`*-core` sınırları tek Spring Boot uygulamasında **Spring Modulith** modülleri olur. Şema/modül ayrımı, `ApplicationModules.verify()` + ArchUnit ile zorlanır. Servisler arası çağrı in-process; **modüller arası** olaylar için Modulith event publication registry: olay kaydı (`event_publication`) iş satırıyla **aynı transaction'da** yazılır, birlikte commit/rollback olur (in-process outbox). Teslim ise en-az-bir-kezdir: Modulith "tamamlandı" bilgisini dinleyicinin transaction'ı commit olduktan **sonra** ayrı bir yazımla işaretler; arada çöküş ya da çalışan bir teslim sırasında yapılan resubmit aynı olayı yeniden teslim eder. Bu yüzden `@ApplicationModuleListener` dinleyicileri de idempotent yazılır (Bölüm 11.3). Uygulama dışına giden her mesaj (notification sağlayıcısı, ayrı bir servis, analytics) yine `outbox_event` + RabbitMQ ile (Bölüm 11.2). Modulith externalization gönderim kaydını `event_publication`'da tutar, `outbox_event`'i kullanmaz; ikisi birlikte kullanılacaksa dışa gönderimin tek kaynağı ADR ile seçilir. Gateway ve service JWT gereksiz. Bu dokümanın kalan bölümleri (sınırlar, outbox, idempotency, güvenlik, veri, log) **aynen** geçerli kalır. |
 | **B. Mikroservis** | Birden fazla ekip, ayrı release kadansı, farklı ölçek profilleri (örn. WebSocket yoğun bir servis), ayrı hata izolasyonu ihtiyacı | Bu dokümanın tamamı. Sıcak yolda senkron zincir **yok** (Bölüm 4.6); diğer servisin verisi event ile replike edilir. |
 | **C. Hibrit** (çoğu proje için önerilen başlangıç) | Küçük ekip ama ölçek profili farklı 1–2 alan var (realtime/chat, dış sağlayıcı entegrasyonu, yönetim paneli) | Senkron bağımlı çekirdek domain'ler (kimlik, kullanıcı, ana iş akışı, abonelik) **tek** uygulamada modül olarak; realtime, notification ve backoffice ayrı servis. Modül sınırları ilk günden korunduğu için ileride herhangi bir modül ayrı servise çıkarılabilir. |
 
@@ -205,7 +206,7 @@ Kural: **Yalnız OSS desteği süren sürümle başlanır** (Bölüm 25). Aşağ
 | Gateway | Spring Cloud Gateway Server WebFlux | `RequestRateLimiter` (Redis token bucket) gateway'de |
 | Config | Compose `env_file` + Spring config tree; Config Server **opsiyonel** | Bölüm 15 |
 | Servis çağrısı | Spring HTTP Service Clients (`@HttpExchange` + `@ImportHttpServices`, `RestClient`) | OpenFeign, Spring Cloud 2022.0'dan beri "feature-complete" (yalnız bugfix); mevcut projelerde kalabilir, yeni projede tercih edilmez. |
-| Dayanıklılık | Resilience4j (circuit breaker, bulkhead, time limiter) veya Spring Framework 7 `@Retryable`/`@ConcurrencyLimit` | Bölüm 4.7 |
+| Dayanıklılık | Resilience4j (circuit breaker, bulkhead, time limiter) veya Spring Framework 7 `@Retryable(includes = …, maxRetries = 2, …)`/`@ConcurrencyLimit` (`@EnableResilientMethods` şart; `maxAttempts` niteliği yoktur, `maxRetries` ilk denemeyi saymaz: 2 = toplam 3 deneme; `includes` verilmezse kalıcı hatalar da tekrarlanır) | Bölüm 4.7 |
 | Güvenlik | Spring Security 7 + özel filtreler | Passkey/WebAuthn desteği (6.4+) admin 2FA için |
 | JWT | Nimbus JOSE+JWT | **EdDSA (Ed25519) / ES256**, servis başına anahtar çifti, JWKS + `kid`. HS256 yalnız tek uygulamalı monolitte kabul edilebilir. |
 | Persistence | Spring Data JPA / Hibernate 7 | `@UuidGenerator(style = VERSION_7)` |
@@ -221,7 +222,7 @@ Kural: **Yalnız OSS desteği süren sürümle başlanır** (Bölüm 25). Aşağ
 | Ödeme / mağaza | Apple App Store Server API + Notifications V2, Google Play `subscriptionsv2` + RTDN; veya RevenueCat/Adapty | Mock yalnız `@Profile("local|test")` |
 | Boilerplate | Lombok | Constructor injection |
 | Mapping | Manuel (builder + `toResponse`) | MapStruct opsiyonel |
-| API doküman | springdoc-openapi | Prod'da kapalı; CI'da OpenAPI çıktısı üretilir ve istemci client'ı generate edilir (Bölüm 20) |
+| API doküman | springdoc-openapi **3.x** (Boot 4 hattı; Boot 4.1 için 3.1.x, 3.0.2 de doğrulandı; Boot 3 hattı 2.8.x ile karıştırılmaz), `springdoc-openapi-starter-webmvc-api` (swagger-ui prod'a girmez) | Prod'da kapalı; CI'da OpenAPI çıktısı testte üretilir (varsayılan 3.1; diff gate'i 3.0 çıktısıyla, Bölüm 16) ve istemci client'ı generate edilir (Bölüm 20) |
 | Tracing / metrik | Micrometer Tracing OTel bridge + OTLP exporter, Micrometer Prometheus + Actuator | Structured logging (`logging.structured.format.console=ecs`) |
 | Test | JUnit 5, Mockito, AssertJ, MockMvc, Logback `ListAppender`, **Testcontainers 2.x** (`@ServiceConnection`), **ArchUnit** | Gerçek DB testleri CI'da koşar |
 | Feature flag / deney | OpenFeature SDK + Unleash/GrowthBook veya parametre kataloğunun flag tipi | Bölüm 14.4 |
@@ -271,6 +272,8 @@ Docker (Jib veya layered jar, non-root), docker compose (+ `docker-rollout`), Gi
 **Neden `platform/*` dört parça?** Tek bir "common" kütüphanesi değişince tüm servisler rebuild + deploy olur ("god library"). Dört ayrı starter'da yalnız ilgili parçaya bağımlı servisler etkilenir ve her parça `AutoConfiguration.imports` ile yüklendiği için `scanBasePackages` hilesi gerekmez (Bölüm 4.5).
 
 ### 3.2 Maven ve Build Hattı
+
+**Zorunlu derleyici bayrağı:** `spring-boot-starter-parent` yerine BOM import kullanan projelerde `<maven.compiler.parameters>true</maven.compiler.parameters>` açıkça yazılır; Spring Framework 6.1+/7 `@PathVariable`/`@RequestParam` adlarını yansımadan okur, bayrak yoksa çalışma zamanında "Name for argument … not specified" hatası alınır (iskelette yaşandı).
 
 - Parent `packaging=pom`. `dependencyManagement` içinde `spring-boot-dependencies` ve `spring-cloud-dependencies` BOM'ları import edilir.
 - **Kural:** `maven-enforcer-plugin` (Java/Maven sürümü, `dependencyConvergence`, **`bannedDependencies` ile `*-core` → `*-core` yasağı**) ve `spring-boot-maven-plugin` yalnız `pluginManagement`'ta bırakılmaz, `build/plugins`'e de eklenir. Aksi halde hiç çalışmazlar.
@@ -444,8 +447,12 @@ CREATE TABLE "order".rm_account_status (          -- sahibi: auth; olay: account
 );
 CREATE TABLE "order".rm_block_relation (          -- sahibi: user; olay: user.block.created / user.block.removed (DEĞİŞİKLİK)
     blocker_id UUID NOT NULL, blocked_id UUID NOT NULL,
-    source_seq BIGINT NOT NULL,                   -- user'ın (blocker) başına monoton sırası; boşluk = eksik olay
+    source_seq BIGINT NOT NULL,                   -- bilgi amaçlı; sıra takibi bu tabloda YAPILAMAZ (removed satırı siler, seq kaybolur)
     PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE TABLE "order".rm_delta_position (          -- delta projeksiyonları için aggregate başına son uygulanan sıra (FOR UPDATE ile kilitlenir)
+    source TEXT NOT NULL, aggregate_id UUID NOT NULL, last_seq BIGINT NOT NULL,
+    PRIMARY KEY (source, aggregate_id)            -- seq <= last_seq → tekrar (yok say); seq != last_seq+1 → boşluk (dur, sayaç); aksi → uygula + last_seq aynı TX
 );
 CREATE TABLE "order".rm_consumer_position (       -- tüketim konumu: tazelik buradan ölçülür, satırın yaşından değil
     source TEXT PRIMARY KEY,                      -- 'auth', 'user'
@@ -465,14 +472,15 @@ CREATE TABLE "order".rm_consumer_position (       -- tüketim konumu: tazelik bu
 | **Rebuild** | stream replay (Bölüm 12.4) veya sahibin keyset `export` ucu | Yeni tüketici sıfırdan kurabilir |
 
 **Tazelik ve karar kuralları:**
-- Tazelik, satırın `applied_at`'ından değil **tüketim konumundan** ölçülür: `rm_consumer_position.updated_at` ve `readmodel_lag_seconds{source}` (kaynağın son yayınladığı seq ile tüketilen seq farkı). Bir hesabın durumu bir ay değişmemiş olabilir; eski `source_time` gecikme değildir.
+- Tazelik, satırın `applied_at`'ından değil **tüketim konumundan** ölçülür: `readmodel_lag_seconds{source} = now − rm_consumer_position.last_event_time` (tüketilen son olayın kaynaktaki zamanı; konum satırı yoksa +Inf ve alarm). Kaynak head seq'ini yayınlıyorsa ek olarak `readmodel_seq_lag{source} = kaynak_head_seq − last_seq` tutulur; iki metrik farklı büyüklüktür, karıştırılmaz. Bir hesabın durumu bir ay değişmemiş olabilir; eski `source_time` gecikme değildir.
+- **Sessiz kaynak sorunu:** zaman bazlı lag, kaynak olay yayınlamadığında da büyür ve tamamen güncel bir read-model'de fail-closed tetikler. Bu yüzden her read-model kaynağı periyodik bir `<kaynak>.position.heartbeat` olayı (head seq + zaman) yayınlar; tüketici bunu yalnız konuma işler (projeksiyon değişmez). Heartbeat aralığı en sıkı kararın `maxLag`'ının en az yarısıdır (engel kararı 30 sn ise heartbeat ≤ 15 sn). Heartbeat yoksa bu kabul yazılır.
 - Her karar için "**en fazla ne kadar eski bilgiyle verilebilir**" ayrı cevaplanır: profil görselinin gecikmesi ile engelleme kararının gecikmesi aynı risk değildir. Örnek: engel kararı lag ≤ 30 sn ister; aşılırsa fail-closed (kaynağa sor veya reddet); hesap aktiflik bayrağı lag ≤ 5 dk tolere eder.
 - Satır yoksa davranış yazılıdır (varsayılan: fail-closed).
 - Read-model **karar** verdirir ama **kaynak** değildir; dışa açılmaz; başka servis okumaz.
 - **JWT claim alternatifi:** Kullanıcıya bağlı, nadir değişen bayraklar (`legal_ok`, `legal_rev`, `tier`) user JWT'de taşınır; değişince oturum sürümü (`sv`) artırılır → token yenilenir → claim güncellenir. Kural: claim'ler yetki **sinyali**dir, kaynak DB'yi değiştirmez; token ömrü kadar eskilik kabul edilmiş demektir.
 - Yazma niteliğindeki kontrol (hak tüketimi, stok rezervasyonu) read-model'den yapılamaz; senkron kalır ve saga ile korunur (Bölüm 11.4).
 
-**Doğrulama:** delta olayı sıra boşluğunda uygulanmıyor; snapshot'ta küçük revizyon yok sayılıyor; duplicate tek etki; replay deterministik; lag metriği ve alarm var; "satır yok" davranışı test edilmiş.
+**Doğrulama:** delta olayı sıra boşluğunda uygulanmıyor ve sayaç artıyor; snapshot'ta küçük/eşit revizyon yok sayılıyor; snapshot olayları karışık sırada teslim edilince son durum ve konum aynı (konum `GREATEST` ile ilerler, geri gitmez); duplicate tek etki; rebuild aynı export ile iki kez aynı satırları veriyor ve export'ta olmayan eski satırı siliyor; lag konumdan ölçülüyor (30 gün eski satır + taze konum ⇒ ALLOW); "satır yok" ve "konum yok" fail-closed; inbox TX'i içindeki çağrı rollback olunca ne projeksiyon ne konum değişiyor. **Çalışan hali (seviye 2):** `platform-messaging/readmodel` + `ReadModelBehaviourIT` (15 test, 6 mutasyon yakalandı; "uygula-sonra-kontrol-et" mutasyonu DB durumuyla görünmez — sayaç/spy projeksiyonla yakalanır).
 
 **Eşik:** Sıcak yoldaki her istek için kritik akış kaydı (Bölüm 1.2) README/`repo-context.md`'de; varsayılanı aşan her ek senkron bağımlılık ADR ister.
 
@@ -576,7 +584,7 @@ Sıra (Nygard, *Release It!*): önce **her hop'ta sert timeout**, sonra **bağı
 |---|---|
 | Servis URL | `services.<servis>.base-url` (→ `spring.http.serviceclient.<servis>.base-url`) |
 | JWT | `service-jwt.*`, `user-jwt.*`, `admin-jwt.*` |
-| Rate limit | `rate-limit.rules.<scope>.{limit,window-seconds}`; scope kebab-case (`login-ip`, `order-create-account`) |
+| Rate limit | `rate-limit.rules.<scope>.{limit,window-seconds,fail-policy}`; scope kebab-case (`login-ip`, `order-create-account`) |
 | Poller | `<servis>.outbox.poll-interval-ms` (tek outbox); cron: `<servis>.<iş>.retention-cron` |
 | Saga | `operation-consistency.{deadline-ms,lease-ms,poll-ms,monitor-ms,cleanup-cron}` |
 | Ortam değişkeni | UPPER_SNAKE (`DB_HOST`, `REDIS_PASS`, `SERVICE_JWT_SECRET`) |
@@ -748,13 +756,14 @@ Tablo README'de tek yerde tutulur. Bir unit test tüm enum'ların çakışmadı�
 | `NoResourceFoundException` / 405 / 415 / `MaxUploadSizeExceeded` | 404 / 405 / 415 / 413 | ilgili kod | WARN |
 | `AccessDeniedException` | 403 | security | WARN |
 | `OptimisticLockException` | 409 | `CONCURRENT_UPDATE` | WARN |
-| `Exception` | 500 | system | ERROR + sanitize edilmiş özet + stack trace |
+| `MissingApiVersionException`, `InvalidApiVersionException` | 400 | validation (`API_VERSION_INVALID`) | WARN |
+| `Exception` | 500 | system | ERROR; `exceptionType=` + sanitize edilmiş root-cause özeti. Ham throwable log olayına **eklenmez**: stack trace mesaj zincirini (PG DETAIL, URL, token, telefon) taşır (Bölüm 8.4). Stack trace gerekiyorsa mesajları sanitize eden bir throwable converter ile yazılır. |
 
 Her yanıta `X-Trace-Id` header'ı eklenir. `traceId` aktif span'den alınır.
 
 **RFC 9457 (Problem Details) notu:** Spring `ProblemDetail` (`application/problem+json`) standarttır ve dış/ortak API'lerde tercih edilebilir; bu referans mobil istemci ve panelin **tek** zarfı için kendi `ErrorResponse`'unu kullanır. Karar ADR'ye yazılır; ikisi karıştırılmaz (filtre redleri dahil tek biçim).
 
-**Kaçın:** Standart MVC hatalarının 500'e düşmesi. Handler'ı `ResponseEntityExceptionHandler`'dan türetin veya bu tipleri açıkça eşleyin.
+**Kaçın:** Standart MVC hatalarının 500'e düşmesi. Handler `ResponseEntityExceptionHandler`'dan türetilir ve tek zarf `handleExceptionInternal` override'ında üretilir (400/404/405/406/413/415 ve API version hataları tek noktadan geçer; türetme kaldırılınca 17 test 500 gördü). `ConstraintViolationException` taban sınıfta **yoktur**; `@ExceptionHandler` ile ayrıca eşlenir. Bilinmeyen path Boot 4'te `NoResourceFoundException` → 404.
 
 ### 7.4 `safeLogReason` Ayrımı (Katı Kural)
 
@@ -958,6 +967,7 @@ Olası nedenler ve düzeltme (sıralı) · Ne zaman eskalasyon · Kalıcı düze
 | Üreten | auth | gateway ve her servis (client interceptor) — **her biri kendi private key'iyle** | auth |
 | Doğrulayan | gateway (ve WebSocket handshake) — auth'un public key'iyle | tüm core servisler — `iss` → JWKS eşlemesiyle | yönetim servisi |
 | Algoritma | EdDSA (Ed25519) veya ES256 | EdDSA / ES256 | EdDSA / ES256 |
+| Kütüphane notu | Nimbus JOSE+JWT 10.x'in `Ed25519Signer/Verifier` sınıfları **opsiyonel** `com.google.crypto.tink` bağımlılığını çalışma zamanında ister (derleme geçer, ilk imzada `NoClassDefFoundError`). JDK 15+ Ed25519'u yerli destekler: platform-security'deki `JdkEd25519Signer/Verifier` (`Signature.getInstance("Ed25519")`) Tink'siz çalışır. Doğrulayıcı `alg`'ı EdDSA'ya sabitler; `alg`'a göre verifier seçmek (HS256 → MACVerifier) alg-confusion açığıdır (public anahtar byte'larını HMAC secret'i yapan token ile test edilir) | | |
 | Claim'ler | `typ`, `iss`, `aud`, `sub`, `iat`, `exp`, `sv`, iş bayrakları (`legal_ok`, `tier`) | `typ`, `jti`, `iss`=çağıran servis, `aud`=hedef, `sub` (opsiyonel), `act`, `iat`, `exp` | `typ=admin`, `iss`, `aud`, `sub`, `exp`, `sv`, (`roles`) |
 | TTL | kısa (örn. 15 dk) | çok kısa (30–45 sn) | kısa (örn. 15 dk) |
 | Taşıyıcı | `Authorization` | `X-Service-Auth` | `Authorization` |
@@ -989,7 +999,7 @@ A servisi kendi anahtarıyla imzalayınca B, token'ın A'dan geldiğini doğrula
 Kurallar:
 - **Kullanıcı isteğiyle çalışan çağrı** (`sub` = isteği yapan) ile **arka plan işi** (`sub` yok veya `on_behalf_of` claim'i ayrı) token'da ayırt edilir; hedef, arka plan token'ıyla kullanıcı-yetkisi gerektiren işlem kabul etmez.
 - Bir servis yalnız kendi akışında gördüğü `sub`'ı aktarabilir; "her kullanıcı adına her şey" allowlist satırı **yoktur**.
-- Zincirleme delegasyonda (`A → B → C`) `act` zinciri korunur; C, zincirin her halkasını allowlist'te arar.
+- `act` = **doğrudan çağıran** servis ve her zaman `iss`'e eşittir (farklıysa 401); doğrulayan `kid`'i yalnız o issuer altında arar. Zincirleme delegasyonda (`A → B → C`) önceki halkalar ayrı bir `via` (dizi) claim'inde taşınır; C allowlist kararını `act` ile verir, `via`'yı audit ve isteğe bağlı ek kısıtlar için kullanır. `via` imzalayanın kendi beyanıdır; güvenlik sınırı `act == iss` + o issuer'ın anahtarıdır. (Doğrulandı: `act == iss` kontrolü kaldırılınca backoffice kendi geçerli anahtarıyla `act=order-service` diyerek delegasyonu geçti.)
 - Matris değişince `proj-security-review` ve `proj-architecture-boundary-review` çalışır; testler izinli/izinsiz aktör + yanlış `sub` + arka plan token'ıyla kullanıcı işlemi senaryolarını kapsar.
 
 **Replay koruması (`jti`) kararı:** RFC 9700 (OAuth 2.0 Security BCP) bearer token replay'ine karşı `jti` deposu yerine **sender-constrained** token (mTLS RFC 8705 / DPoP RFC 9449) + sıkı `aud` önerir. İç ağda TLS + 45 sn TTL + `aud` varken, her istekte Redis `SET NX` yapan bir replay guard ~45 sn'lik aynı-servis replay koruması satın alır; bedeli her çağrıda Redis RTT ve sert bir availability bağımlılığıdır. Karar: mTLS varsa replay guard **yok**; yoksa yalnız gateway → servis (dış kaynaklı) token'larda, **TTL sınırlı** bir depoda (asla boyut sınırlı — Spring Security'nin DPoP `jti` cache'i bu yüzden CVE aldı) ve fail politikası açıkça yazılmış olarak.
@@ -1032,10 +1042,10 @@ spring.cloud.gateway:
 ### 9.4 `ServiceJwtVerificationFilter`
 
 ```
-0. Path decode + normalize. Çift kodlama, '..'/'.', '//', '\', NUL → 400
+0. Path decode + normalize: filtre `/*`'a bağlı (yalnız `/internal/*` değil; `/v1/../internal/x` görülsün), `getRequestURI()` (ham; servlet path zaten decode edilmiş gelir) bir kez %XX decode + `URI.normalize`. /internal'a dokunup dokunmadığı Spring MVC'nin yönlendirme için gördüğü forma göre sorulur: her segmentteki `;...` path parametreleri atılır ve harf büyüklüğü yok sayılır; böylece `/internal;x/admin`, `/internal%3Bx/admin`, `/v1/..;/internal/x` ve `/INTERNAL/x` de internal sayılır (ilk sürümde `/internal;x/admin` public sayılıp token'sız geçiyordu; bağımsız inceleme yakaladı, test eklendi). Decode yalnız yüzde-kodlamaya göre yapılır (`URLDecoder` `+`'yı boşluğa çevirir, kullanılmaz). /internal'a dokunan istekte '%', '\', NUL, '//', ';', ham `%2F`, '.'/'..' segmenti → 400 `{"code":"INTERNAL_PATH_INVALID"}`; public kurallara ASLA geri düşülmez. Filtre DispatcherServlet'ten önce çalıştığı için 400/401/403 zarfını (`{code, message}`, token/kid sızdırmadan; 401'de `WWW-Authenticate: Bearer`) kendisi yazar.
 1. exclude-paths → doğrulama yok
 2. X-Service-Auth yok → 401
-3. typ / iss (bilinen imzalayıcı) / kid → JWKS'ten public key / imza / aud / exp(+leeway) → 401
+3. typ / iss (bilinen imzalayıcı) / kid → JWKS'ten public key (yalnız o issuer'ın anahtarları) / imza (alg header'a bakılmaz, EdDSA sabit) / aud (**tam eşitlik**: tek elemanlı `[bu-servis]`; çoklu aud → 401) / exp+nbf (±30 sn, enjekte edilen `Clock`) → 401
 4. [opsiyonel] jti daha önce görülmüş → 401   (jti yetki kontrolünden ÖNCE tüketilir)
 5. sub → attr x.accountId ; act → attr x.actor   (act == iss olmalı; farklıysa 401)
 6. internal-access FIRST-MATCH: eşleşen ilk kuralda act ∉ allowed-actors → 403
@@ -1052,7 +1062,7 @@ service-jwt:
   audience: order-api              # bu servisin aud'u
   service-name: order-service      # bu servisin act'i ve imzalarken iss'i
   private-key-path: /run/secrets/order-service-signing-key   # config tree ile mount edilir
-  jwks-path: /run/config/service-jwks.json                   # iss → public key; kid ile rotasyon
+  jwks-path: /run/config/service-jwks.json                   # issuer'a göre bölümlenmiş: {"gateway":{"keys":[...]},"order-service":{"keys":[...]}}; kid yalnız kendi issuer'ı altında aranır (aksi halde her kayıtlı servis kendi anahtarıyla başka iss taklit eder)
   ttl-seconds: 30
   replay-guard: { enabled: false }  # mTLS yoksa ve dış kaynaklı token'lar için gerekiyorsa açılır; TTL sınırlı depo
   exclude-paths: [/actuator/health, /actuator/info, /actuator/prometheus]
@@ -1078,18 +1088,24 @@ service-jwt:
 
 ```lua
 local current = redis.call('INCRBY', KEYS[1], ARGV[2])
-if current == tonumber(ARGV[2]) then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return current
+local pttl = redis.call('PTTL', KEYS[1])
+if pttl < 0 then redis.call('EXPIRE', KEYS[1], ARGV[1]); pttl = tonumber(ARGV[1]) * 1000 end
+return { current, pttl }
 ```
 
-- Key formatı `rl:<scope>:<sha256(scope \0 key)>`; ham PII Redis'e yazılmaz.
-- Config: `rate-limit.rules.<scope>.{limit,window-seconds}`.
+- EXPIRE koşulu `current == maliyet` değil `PTTL < 0`'dır: TTL'siz kalmış bir sayaç (eski sürüm, INCR ile EXPIRE arasında çöken istemci, elle `SET`) bir sonraki vuruşta iyileşir; aksi halde özne sonsuza dek kilitli kalır (gerçek Redis 7'de mutasyonla gösterildi).
+- Script `[sayaç, kalan_ms]` döner; `Retry-After = max(1, ceil(kalan_ms/1000))` ek bir round-trip olmadan hesaplanır.
+- Script `SCRIPT LOAD` ile yüklenip `EVALSHA` ile çağrılır; `NOSCRIPT` gelirse (Redis restart/failover sonrası script cache boştur) yeniden yüklenir ve bir kez tekrar denenir. Bu yapılmazsa restart sonrası fail-open scope süresiz limitsiz, fail-closed scope süresiz 503 kalır.
+
+- Key formatı `rl:<scope>:<hex(HMAC-SHA256(pepper, scope \0 özne))>`; `pepper` secret store'dan gelir (`SECRET_RATE_LIMIT_PEPPER`), rotasyonda sayaçlar sıfırlanır (kabul edilebilir). Düz `sha256` ham metni gizler ama telefon/IPv4 uzayı küçük olduğu için saniyeler içinde geri çözülür; bu yüzden RDB/AOF yedekleri ve replikalar PII taşıyor sayılır.
+- Config: `rate-limit.rules.<scope>.{limit, window-seconds, fail-policy}`; `fail-policy` = `OPEN` | `CLOSED` ve **varsayılanı yoktur**: eksikse uygulama açılışta hata verir (varsayılan ya limitsiz geçiş ya da kesintide tüm yüzeyin 503'ü demektir).
+- Rate limit Redis bağlantısı sıcak yoldadır: komut timeout'u kısa (50–250 ms), kopukken komutlar kuyruğa alınmaz, hemen reddedilir (Lettuce `DisconnectedBehavior.REJECT_COMMANDS`), yeniden bağlanma gecikmesi en fazla 1 sn. Lettuce varsayılanında kopukken komutlar timeout'a kadar bekler; fail-open scope bile her istekte o kadar gecikir.
 - Fail davranışı:
 
 | Durum | Sonuç |
 |---|---|
 | Kural tanımlı değil | 503 (fail-closed) — config hatası, üretime çıkmadan yakalanmalı |
-| Redis hatası | Scope başına karar: güvenlik yüzeyleri (OTP, login, refresh) **fail-closed 503**; iş yüzeyleri (arama, listeleme) **fail-open** + `rate_limit_store_failures_total` metriği ve alarm (Stripe'ın rate limiter'ları bilinçli fail-open'dır) |
+| Redis hatası | Scope başına karar: güvenlik yüzeyleri (OTP, login, refresh) **fail-closed 503 + Retry-After** (`rate_limit_fail_closed_total{scope}`); iş yüzeyleri (arama, listeleme) **fail-open** (`rate_limit_fail_open_total{scope}`) ve alarm; sayaçlar açılışta her scope için 0 ile kaydedilir (ilk kesintiyi `increase()` alarmı yakalasın) (Stripe'ın rate limiter'ları bilinçli fail-open'dır) |
 | Limit aşıldı | 429 + `Retry-After` header'ı |
 
 - Scope'lar anahtar tipine göre ayrılır: `<aksiyon>-ip`, `<aksiyon>-account`, `<aksiyon>-transaction`, `<aksiyon>-device`.
@@ -1234,7 +1250,7 @@ Güvenlik bir review skill'i değil, süreçtir. Asgari döngü:
 
 Kullanıcıdan gelen bir URL'yi sunucunun çağırdığı her yer (webhook adresi, avatar/önizleme URL'si, OIDC discovery, dosya içe aktarma) SSRF yüzeyidir: iç ağ (`10/8`, `172.16/12`, `192.168/16`), link-local metadata (`169.254.169.254`), localhost, config-server ve actuator portları hedef olur.
 
-- **Zorunlu güvence:** kullanıcı kaynaklı URL ile giden her istek (1) şema `https` ve host allowlist/denylist, (2) **DNS çözümü sonrası** IP kontrolü (DNS rebinding'e karşı; Boot 4.1 `InetAddressFilter` bunu client seviyesinde yapar: `InetAddressFilter.externalAddresses()` bean'i tüm auto-configured `RestClient`/`WebClient`'lara uygulanır), (3) redirect takibinde de aynı kontrol, (4) kısa timeout ve boyut sınırı, (5) ayrı bir egress client (iç servis client'ıyla aynı bean değil).
+- **Zorunlu güvence:** kullanıcı kaynaklı URL ile giden her istek (1) şema `https` ve host allowlist/denylist, (2) **DNS çözümü sonrası** IP kontrolü (DNS rebinding'e karşı; Boot 4.1 `InetAddressFilter` (`org.springframework.boot.http.client`) bean'i auto-configured `RestClient.Builder`/`WebClient.Builder` üzerinden bu builder'lardan üretilen **tüm** client'lara uygulanır; engellenen istek `FilteredHostException` ile bağlantı kurulmadan kesilir), (3) redirect takibinde de aynı kontrol, (4) kısa timeout ve boyut sınırı, (5) iç servis client'larıyla izolasyon: bean global olduğu için iç ağ adresine giden client'lar aynı builder'ı kullanıyorsa onlar da kesilir. Ya filtre iç hedefleri açıkça izinler (`externalAddresses().or("10.0.0.0/8", …)`), ya da iç client'lar filtresiz ayrı bir `ClientHttpRequestFactory` ile kurulur; ayrı bir egress bean'i **tek başına** izolasyon sağlamaz (iskelette doğrulandı).
 - Webhook hedefleri kayıt anında doğrulanır (challenge) ve değişince yeniden; gönderim outbox `kind=HTTP` lane'inden, imzalı (HMAC) ve yeniden denemeli.
 - Config Server ve actuator portları yalnız iç ağda; SSRF'e açık servislerden erişilemez (Bölüm 15.2).
 - Test: iç IP'ye, metadata adresine ve DNS ile iç IP'ye çözülen host'a giden istek reddediliyor.
@@ -1268,6 +1284,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE svc_order_migrate IN SCHEMA "order"
     GRANT USAGE, SELECT ON SEQUENCES TO svc_order;
 -- Append-only/audit tablolarında uygulama rolünden UPDATE/DELETE ayrıca REVOKE edilir (migration içinde).
 -- svc_order başka şemada USAGE yetkisine sahip değildir; cross-schema join çalışmaz; DDL yapamaz.
+-- DİKKAT: flyway_schema_history de migration rolü tarafından "order" şemasında yaratılır; yukarıdaki default privilege
+-- ona da DML verir (ele geçirilen uygulama history satırını silip sonraki deploy'u bozabilir). Flyway callback'i
+-- db/migration/afterMigrate.sql her migrate sonunda geri alır (idempotent, elle yapılan drift'i de onarır):
+--   REVOKE ALL ON "${flyway:defaultSchema}"."${flyway:table}" FROM svc_order;
+-- Alternatif: history tablosu uygulama rolünün USAGE yetkisi olmayan ayrı bir şemada (spring.flyway.default-schema).
 ```
 
   Kesin GRANT listesi uygulamanın **doğrulanmış** erişim ihtiyacından çıkarılır (örn. `pg_stat_statements` ile gözlenen ifadeler); "her ihtimale karşı" yetki verilmez. Spring: `spring.datasource` uygulama rolü, `spring.flyway.user/password` migration rolü.
@@ -1283,7 +1304,7 @@ ALTER ROLE svc_order_migrate SET lock_timeout = '10s';                 -- DDL ki
 
   Uzun raporlama/export sorguları ayrı rol veya `SET LOCAL statement_timeout` ile; sıcak yol sorguları 10 sn'ye yaklaşıyorsa sorun timeout değil sorgudur.
 
-  **Row Level Security (opsiyon, varsayılan değil):** hesap sahipliği için ikinci savunma hattı olarak `ENABLE ROW LEVEL SECURITY` + `current_setting('app.account_id')` policy'si kullanılabilir; kural: bağlam **`SET LOCAL`** ile TX içinde verilir (`SET` PgBouncer transaction mode'da bir sonraki isteğe sızar), uygulama rolü `BYPASSRLS` değildir, view'ların sahibi superuser değildir, policy'siz tablo = herkese kapalı. Uygulama katmanındaki ownership kontrolü (Bölüm 9.7) kalkmaz; RLS onu tamamlar.
+  **Row Level Security (opsiyon, varsayılan değil):** hesap sahipliği için ikinci savunma hattı olarak `ENABLE ROW LEVEL SECURITY` + policy `USING (account_id = NULLIF(current_setting('app.account_id', true), '')::uuid)` kullanılabilir. **Neden bu biçim:** parametre hiç set edilmemişse `current_setting(name)` 42704 hatası verir; `SET LOCAL` yapılan TX bittikten sonra değer NULL değil boş string'dir ve `''::uuid` 22P02 verir — `missing_ok=true` + `NULLIF` ile bağlamsız sorgu hata yerine **0 satır** döndürür (kapalı varsayılan). Bağlam TX içinde `SELECT set_config('app.account_id', ?, true)` ile verilir (`SET LOCAL` literal ister, parametre bağlanamaz); düz `SET` PgBouncer transaction mode'da **başka bir istemcinin** sonraki TX'inde görünür (seviye 3'te gözlendi: 2 satır sızdı) ve Hikari'den dönen bağlantı da bağlamı taşır. Uygulama rolü `BYPASSRLS` değildir, view'ların sahibi superuser değildir, policy'siz tablo = herkese kapalı; tablo sahibi (migration rolü) `FORCE ROW LEVEL SECURITY` yoksa RLS'i atlar (backfill için istenen davranış, yazılır). Sahibi olmayan rolün `GRANT`'ı hata vermez, WARNING ile etkisiz kalır: yetki testi SQLState değil `information_schema.role_table_grants` üzerinden "grant yok" iddiasını doğrular. Uygulama katmanındaki ownership kontrolü (Bölüm 9.7) kalkmaz; RLS onu tamamlar.
 
   Microsoft Azure Architecture Center ve AWS Prescriptive Guidance aynı fiziksel sunucuyu paylaşmayı kabul eder; sorun şema/tablo paylaşımıdır. Rol ayrımı ileride şemayı ayrı instance'a taşımayı da kolaylaştırır (Bölüm 24).
 - **Zorlama — testle (ikincil):**
@@ -1304,7 +1325,7 @@ ALTER ROLE svc_order_migrate SET lock_timeout = '10s';                 -- DDL ki
 |---|---|
 | Konum | `<servis>-core/src/main/resources/db/migration` |
 | İsim | `V<n>__<snake>.sql` (artan tamsayı), `R__<ad>.sql` |
-| İlk dosya | `V1__init_schema.sql`: `CREATE SCHEMA IF NOT EXISTS <schema>;` |
+| İlk dosya | Şema 10.1'deki altyapı migration'ında (`CREATE SCHEMA … AUTHORIZATION svc_<x>_migrate`) yaratılır; `V1__*.sql` `CREATE SCHEMA` içermez, doğrudan ilk tabloyla başlar (`spring.flyway.schemas: <schema>`; history tablosu o şemada, migration rolü sahipliğinde). `CREATE SCHEMA IF NOT EXISTS` yalnız altyapı script'i olmayan tek-rol kurulumlarında. |
 | Ayar | `enabled: true`, `locations: classpath:db/migration`, `schemas: <schema>`, `clean-disabled: true`, `user/password` = migration rolü (uygulama datasource'undan ayrı). **`baseline-on-migrate` varsayılan olarak kapalıdır**: Flyway dokümanı bu ayarın, migration'ı yanlış (boş olmayan, yönetilmeyen) bir veritabanına uygulamayı önleyen kontrolü kaldırdığı konusunda uyarır. Mevcut bir DB'yi Flyway yönetimine alma, ayrı ve tek seferlik bir prosedürdür (`flyway baseline` komutu, belgelenmiş `baselineVersion`), config'te sürekli açık bir bayrak değil. |
 | JPA | `ddl-auto: validate`. Flyway ile `update`/`create` birlikte **kullanılmaz**. |
 | Değişmezlik | Base branch'teki `V*.sql` değiştirilmez, silinmez, yeniden adlandırılmaz; düzeltme yeni bir `V` dosyasıyla yapılır. Kural script + CI + AI hook ile zorlanır (Bölüm 19.4). |
@@ -1396,7 +1417,7 @@ Bu bölüm **ilk sprint** işidir; "sonra bakarız" denen tek konu değildir.
 | Restore provası | **Aylık**, otomatik: yedek ayrı bir container'a restore edilir, Flyway `validate` + smoke test koşar, sonucu alarm/rapor. Test edilmemiş yedek, yedek değildir. |
 | RPO/RTO | README'de yazılı (örn. RPO 5 dk, RTO 1 sa). Arşiv gecikmesi (`archive lag`) alarmı. |
 | HA | Tek compose host'unda araç ne olursa olsun HA **yoktur**. Seçenekler: managed PostgreSQL (standby + otomatik failover + PITR + dahili PgBouncer; küçük ekip için önerilen) veya ikinci host + streaming replica. Patroni ≥3 DCS node ister; tek host'ta anlamsız. |
-| Bağlantı bütçesi | Her PG bağlantısı bir OS process'i. HikariCP rehberi: havuz ≈ `(çekirdek × 2) + disk`; "daha az bağlantı daha hızlı". N servis × instance × havuz hesabı README'de. **PgBouncer** transaction mode (`default_pool_size` 20) `max_connections`'ı korur. Protokol seviyesi prepared statement'lar 1.21+ ile transaction mode'da desteklenir (`max_prepared_statements`; 1.24.1'den beri varsayılan 200; SQL `PREPARE` desteklenmez). Transaction mode kuralları: oturum durumu yok (`SET` yerine `SET LOCAL`, advisory lock yalnız `pg_advisory_xact_lock`, `LISTEN/NOTIFY` yok), Hikari `connection-init-sql`/`schema` gibi oturuma bağlı ayarlar kullanılmaz. Boot 4.1 `spring.datasource.connection-fetch=lazy` ile bağlantı yalnız ilk SQL'de alınır. |
+| Bağlantı bütçesi | Her PG bağlantısı bir OS process'i. HikariCP rehberi: havuz ≈ `(çekirdek × 2) + disk`; "daha az bağlantı daha hızlı". N servis × instance × havuz hesabı README'de. **PgBouncer** transaction mode (`default_pool_size` 20) `max_connections`'ı korur. Protokol seviyesi prepared statement'lar 1.21+ ile transaction mode'da desteklenir; `max_prepared_statements` 1.21–1.24.0'da varsayılan **0 (kapalı)**, 1.24.1'den itibaren 200 — sürüme güvenilmez, `pgbouncer.ini`'de **her zaman açıkça** `max_prepared_statements = 200` yazılır (kapalıyken JDBC `prepareThreshold` ile 42P05 "already exists", 26000 "does not exist" ve en tehlikelisi 08P01 / başka istemcinin planıyla yanlış sonuç üretir; 1.22.0'da gözlendi). JDBC sürücüsü için `ignore_startup_parameters = extra_float_digits`. SQL `PREPARE` desteklenmez. Transaction mode kuralları: oturum durumu yok (`SET` yerine `SET LOCAL`/`set_config(…, true)` — `server_reset_query` bu modda çalışmaz, `SET` başka istemcinin TX'ine sızar; advisory lock yalnız `pg_advisory_xact_lock`, `LISTEN/NOTIFY` yok), Hikari `connection-init-sql`/`schema` gibi oturuma bağlı ayarlar kullanılmaz. Boot 4.1 `spring.datasource.connection-fetch=lazy` ile bağlantı yalnız ilk SQL'de alınır. |
 | Gözlem | `pg_stat_statements` açık; postgres-exporter (bağlantı, replication slot, bloat, uzun transaction). |
 | Büyüyen tablolar | Outbox, audit, log, olay tabloları için retention ve gerekirse **partition** politikası tanımlıdır (Bölüm 10.6). |
 | Redis/Valkey | Güvenlik instance'ı AOF (`appendfsync everysec`); cache instance'ı kaybedilebilir. Sentinel veya managed. |
@@ -1514,6 +1535,8 @@ CREATE INDEX idx_outbox_event_claim ON <schema>.outbox_event (kind, status, next
 
 Bölüm 23.3–23.4'teki kod şablonları bu generic tabloyu ve lane'li poller'ı gösterir.
 
+**Şekil A'da Modulith registry'nin işletimi:** `event_publication` tablosu uygulamanın kendi Flyway migration'ıdır (Modulith jar'ındaki `schemas/v2/schema-postgresql.sql` birebir kopyalanır; `spring.modulith.events.jdbc.schema-initialization.enabled=false` kalır). `completion-mode=update` ise tamamlanan satırlar `CompletedEventPublications.deletePublicationsOlderThan(...)` ile periyodik silinir. Tamamlanmamış kayıtları tek bir zamanlanmış iş (advisory lock ile tek instance) `IncompleteEventPublications.resubmitIncompletePublicationsOlderThan(eşik)` ile yeniden gönderir; `republish-outstanding-events-on-restart` çoklu instance'ta kapalı tutulur. **Uyarı (Modulith 2.1.1 JDBC):** `resubmitIncompletePublications(ResubmissionOptions.withMinAge(d))` FAILED kayıtlarda yaş eşiğini yok sayar (SQL'de parantez hatası; 1 dk'lık kayıt 5 dk eşiğine rağmen yeniden teslim edildi); yaş eşiği için `resubmitIncompletePublicationsOlderThan` kullanılır. `modulith-example`'daki `knownDefect_` testi sürüm yükseltmesinde durumu gösterir.
+
 ### 11.3 Idempotent Consumer (Inbox)
 
 At-least-once teslimde aynı mesaj birden çok kez gelir (yeniden teslim, tüketici çökmesi, poller yeniden denemesi). **Zorunlu güvence:** tekrar teslim çift iş üretmez. Bunun için **inbox satırı ile iş değişikliği aynı transaction'da** olmak zorundadır; aksi halde "inbox'a yazdı, işi yapmadan çöktü" (olay kaybı) veya "işi yaptı, inbox'a yazmadan çöktü" (çift iş) pencereleri açık kalır.
@@ -1532,10 +1555,10 @@ CREATE TABLE <schema>.inbox_event (
   1. INSERT INTO inbox_event(handler, event_id) … ON CONFLICT DO NOTHING  → 0 satır ⇒ duplicate, hiçbir şey yapmadan çık (ack)
   2. iş değişikliği (read-model UPSERT / domain yazımı / outbox satırı)
 commit
-  3. broker ack — YALNIZ commit'ten sonra (manual ack; AUTO ack ile 2'den önce ack'lenen mesaj çökmede kaybolur)
+  3. broker ack — YALNIZ commit'ten sonra: Spring `AcknowledgeMode.MANUAL` + `ChannelAwareMessageListener`, `basicAck` inbox TX'i döndükten sonra (`AUTO` = container listener dönüşünde ack'ler, broker auto-ack değildir; `NONE` broker no-ack'tir ve mesajı kaybeder). Geçici hatada `basicReject(tag, true)` (Bölüm 12.3: yalnız reject sayaç artırır ve gecikmeli retry'ı tetikler); commit'ten önce ack'lenen mesaj çökmede kaybolur (mutasyonla doğrulandı)
 ```
 
-- Handler başarısız olursa TX rollback → inbox satırı da geri alınır → mesaj nack/requeue (stateful retry) ile yeniden gelir. `defaultRequeueRejected=false` + delivery-limit → DLQ (Bölüm 12.3).
+- Handler başarısız olursa TX rollback → inbox satırı da geri alınır → mesaj `basicReject(tag, requeue=true)` ile broker'a döner; QQ gecikmeli retry ile yeniden teslim eder, `x-delivery-limit` dolunca DLQ (Bölüm 12.3). Kalıcı hata `basicReject(tag, false)` → anında DLQ.
 - **Dedup kapsamı handler'dır**, tüketici servis değil: aynı `order.order.created` olayını hem read-model handler'ı hem bildirim handler'ı işliyorsa iki ayrı inbox satırı vardır.
 - İnbox'ta tutulan iş, yalnız tüketicinin **kendi DB'sindeki** etkiyi idempotent yapar. Handler dış bir sisteme yan etki üretiyorsa (SMS gönder) o etki inbox TX'i içinde yapılamaz; handler dış etkiyi **outbox** satırı olarak yazar (aynı TX), outbox handler'ı dış sisteme sağlayıcının idempotency anahtarıyla gider.
 - Üretici `id`'yi deterministik üretir (Bölüm 11.2); tüketici bunu inbox anahtarı olarak kullanır.
@@ -1681,8 +1704,8 @@ Config key'leri `operation-consistency.*` altında tutulur.
 | Bileşen | Desen |
 |---|---|
 | Sürüm | 4.3+ (community-destekli hat; 3.13 desteği 2024-09'da bitti). Mnesia yok (Khepri tek metadata store; `khepri_db` feature flag'i 4.3'e geçmeden **önce** açılır, aksi halde boot sırasında zorunlu göç); classic mirrored queue yok. |
-| Queue tipi | **Quorum queue** (`x-queue-type: quorum`), `delivery-limit` (varsayılan 20 → DLX), `dead-letter-strategy: at-least-once`, `x-delivery-count` başlığı |
-| Gecikmeli retry | QQ native `x-delayed-retry-type: failed` + `x-delayed-retry-min/max` (4.3; lineer backoff). **Delayed Message Exchange plugin'i kullanılmaz** (arşivlendi, Mnesia tabanlı). |
+| Queue tipi | **Quorum queue** (`x-queue-type: quorum`); `x-delivery-limit` (varsayılan 20; N = ilk teslim + N yeniden teslim, `x-delivery-count` > N olunca DLX); `x-dead-letter-strategy: at-least-once` (**ön koşul:** `x-overflow: reject-publish` + `x-dead-letter-exchange`, aksi halde bildirim reddedilir); `x-delivery-count` başlığı ilk teslimde **yoktur**, yalnız `delivery_failed=true` yeniden teslimlerinde 1,2,3… (gerçek 4.3.0'da doğrulandı) |
+| Gecikmeli retry | QQ native, **kuyruk argümanı** olarak: `x-delayed-retry-type: failed`, `x-delayed-retry-min`, `x-delayed-retry-max` (ms). Policy yolu **sürüme bağlıdır**: 4.3.0 `delayed-retry-*` anahtarlarını policy olarak reddeder ("not recognised policy settings", yerel broker), 4.3.6 kabul eder ve argümansız bir QQ'da gecikmeyi gerçekten uygular (CI'da ölçüldü). Kuyruk argümanı her 4.3.x'te çalıştığı için varsayılan odur; policy'ye geçmek broker'ın alt sürümünü sabitlemeyi gerektirir. Gecikme lineer: `min(min·delivery_count, max)` (1 s, 2 s, 3 s ölçüldü); `failed` tipi yalnız `delivery_failed=true` ile geri verilen mesajı geciktirir (aşağıdaki reject/nack ayrımı). **Delayed Message Exchange plugin'i kullanılmaz** (arşivlendi, Mnesia tabanlı). |
 | Exchange/queue adları | komut: `<servis>.commands` / `<hedef>.<komut>.queue`; event: `domain.events` (topic) / `<tüketici>.<amaç>.queue`; DLX `<servis>.dlx`; DLQ `<queue>.dlq` |
 
 **Producer:**
@@ -1693,26 +1716,32 @@ spring.rabbitmq: { publisher-confirm-type: correlated, publisher-returns: true, 
 
 - `Jackson2JsonMessageConverter` + `RabbitTemplate.setMandatory(true)`.
 - Publisher, `CorrelationData` ekler ve trace header'larını enjekte eder. Broker ACK'i sınırlı süre beklenir (örn. 5 sn).
-- NACK, unroutable mesaj veya timeout durumunda exception fırlatılır ve outbox retry'ı devreye girer.
+- NACK veya timeout → exception → outbox retry. **Unroutable mandatory mesajda broker `basic.return` gönderir ve ardından yine pozitif ACK verir**: yalnız confirm'e bakmak olayı sessizce kaybeder; ACK gelse bile `CorrelationData.getReturned() != null` ise unroutable sayılır ve exception fırlatılır (4.3.0'da doğrulandı).
 - **Yayın her zaman outbox'tan yapılır.** Doğrudan `convertAndSend` kullanılmaz.
 
 **Consumer:**
 - `@RabbitListener(queues = …, containerFactory = …)`; container factory `spring.rabbitmq.listener.*` ile yapılandırılır (elle kurulan factory bu property'leri yok sayar).
-- **`defaultRequeueRejected=false`** — Spring AMQP varsayılanı `true`'dur ve iş hatası fırlatan mesaj "sonsuza kadar yeniden teslim edilebilir" (Spring dokümanının ifadesi).
-- Hata sınıflandırması:
-  - Kalıcı hata → `AmqpRejectAndDontRequeueException` → DLQ.
-  - Geçici hata (DB/ağ) → `RetryInterceptorBuilder.stateful()` + exponential backoff + `RepublishMessageRecoverer`/DLX; ya da QQ native delayed retry.
+- **`defaultRequeueRejected=false`** — Spring AMQP varsayılanı `true`'dur ve iş hatası fırlatan mesaj "sonsuza kadar yeniden teslim edilebilir" (Spring dokümanının ifadesi). Bu ayar yalnız container'ın kendi gönderdiği reject'leri (AUTO mod) yönetir; **MANUAL modda listener'ın verdiği bayrak esastır.**
+- **Ack modu:** `AcknowledgeMode.MANUAL` + `ChannelAwareMessageListener`; `basicAck` inbox TX'i commit olduktan **sonra** (Bölüm 11.3). (`AUTO`, container'ın listener dönüşünde ack'lemesidir, broker auto-ack değildir; `NONE` broker no-ack'tir ve mesajı kaybeder.)
+- **Hata sınıflandırması (4.3.0 AMQP 0-9-1'de doğrulanmış semantik):**
+  - Geçici hata (DB/ağ) → `channel.basicReject(tag, requeue=true)`. Yalnız **reject** `delivery_failed=true` sayılır: `x-delivery-count` artar, QQ native gecikmeli retry uygulanır, `x-delivery-limit` dolunca DLQ.
+  - `basic.nack requeue=true` (Spring'in `ImmediateRequeueAmqpException` / AUTO-mode requeue yolu `basicNack(tag, multiple, requeue)` gönderir) **düz requeue**'dur: sayaç artmaz, gecikme yok, limit dolmaz → milisaniyelik sıcak döngü (ölçüldü: +7/+24/+26 ms). Kullanılmaz.
+  - Kalıcı hata / zehirli mesaj (parse edilemeyen body, bilinmeyen şema) → `basicReject(tag, requeue=false)` → anında DLQ (at-least-once). Bilinmeyen `type` → ack + log (DLQ değil).
+  - `RetryInterceptorBuilder.stateful()` + `RepublishMessageRecoverer` uygulama içi alternatiftir; 4.3'te broker tarafı retry varken gereksizdir.
+- **Tüketici zaman aşımı:** quorum queue için `consumer-timeout` policy anahtarı (ms; ya da `x-consumer-timeout` consumer argümanı; global varsayılan 30 dk) `basic.consume` anında okunur — policy tüketici başlamadan **önce** kurulur. Süre dolunca QQ ack'lenmemiş mesajı geri alır ve tüketiciye `basic.cancel` gönderir (kanal kapanmaz); Spring container consumer'ı yeniden başlatır, mesaj `redelivered=true` ile gelir (5 sn policy ile doğrulandı). Inbox TX'i bu süreden kısa tutulur; uzun işler outbox satırına devredilir.
 - `prefetch` açıkça (10–50; Spring varsayılanı **250**) ve `concurrency` ayarlanır.
-- Idempotent handler: inbox `ON CONFLICT (event_id) DO NOTHING` (Bölüm 11.3).
+- Idempotent handler: inbox `INSERT INTO inbox_event (handler, event_id) … ON CONFLICT (handler, event_id) DO NOTHING` (Bölüm 11.3; PK `(handler, event_id)` olduğu için `ON CONFLICT (event_id)` PostgreSQL'de "no unique constraint" hatası verir).
 - DLQ için izleme (derinlik > 0 alarmı) ve replay aracı bulunur.
 
-**Kaçın:** Gecikmesiz requeue (`ImmediateRequeueAmqpException` ile DB kesintisinde sıcak döngü; QQ'da log/disk büyümesi). Consumer'ı prefetch'siz bırakmak.
+**Kaçın:** Gecikmesiz requeue (`ImmediateRequeueAmqpException` / `basic.nack requeue=true` ile DB kesintisinde sıcak döngü; QQ'da log/disk büyümesi). Consumer'ı prefetch'siz bırakmak. Commit'ten önce ack: mesaj çökmede kaybolur ve aynı tag'e ikinci ack/reject `PRECONDITION_FAILED unknown delivery tag` ile kanalı kapatır.
+
+**Çalışan hali (seviye 3, gerçek RabbitMQ 4.3.0 + PostgreSQL 18):** `blueprint/skeleton-example/broker-example` — `OutboxEventPublisher` (confirms + returns), `BrokerTopology` (QQ + DLX/DLQ + delayed retry argümanları + stream), manuel ack'li inbox listener, `BrokerBehaviourIT` 12 senaryo (uçtan uca 20 olay, unroutable, gecikmeli retry ölçümü, delivery-limit → DLQ, zehirli mesaj, commit sonrası ack, duplicate, broker `stop_app`/`start_app`, stream replay, consumer timeout, policy-red kanıtı, bilinmeyen tip). Aynı test CI'da `rabbitmq:4.3-management` servis container'ıyla koşar.
 
 **Kural:** Hassas veya güvenlik kritik olay tipleri (moderasyon kararı, ödeme durumu, mağaza bildirimi) kuyruk yerine yalnız imzası doğrulanmış bir internal HTTP uçtan veya webhook'tan kabul edilir. Bu tipler kuyruktan gelirse DLQ'ya düşer.
 
 ### 12.4 Replay ve Çoklu Tüketici: RabbitMQ Streams
 
-Aynı olayı birden çok bağımsız tüketicinin okuması ve **geçmişi baştan okuma** (yeni read-model kurma, bug sonrası yeniden işleme, analytics) gerekince, Kafka'ya geçmeden önce **RabbitMQ Streams**: append-only log, non-destructive read, broker'da offset, `max-age`/`max-length-bytes` retention, Spring `spring-rabbit-stream`. `domain.events`'in bir kopyası stream'e de yazılır; işlemsel tüketiciler queue'dan, analitik/replay tüketicileri stream'den okur. Stream'de TTL/öncelik/DLX yok; bunlar queue işidir.
+Aynı olayı birden çok bağımsız tüketicinin okuması ve **geçmişi baştan okuma** (yeni read-model kurma, bug sonrası yeniden işleme, analytics) gerekince, Kafka'ya geçmeden önce **RabbitMQ Streams**: append-only log, non-destructive read, broker'da offset, `max-age`/`max-length-bytes` retention. Stream (`x-queue-type: stream`, `x-max-age`) `domain.events`'e `#` ile bağlanır — üretici ikinci kez yazmaz, exchange kopyalar; işlemsel tüketiciler queue'dan, analitik/replay tüketicileri stream'den okur. Okuma iki yolla: `spring-rabbit-stream` (stream protokolü, 5552) ya da düz AMQP 0-9-1 `basicConsume(..., {x-stream-offset: first|last|next|<offset>|<timestamp>})` — 0-9-1'de prefetch (QoS) ve manuel ack **zorunludur**; ack yalnız kredi açar, mesaj stream'de kalır. Aynı offset'ten ikinci okuyucu aynı mesajları sırayla alır; queue tüketicileri etkilenmez (doğrulandı). Stream'de TTL/öncelik/DLX yok; bunlar queue işidir.
 
 ### 12.5 Kafka Ne Zaman?
 
@@ -1729,7 +1758,7 @@ Bölüm 12.2'deki envelope ve topic disiplini kurulmuşsa geçiş yalnız transp
 ### 12.6 Yeni Olay/Komut Checklist'i
 1. Komut mu event mi? (Bölüm 12.1) Adı belirle: `<servis>.<aggregate>.<olay>` / `<hedef>.<komut>`.
 2. Payload sınıfını `<domain>-api/event` altına yaz; CloudEvents attribute'larını `platform-messaging` doldurur.
-3. Consumer tarafında queue (quorum), DLQ, binding; `defaultRequeueRejected=false`, prefetch, retry politikası.
+3. Consumer tarafında quorum queue bildirimi: `x-delivery-limit`, `x-dead-letter-strategy=at-least-once` + `x-overflow=reject-publish`, DLX/DLQ, `x-delayed-retry-type/min/max`, binding; container MANUAL ack, prefetch, `defaultRequeueRejected=false`; listener kararı: geçici → `basicReject(tag,true)`, kalıcı/zehirli → `basicReject(tag,false)`, bilinmeyen tip → ack. `consumer-timeout` policy'si tüketici başlamadan önce.
 4. Listener + inbox satırı ve iş **aynı TX'te** (Bölüm 11.3) + (read-model ise) kaynak başına `source_revision` ve tam durum/değişiklik sözleşmesi (Bölüm 4.6).
 5. Üretici: domain transaction'ında `outbox_event` satırı (kind, aggregate, type, payload).
 6. Config key'leri (local + deploy). Şema evrimi notu (`type` versiyonu).
@@ -1763,6 +1792,8 @@ Realtime yayını outbox'lı olmadığı için kaybolabilir. İstemci tasarımı
 
 Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek listesi) **config veya env'e konmaz**. Yönetim servisindeki parametre kataloğunda tutulur.
 
+### 14.1 Sahiplik ve Contract
+
 | Rol | Bileşen |
 |---|---|
 | Sahip | Yönetim servisi: `SystemParameterService`, `ParameterDefinitionRegistry` (tip ve sınır doğrulaması), internal controller |
@@ -1773,12 +1804,14 @@ Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek liste
 | Tüketici | Servis başına tek `BackofficeParameterClient` + `SystemParameterProvider` |
 | Kayma tespiti | Açılış kontrolü (ERROR log) + health indicator DOWN + enum↔seed↔registry↔frontend tutarlılık testleri |
 
-**İsim ve tip:**
+### 14.2 İsim ve Tip
+
 - Group: kebab-case. Key: `<alan>.<ad>` snake_case. Enum sabiti: UPPER_SNAKE.
 - Tipler: `INTEGER` (+unit), `DURATION` (her zaman saniye), `OPTION_LIST` (`code`, `labels.tr/en`, `order`, `active`).
 - Yayınlanmış key yeniden adlandırılmaz. `usage_status`: `DEFINED_ONLY` / `ACTIVE` / `PARTIAL`.
 
-**Okuma kuralları:**
+### 14.3 Okuma Kuralları: Fail-Closed ve Bounded Staleness
+
 - **Doğruluk hataları fail-closed:**
 
 | Durum | Hata |
@@ -1789,8 +1822,9 @@ Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek liste
   Kod içi default değer, yml fallback ve hatayı yutmak yasaktır: parametre tanımsızsa bu bir **deploy hatasıdır** ve açılış kontrolünde yakalanır.
 
 - **Erişilemezlik: bounded staleness (static stability).** Parametre kaynağı bir *control plane*'dir; düştüğünde *data plane* (tüm servisler) durmamalıdır. "5 sn cache + 503" modeli yönetim servisini her servisin tier-0 bağımlılığı yapar (yönetim paneli restart olurken ana iş akışı 503 döner). Kural:
-  - Tüketici son başarılı `ParameterGroupDto`'yu (revizyonuyla) **bellekte ve diskte** (local snapshot; soğuk açılışta kaynak yoksa bile ayağa kalkar) tutar.
-  - Kaynak erişilemezse grup başına tanımlı **en fazla T** süre boyunca son bilinen değer kullanılır (örn. hak limitleri 10 dk, yaş/uygunluk kuralları 1 sa); `parameter_staleness_seconds{group}` metriği yayınlanır ve eşik alarmı vardır.
+  - Tüketici son başarılı `ParameterGroupDto`'yu revizyonu ve **alınma anıyla** (`fetchedAt`) birlikte **bellekte ve diskte** (local snapshot; soğuk açılışta kaynak yoksa bile ayağa kalkar) tutar; staleness = `now − fetchedAt`. Disk snapshot'ı grup başına bir JSON dosyasıdır, atomik yazılır (tmp + rename), instance'a özel kalıcı volume'de durur; dosya adı yalnız kebab-case grup adından üretilir (diğer adlar reddedilir: path traversal).
+  - **Soğuk açılışta snapshot yoksa** ve kaynak erişilemiyorsa grup, kritikliğinden bağımsız `PARAMETER_UNAVAILABLE` (503) döner; kod içi default burada da yasaktır. İlk deploy'da snapshot dizini boş olduğundan açılış kontrolü kaynağın en az bir kez ulaşılabilir olmasını fiilen zorunlu kılar.
+  - Kaynak erişilemezse grup başına tanımlı **en fazla T** süre boyunca son bilinen değer kullanılır (örn. hak limitleri 10 dk, yaş/uygunluk kuralları 1 sa). `parameter_staleness_seconds{group}` gauge'u her okumada güncellenir (son başarılı fetch'ten geçen saniye; başarılı fetch'te 0); alarm eşiği grup başına T'nin altında seçilir (örn. %80). Micrometer gauge'u zayıf referans tuttuğundan durum nesnesi provider'da güçlü referansla tutulur (aksi halde metrik NaN olur).
   - T aşılınca yalnız **güvenlik-kritik** olarak işaretli gruplar `PARAMETER_UNAVAILABLE` (503) döner; diğerleri son bilinen değerle devam eder. Hangi grubun kritik olduğu katalogda `criticality` alanıyla tanımlıdır.
   - Bu, tutarlılığı bozmaz: kalıcı sonuç yazılırken kullanılan revizyon zaten snapshot olarak kaydedilir. AWS "static stability" ilkesi ve tüm feature-flag SDK'ları (Unleash: 15 sn poll + disk yedeği + sunucu yoksa yedekten servis; OpenFeature: provider hatasında default) aynı modeli uygular.
   - Alternatif/ek: parametre revizyonları **event** olarak yayınlanır (Bölüm 12), tüketiciler local tabloda tutar; yönetim servisi yalnız yazma yoludur.
@@ -1798,12 +1832,14 @@ Adminin değiştirebildiği iş kuralı değerleri (limit, süre, seçenek liste
 - **Tazelik:**
   - `group(...)`: 5 sn'lik instance cache (+ bounded-staleness fallback).
   - `freshGroup`: kullanıcı girdisini doğrulayan yazma akışları (kaynak erişilemezse fallback **yok**, 503).
-  - `freshGroupSince(revision)`: eski revizyonlu kayıtları kırpmak (clamp).
+  - `freshGroupSince(revision)`: kaynaktan okur; dönen revizyon istenenden küçükse (replika gecikmesi) `PARAMETER_REVISION_STALE` (503) ile reddeder, fallback yoktur. Kullanım: eski revizyonlu kayıtları kırparken (clamp) kararın en az o revizyonla verilmesini garanti etmek.
   - `groupAt(instant)`: geçmiş bir anın değeri.
 - Birlikte anlamlı key'ler aynı revizyondan okunur. Kalıcı sonuçlara değer ve **revizyon snapshot'ı** yazılır.
 - Parametre TX ve lock dışında okunur. `@Value` / `@PostConstruct` ile bağlanmaz. Worker her turda yeniden okur.
 - Değer düşürüldüğünde mevcut veriyi uzlaştıran bir worker gerekir.
-- Loglara parametre değeri, ham yanıt ve key adı yazılmaz.
+- Loglara parametre değeri ve ham yanıt yazılmaz. Grup ve key adı yalnız hata kodu mesajlarında (`PARAMETER_NOT_DEFINED`, `PARAMETER_VALUE_INVALID`, açılış kontrolü) yer alır; olağan okuma loglarında yer almaz.
+
+**Çalışan hali (seviye 1):** `skeleton-example/platform-parameters` (23 test, 6 mutasyonun 6'sı yakalandı).
 
 ### 14.4 Feature Flag ve Deney
 
@@ -1916,7 +1952,7 @@ services:
 **Kurallar:**
 - Secret hiçbir zaman: repoda düz metin, Config Server'da, Dockerfile `ENV`'inde, image katmanında, log'da, `.env` build context'inde.
 - `.dockerignore`: `.env*`, `secrets/`, `.git`, `**/target`, `node_modules`.
-- **gitleaks** hem pre-commit hem **CI**'da; tarama geçmişi de kapsar (`--log-opts`).
+- **gitleaks** hem pre-commit hem **CI**'da, iki modda: `gitleaks git` (tüm geçmiş, silinmiş secret dahil; `--log-opts` yalnız aralığı daraltır) ve `gitleaks dir` (commit'lenmemiş çalışma ağacı); ikisi birbirinin açığını kapatır. `detect`/`protect` 8.19+'da gizli/eski komutlardır. `--redact` ile secret log'a yazılmaz. gitleaks tarama hatasında da exit 1 döner ("no leaks found in partial scan"); sarmalayıcı (`scripts/gitleaks-check.sh`) JSON raporda bulgu yoksa sonucu "doğrulanamadı" (exit 3) sayar.
 - Rotasyon prosedürü yazılıdır: hangi secret, kim, ne sıklıkla, nasıl (JWT anahtarları `kid` ile kesintisiz; DB parolaları PgBouncer üzerinden çift kullanıcı ile).
 - Secret'ın nereden geldiği izlenebilir (CI secret adı → compose secret adı → property adı eşlemesi README'de).
 
@@ -1934,14 +1970,14 @@ services:
 | JPQL doğrulama | DB'siz: `EntityManagerFactory` açılır, sorgular parse edilir |
 | Gerçek DB | **Testcontainers 2.x** (`testcontainers-postgresql`, `-redis`/valkey, `-rabbitmq`) + Spring Boot **`@ServiceConnection`** (`@DynamicPropertySource` yerine), gerçek Flyway migration'ları. CI'da `ubuntu-latest` runner'da Docker hazırdır; "reuse" modu deneyseldir ve **CI için değildir** — Spring context cache + JVM başına tek container yeter. Daha ucuz alternatif: workflow `services:` bloğu. **Kural:** gerçek DB testleri CI'da **her PR'da** koşar; env ile açılıp CI'da atlanan test yok sayılır. |
 | Concurrency | `CountDownLatch` + executor. İki paralel claim'in ayrık satırlar aldığı, eşzamanlı ikinci insert'in reddedildiği kanıtlanır. |
-| Mimari kurallar | **ArchUnit** (`layeredArchitecture()`, `noClasses().that().resideInAPackage("..controller..").should().dependOnClassesThat().resideInAPackage("..repository..")`, `slices().should().beFreeOfCycles()`, `@Configuration` yalnız `config/`, `service.impl`'de yalnız `*ServiceImpl`, `@RequestBody` → `@Valid`). Modüler monolitte ek olarak Spring Modulith `ApplicationModules.of(App.class).verify()` + `spring.modulith.runtime.verification-enabled`. Maven enforcer `bannedDependencies` ile `*-core` → `*-core` yasağı. |
+| Mimari kurallar | **ArchUnit** (`layeredArchitecture()`, `noClasses().that().resideInAPackage("..controller..").should().dependOnClassesThat().resideInAPackage("..repository..")`, `slices().should().beFreeOfCycles()`, `@Configuration` yalnız `config/`, `service.impl`'de yalnız `*ServiceImpl`, `@RequestBody` → `@Valid`). Modüler monolitte ek olarak Spring Modulith `ApplicationModules.of(App.class).verify()` testi **ve negatif eşi**: test kaynaklarında bir modülün paketinde başka modülün internal sınıfına bağımlı kasıtlı bir sınıf; yalnız o paketi içeren bir `ImportOption` ile kurulan `verify()`'ın `Violations` fırlattığı ve mesajın o bağımlılığı adlandırdığı doğrulanır (negatif test olmadan yeşil `verify()` bir şey kanıtlamaz). İzinli bağımlılıklar `@ApplicationModule(allowedDependencies = …)` ile açıkça yazılır; boş dizi "hiçbiri", varsayılan "hepsi" demektir. Çalışma zamanı doğrulaması (`spring.modulith.runtime.verification-enabled`) istenirse `spring-modulith-runtime` ayrıca eklenir; starter-core/-jdbc onu getirmez. Maven enforcer `bannedDependencies` ile `*-core` → `*-core` yasağı. |
 | Tutarlılık / sınır | Enum↔seed↔registry↔frontend eşleşmesi. Migration'larda başka schema adı yok. Client'ta yanlış modül DTO'su yok. Hata kodu çakışması yok. |
 | Statik config | yml ve alarm kuralı dosyalarını okuyup doğrulayan testler. Local ↔ deploy config drift testi. Hook komutlarının örnek girdiyle testi. |
 | Dayanıklılık | Her HTTP client için "hedef yanıt vermiyor" testi: timeout bütçesi, circuit açılması, tanımlı hata (Bölüm 4.7). |
 | Mutasyon | Kritik modüllerde (outbox, saga, güvenlik filtreleri, para hesabı) **PIT** (`pitest-maven` + `pitest-junit5-plugin`; plugin yoksa 0 test bulur ve sessiz geçebilir) ile testlerin gerçekten yakaladığı doğrulanır; hedef mutasyon skoru README'de (başlangıç ≥ %80 kritik paketlerde). CI'da haftalık; PR gate'te değil (süre). `skeleton-example`'daki elle mutasyonlar bu pratiğin küçük hali. |
 | Yük | k6/Gatling senaryoları staging'de (haftalık ve release öncesi): p99 ve hata oranı SLO'ya karşı; sonuç kapasite planına (Bölüm 24) yazılır. |
 | Contract (servisler arası) | Monorepo'da derleme zamanı tip kontrolü yeter; Pact'in kendi karşılaştırması bile "iki tarafı aynı ekip aynı repoda yazıyorsa az katkı" der. Polyrepo'ya geçilirse Pact/Spring Cloud Contract. |
-| İstemci contract | CI'da her servisin `/v3/api-docs` çıktısı üretilir, birleştirilir, `openapi-diff` ile breaking change yakalanır, `openapi-generator` ile istemci client'ı (örn. `dart-dio`, `typescript-fetch`) üretilir (Bölüm 20). |
+| İstemci contract | CI'da her servisin OpenAPI çıktısı testte üretilir (prod'da `api-docs` kapalı; test `springdoc.api-docs.enabled=true` ile açar) ve repoda commit'li baseline ile `openapi-diff` karşılaştırılır; kırıcı fark PR gate'ini kırar. **Dikkat:** openapi-diff 2.1.x OpenAPI 3.1 belgede şema tipini okumaz (string → integer "değişiklik yok" çıkar); gate springdoc'un **3.0 çıktısını** (`springdoc.api-docs.version=openapi_3_0`) karşılaştırır, istemciye 3.1 belge yayınlanır. Araç opsiyonel istek alanının yeniden adlandırılmasını/kaldırılmasını ve `operationId` değişikliğini kırıcı saymaz; bunlar review'da yakalanır (`operationId` `@Operation` ile sabitlenir). Baseline yalnız bilinçli komutla güncellenir ve PR diff'inde görünür. İstemci client'ı `openapi-generator` ile (örn. `dart-dio`, `typescript-fetch`) üretilir (Bölüm 20). |
 
 **Kurallar:**
 - Önce davranış ve edge case'ler belirlenir.
@@ -2039,10 +2075,12 @@ JDK 25 notları: `-XX:+UseCompactObjectHeaders` (JEP 519, final) heap'i %10–20
 
 | Workflow | İçerik |
 |---|---|
-| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@<sha> # v5.0.0`); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks, config drift, OpenAPI diff, hook testleri. |
+| `ci` | PR tetikler. `permissions: contents: read`, concurrency ile iptal. **Tüm üçüncü taraf action'lar 40 karakterlik commit SHA'ya pinlenir** (`uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`; SHA'lar `git ls-remote --tags` ile alınır); tag mutable işaretçidir — tj-actions/changed-files olayı (CVE-2025-30066, 2025-03) tag'leri yeniden yazıp ~23 000 repodan CI secret'ı sızdırdı. Renovate `helpers:pinGitHubActionDigests` ile SHA'lar güncellenir; org düzeyinde "SHA pinning zorunlu" policy'si (GitHub, 2025-08) açılır. **Affected-module** tespiti (`dorny/paths-filter` + GIB/`-amd`) → servis başına matrix: `mvn -B -ntp verify` (Testcontainers ile gerçek DB testleri dahil, ArchUnit); başarısızsa surefire raporu artifact. Frontend: `npm ci`, lint, `tsc -b`, `npm test`, `npm run build`. Ek: gitleaks (`scripts/gitleaks-check.sh all .`: geçmiş + çalışma ağacı), config lint (`scripts/config-lint.js`), config drift, OpenAPI diff, hook testleri. CI adımlarında `test -f X && çalıştır || true` kalıbı kullanılmaz: script varken kırmızı sonucu da yutar (fail-open). |
 | `migration-immutability` | PR tetikler (`edited` dahil). Head SHA ve `fetch-depth: 0` ile checkout; `node scripts/<migration>-immutability.js check --base origin/$BASE_REF`; script'in kendi testleri. |
 | `build-images` | `develop`/`release`/`main` push. Değişen servislerin image'ları Jib ile build → GHCR push → cosign imza + SBOM. Çıktı: `<servis>@sha256:…` listesi (artifact). |
 | `deploy` | `release` → staging (otomatik), `main` → production (**GitHub environment protection** ile onay). Sunucuya SSH: yalnız `docker compose pull` + `docker-rollout`. Registry, digest ve imza doğrulaması. |
+
+**Doğrulanmış şablon:** `blueprint/.github/workflows/ci.yml` (kopyalanabilir) — aynı yapı bu deponun `.github/workflows/skeleton-ci.yml` dosyası olarak **gerçek GitHub Actions'ta koştu** (Ek B): `ubuntu-latest` runner'da gömülü PostgreSQL non-root `runner` kullanıcısıyla çalışır; `services:` bloğundaki `rabbitmq:4.3-management` container'ı (4.3.6, Erlang 27) 10 sn'de hazır olur; 4 modül + 44 test **27 sn**; hook kuru çalıştırması ilk denemede iki tasarım hatası yakaladı (`CLAUDE_PROJECT_DIR` göreli verilince hook fail-closed çalıştı ve `set -e` altında `code=$?` deseni hiç çalışmadı) — CI adımı hook'u gerçek dosya yollarıyla (korunan dosya → exit 2, yeni dosya → exit 0, bozuk yapılandırma → exit 2) doğrular.
 
 **Deploy script deseni** (`set -Eeuo pipefail` + `trap rollback ERR`):
 1. **Ön kontrol:** Disk ve RAM, altyapıya (DB, Redis, MQ) TCP erişimi, image imza doğrulaması (`cosign verify`).
@@ -2067,6 +2105,7 @@ JDK 25 notları: `-XX:+UseCompactObjectHeaders` (JEP 519, final) heap'i %10–20
 | **Şema: kolon silme / tip değişimi** (contract) | Expand (yeni kolon) → uygulama iki kolonu da yazar → backfill → uygulama yalnız yeniye geçer → **sonraki release'te** contract | N ve N-1 image aynı şemayla | Contract'tan sonra rollback **yoktur**; bu yüzden ayrı release |
 | **Enum/parametre değeri** ekleme | Tüketen tüm servisler önce (bilinmeyen değeri tanısın) → üreten | eski tüketici bilinmeyen değeri reddedebilir → ekleme öncesi `from()` toleransı | Değer üretimi durdurulur |
 | **JWT claim ekleme/kaldırma** | Doğrulayan (tüketen) önce → basan | eski doğrulayan bilmediği claim'i yok sayar | Basan rollback yeterli; kaldırmada tersi |
+| **Public API (istemci) alan değişikliği** | Opsiyonel yanıt alanı ekleme: serbest. Yanıt alanı kaldırma/yeniden adlandırma, istek alanını zorunlu yapma, yeni zorunlu istek alanı, yanıtta yeni enum değeri: **kırıcı** → yeni sürüm yanında açılır, eski sürüm `Deprecation`/`Sunset` ile yaşar (Bölüm 20) | eski istemci ↔ yeni sunucu (mağazadaki eski uygulama) | Sunucu rollback'i yeni alanı kaldırır; eski alan sunset'ten önce kaldırılmaz |
 | **Allowlist / config** | Config değişikliği ilgili servis restart'ıyla; **kod ile aynı deploy'da** ise önce config | – | Config geri alınır (versiyonlu) |
 
 **Uyumluluk matrisi** her kırıcı değişiklik için PR'a yazılır (dört hücre): `yeni üretici → eski tüketici`, `eski üretici → yeni tüketici`, `yeni → yeni`, `eski → eski`. Bir hücre "çalışmaz" ise çift yayın veya feature flag ile kapatılır; "çalışmaz"ı kabul eden rollout planı `proj-release-readiness-review`'da `FAIL`.
@@ -2198,7 +2237,9 @@ Hook komutları **ayrı dosyalarda** yaşar; `settings.json` yalnız dosyayı ç
 
 **Kural:** Hook komutları örnek girdiyle test edilir (`bash -n` + sahte stdin ile CI'da). JSON içine gömülü shell komutlarında kaçış hatası kolay yapılır ve hook sessizce etkisiz kalabilir.
 
-**Immutability script'i doğrulanmış davranış** (`node --test scripts/flyway-immutability.test.js`, 12 test): base V dosyasını değiştirme/silme/`git mv` → ihlal; iç içe klasör korunur; branch'te eklenen V ve tüm R__ serbest; Windows ters bölü; `check-file` mutlak/göreli yol; base yokken `fail` → exit 3, `head` → HEAD ağacı; `-` ile başlayan ref reddi; CLI çıkış kodları 0/1/3.
+**Bulunan ve düzeltilen hata (2026-09-29):** `checkFile` `git ls-tree`'yi proje kökünde çalıştırıyordu; proje kökü repo kökünün **alt klasörüyse** (monorepo) ls-tree pathspec'i cwd'ye göre çözüldüğü için base dosyası "yok" sanılıyor ve yazma **serbest kalıyordu** (fail-open). Git her zaman `--show-toplevel` kökünde çalıştırılır; regresyon testi eklendi (13 test). Ders: hook'lar yalnız "repo kökü = proje kökü" senaryosuyla değil, alt klasör senaryosuyla da test edilir.
+
+**Immutability script'i doğrulanmış davranış** (`node --test scripts/flyway-immutability.test.js`, 13 test): base V dosyasını değiştirme/silme/`git mv` → ihlal; iç içe klasör korunur; branch'te eklenen V ve tüm R__ serbest; Windows ters bölü; `check-file` mutlak/göreli yol; base yokken `fail` → exit 3, `head` → HEAD ağacı; `-` ile başlayan ref reddi; CLI çıkış kodları 0/1/3.
 
 ### 19.5 Kural → Makine İlkesi
 
@@ -2210,7 +2251,7 @@ Dokümandaki bir kural, AI ajanı veya geliştirici unutsa bile **bir şey kırm
 | `@RequestBody` → `@Valid` | ArchUnit veya ErrorProne özel kontrolü |
 | throw öncesi structured log | Checkstyle/ErrorProne özel kontrolü ya da review skill |
 | Migration değişmezliği | script + CI + hook |
-| Secret literal fallback yok | gitleaks + config lint (regex `\$\{[A-Z_]+:[^}]+\}` secret key'lerinde) |
+| Secret literal fallback yok; local dışında düz secret yok | `scripts/config-lint.js`: secret görünümlü key veya env adında `${AD:...}` fallback'i (boş ve iç içe fallback, rakamlı env adı ve küçük harfli property placeholder dahil) ihlaldir; local profil dışında düz secret değeri ihlaldir; yalnız local'de `# lint:allow-secret-fallback <gerekçe>`. gitleaks düşük entropili sahte değerleri (`changeme`) **yakalamaz**; yüksek entropili gerçek anahtarlar için ayrı kontroldür. |
 | Local ↔ deploy config drift | `scripts/config-drift-check` CI |
 | Hata kodu çakışması | unit test (tüm `ErrorCode` enum'ları) |
 | Sıcak yol: gecikme bütçesi ve bağımlılık listesi yazılı; varsayılan (≤1 uzak çağrı) aşılıyorsa ADR | kritik akış kaydı (`repo-context.md`) + review skill; otomatik: trace'te uzak span sayısı testi (kayıttaki listeyle eşit) + p99 yük testi eşiği |
@@ -2250,17 +2291,17 @@ Bu dokümanın ve `blueprint/`'in **iki farklı doğrulama seviyesi** vardır; i
 | Konu | Pratik |
 |---|---|
 | Branch | `feature/<kişi>-<açıklama>` → PR `develop`'a. `release` test ortamına, `main` production'a deploy edilir. |
-| PR kontrolleri | Testler, migration immutability, secret taraması |
+| PR kontrolleri | Testler, migration immutability, secret taraması, config lint, OpenAPI diff (kırıcı değişiklikte gate kırılır; bilinçli baseline güncellemesi PR diff'inde görünür) |
 | Commit | Conventional (`fix(<modül>): …`, `feat(<modül>): …`), ekibin dilinde |
 | Push öncesi | İlgili review skill'leri çalıştırılır |
 | Doğrulama | Değişiklik izole bir DB'ye karşı servis gerçekten ayağa kaldırılarak doğrulanır |
 | API sözleşmesi (tek kaynak) | **OpenAPI üretilir, elle yazılmaz.** CI her servisin `/v3/api-docs` çıktısını alır, tek `<proje>-api.yaml`'a birleştirir, `openapi-diff` ile breaking change'i PR'da işaretler, `openapi-generator` ile istemci client paketini üretir (Flutter: `dart-dio` stable; web: `typescript-fetch`). Postman/Bruno koleksiyonu OpenAPI'den türetilir; elle üçüncü kopya tutulmaz. |
-| API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Spring Framework 7 versiyonlamayı **birinci sınıf** destekler: `@GetMapping(version = "1.1")`, `ApiVersionConfigurer` (path/header/query/media type'tan çözümleme), `SemanticApiVersionParser`; RestClient/HTTP Service Client ve MockMvc tarafında da aynı sürüm desteği. Kırıcı değişiklik yeni versiyon; eski versiyon **`Deprecation` (RFC 9745) + `Sunset` (RFC 8594) + `Link rel="deprecation"`** header'larıyla en az N ay yaşar, sunset sonrası 410. |
+| API versiyonlama | İlk günden karar: `/v1` prefix (önerilen; mobil uygulama mağazada eski sürümüyle aylarca yaşar) veya header. Spring Framework 7 versiyonlamayı **birinci sınıf** destekler: `@GetMapping(version = "1.1")`; Boot 4.1'de çözümleme kodsuz property ile: `spring.mvc.apiversion.use.header=API-Version` (veya `use.path-segment`, `use.query-parameter`, `use.media-type-parameter`), `required`, `supported`, `default`, `detect-supported`. **Dikkat:** `required=true` stratejili DispatcherServlet'teki sürümsüz route'lara da (`/internal/**`, aynı porttaki actuator) uygulanır; actuator ayrı management portunda çalışır ya da `required=false` + `default` seçilir. `supported` birebir eşler (1.0.7, 1.0 değildir). Kırıcı değişiklik yeni versiyon; kaldırılacak sürüm `StandardApiVersionDeprecationHandler` bean'iyle **`Deprecation: @<epoch>` (RFC 9745) + `Sunset` (RFC 8594) + `Link rel="deprecation"`** taşır ve en az N ay yaşar. Bu handler yalnız header ekler; sunset sonrası 410 ayrıca uygulanır (sürüm `supported`'dan çıkarılır ve 410 dönen bir filtre/handler eklenir). |
 | İstemci handoff | İstemciyi etkileyen her değişiklik için versiyonlu entegrasyon dokümanı yazılır (şablon aşağıda) — endpoint/alan listesi OpenAPI'den gelir, doküman **davranış, ekran akışı ve hata kodu → ekran** eşlemesine odaklanır |
 | Mimari plan | Büyük alanlar için modül içi `docs/` planı; kodla farkları periyodik güncellenir |
 | **ADR** (Architecture Decision Record) | Mimari şekil, veri ayrımı, yeni altyapı bileşeni, versiyonlama, güvenlik modeli gibi geri alması pahalı her karar `docs/adr/NNNN-<baslik>.md` olarak yazılır (şablon: `blueprint/docs/adr/0000-template.md`): bağlam, seçenekler, karar, sonuçlar, **yeniden değerlendirme eşiği** (Bölüm 24). ADR'siz mimari değişiklik PR'ı `REQUEST CHANGES`. |
 | Local geliştirme | `docker compose -f deploy/docker-compose.local.yml up -d` altyapıyı (Postgres, Valkey ×2, RabbitMQ, Alloy/Grafana) kaldırır; servisler IDE'den `local` profiliyle; Testcontainers dev-time desteği (`SpringApplication.from(App::main).with(LocalContainers.class)`) alternatif. Seed verisi `db/seed-local`. `make up / test / lint / check` hedefleri README'de. İlk kurulum 30 dakikayı geçmemeli; geçiyorsa `docs/onboarding.md` güncellenir. |
-| Deploy sırası | Contract, enum veya event tipi ekleyen taraf tüketiciden **önce** deploy edilir |
+| Deploy sırası | Değişiklik türüne göre Bölüm 18.4 tablosu geçerlidir: yeni enum değeri / olay tipi için **tüketici önce**, yeni internal uç için **sağlayıcı önce**, opsiyonel alan eklemede sıra serbest. Yanıtta yeni enum değeri `openapi-diff`'te kırıcı görünür; istemci bilinmeyen değeri tolere eden sürümle önce yayınlanır. |
 | Bağımlılık hijyeni | Renovate/Dependabot haftalık; çeyrekte bir Bölüm 25 EOL kontrolü; destek dışı sürüm PR gate'te uyarı |
 | Dokümantasyon hijyeni | README kimlik/sıcak yol/fail politikası/kapasite tabloları, `docs/ai/repo-context.md`, `docs/versions.md` her release'te; runbook'lar her yeni alarmda; bu referans dokümanı çeyreklik gözden geçirme |
 
@@ -2711,7 +2752,11 @@ class OrderControllerTest {
     private final MockMvc mockMvc = MockMvcBuilders
             .standaloneSetup(new OrderController(orderService))
             .setCustomArgumentResolvers(new CurrentAccountArgumentResolver())
-            .setControllerAdvice(new GlobalServiceExceptionHandler())
+            .setControllerAdvice(new GlobalServiceExceptionHandler(Clock.fixed(NOW, ZoneOffset.UTC)))
+            // Controller'da @GetMapping(version=...) varsa strateji sart; yoksa kurulum
+            // "API version specified, but no ApiVersionStrategy configured" ile kirilir. Her istek API-Version header'i tasir.
+            .setApiVersionStrategy(new DefaultApiVersionStrategy(List.of(new HeaderApiVersionResolver("API-Version")),
+                    new SemanticApiVersionParser(), true, null, true, null, null))
             .build();
 
     private final UUID accountId = UUID.randomUUID();
@@ -2733,8 +2778,11 @@ class OrderControllerTest {
 
     @Test
     void cancel_whenAuthenticatedAccountIsMissing_doesNotReachService() throws Exception {
+        // Kimlik yoklugu istemci girdisi hatasi degildir: platform-security resolver'i 401 ACCOUNT_CONTEXT_REQUIRED doner
+        // (guvenlik katmani duz {code, message} zarfi kullanir; is hatalari Bolum 7'deki zarfi).
         mockMvc.perform(post("/orders/{orderId}/cancel", orderId))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("ACCOUNT_CONTEXT_REQUIRED"));
         verifyNoInteractions(orderService);
     }
 
@@ -2748,6 +2796,8 @@ class OrderControllerTest {
     }
 }
 ```
+
+Kimlikler ayırt edici sentetik sabitlerdir (`aaaaaaaa-…a001`, sahte `bbbbbbbb-…b002`); `randomUUID` ile kimliğin yanlış kaynaktan geldiği ayırt edilemez. Ek zorunlu senaryolar: geçersiz body → 400 + `verifyNoInteractions(service)`; aynı istekte query/header/body'de sahte accountId gönderilir ve servis yalnız `x.accountId` attribute'undaki kimlikle çağrılır (`verify(service, never()).create(eq(spoofed), any(), any())`). **Çalışan hali (seviye 1):** `order-core` web katmanı testleri (20 test, 11 mutasyonun 11'i yakalandı).
 
 ### 23.6 Log Privacy Testi
 
@@ -2780,6 +2830,8 @@ void create_logsOutcomeWithoutAccountIdOrSensitiveInput() {
             .noneMatch(m -> m.contains(accountId.toString()) || m.contains(marker));     // kimlik/hassas veri YOK
 }
 ```
+
+Şablon ret yolunu da kapsar: istemci serbest metni (örn. `sku`) içine CR/LF + sentetik telefon (`+905551234567`), e-posta (`jane.doe@example.com`) ve `token=SECRET-TOKEN-MARKER-…` gömülür. `outcome=REJECTED` satırının ve maskeli hallerin (`+90********67`, `j***@e***.com`, `token=[REDACTED]`) **varlığı**, ham işaretlerle accountId'nin ise rendered mesaj, `getArgumentArray()`, `getMDCPropertyMap()` ve `getThrowableProxy()` zincirinde **yokluğu** assert edilir; yalnız `getFormattedMessage` kontrolü argüman ve exception zincirindeki sızıntıyı görmez.
 
 ### 23.7 Migration
 
@@ -2902,6 +2954,39 @@ Her faz sonunda: uyum raporu güncellenir, ilgili review skill'leri çalıştır
 
 ---
 
+## 27. Kanıt Haritası: Hangi İddia Nasıl Doğrulandı
+
+Bu doküman iki tür ifade taşır: **kural** (ne yapılmalı) ve **iddia** (bu yaklaşım şu koşulda çalışır). İddialar bu tabloda kanıtına bağlanır; kanıtı olmayan iddia açıkça "kanıt yok" diye işaretlenir. Seviyeler Bölüm 19.6'daki gibidir: **Y** yapısal (kural derlenir/ihlal yakalanır), **1** unit/MockMvc, **2** gerçek PostgreSQL/Redis/PgBouncer süreci, **3** iki süreç/uygulama gerçek HTTP/AMQP, **CI** GitHub Actions'ta koştu, **W** web kaynağıyla doğrulandı (Ek B), **S** gerçek Claude Code oturumu.
+
+| İddia (bölüm) | Kanıt | Seviye | Nerede |
+|---|---|---|---|
+| Katman/sınır kuralları makineyle zorlanır (3, 4, 19.5) | ArchUnit 8 kural + enforcer; 8 kasıtlı ihlal yakalandı | Y | `skeleton-example/order-core` `ArchitectureRulesTest` |
+| Hata kodu tekilliği, config drift, secret fallback yasağı (7.2, 15.2) | testler + kasıtlı ihlaller | Y | `ErrorCodeUniquenessTest`, `ConfigDriftTest` |
+| Migration değişmezliği hook + CI (10.2, 19.4) | 13 script testi; hook gerçek yolla exit 2/0; alt klasör fail-open hatası düzeltildi | Y, CI | `blueprint/scripts`, `.github/workflows/skeleton-ci.yml` |
+| Review damgası içerik hash'ine bağlı (19.4, 19.6) | 11 hook senaryosu | Y | `blueprint/.claude/hooks` |
+| Outbox: tekrar teslim tek etki, iki worker, kira devri, lane izolasyonu, üretici sıralaması, backoff/DEAD (11.2) | 13 senaryo + 5 mutasyon | 2 | `platform-messaging` `OutboxBehaviourIT` |
+| Inbox atomikliği ve handler kapsamlı dedup (11.3) | senaryo #22, #25 | 2 | `OutboxBehaviourIT` |
+| Local saga: begin/consume/success CAS, recovery, tombstone, yanıt kaybı, yarış, MANUAL_REVIEW, cleanup (11.4, 11.5) | 19 test, matris 1–20, 6 mutasyon yakalandı + 1 eşdeğer | 2 | `SagaBehaviourIT` |
+| Gömülü PostgreSQL non-root CI runner'da, RabbitMQ 4.3 servis container'ı, test sayısı koruması, SHA-pinli action'lar (16, 18.3) | run 2 yeşil, 44 test, 27 sn | CI | Actions run 36547695286 |
+| Broker senaryoları ve kaos testi (`stop_app`/`start_app`) CI servis container'ında (`docker exec`) | run 36554502553 yeşil; ilk koşu (36552830835) iki sürüme bağlı varsayımı yakaladı: 4.3.6 policy ile gecikmeli retry'ı kabul eder, broker durunca `AmqpIOException` da gelir | CI | Actions run 36554502553 |
+| Sürüm/EOL/CVE iddiaları (2, Ek A) | 30+ kaynak | W | Ek B |
+| Servis JWT filtresi: EdDSA, kid rotasyonu, aud/iss/exp, alg-confusion, path normalize, first-match allowlist, delegasyon matrisi (9.2–9.5) | 94 test; ilk sürümde `/internal;x/...` bypass'ı bağımsız incelemede bulundu, düzeltildi ve teste bağlandı; ikinci inceleme ACCEPT | 1 | `platform-security` |
+| Read-model: kaynak başına revizyon, konumdan tazelik, delta boşluğu, deterministik rebuild (4.6) | 15 test, 6 mutasyon; ACCEPT | 2 | `platform-messaging/readmodel` (`ReadModelBehaviourIT`) |
+| DB rol ayrımı, default privileges, rol zaman aşımları, RLS SET LOCAL, `uuidv7()`, Flyway baseline güvenlik ağı, PgBouncer prepared statements (10.1–10.5) | 15 test gömülü PostgreSQL 18 + gerçek PgBouncer 1.22; uygulama rolünün `flyway_schema_history`'ye yazabilmesi bağımsız incelemede bulundu, `afterMigrate` REVOKE ile kapatıldı; ikinci inceleme ACCEPT | 2/3 | `db-security-example` |
+| Global handler, binding testi, log privacy, ECS log, API versiyonlama + Deprecation/Sunset, SSRF `InetAddressFilter`, lazy connection, `@Retryable`/`@ConcurrencyLimit` (6, 7.3, 8, 9.11, 20) | 20 test, 11/11 mutasyon; bağımsız doğrulama ACCEPT | 1 | `order-core` |
+| Parametre bounded-staleness, soğuk açılış, `freshGroupSince`, staleness metriği (14.3) | 23 test, 6/6 mutasyon; ACCEPT | 1 | `platform-parameters` |
+| Redis Lua fixed-window rate limit, TTL iyileşmesi, `NOSCRIPT`, fail-open/closed, kopuk bağlantı gecikmesi (9.6) | 15 test gerçek Redis 7 ile, 12/12 mutasyon; ACCEPT | 2 | `rate-limit-example` |
+| Modulith `verify()` + negatif test, event publication registry atomikliği ve en-az-bir-kez teslimi, 2.1.1 `withMinAge` hatası (1.1, 11.2, 16) | 12 test, gömülü PostgreSQL 18; 5/5 mutasyon; ACCEPT | 1/2 | `modulith-example` |
+| OpenAPI üretimi + openapi-diff kırıcı değişiklik yakalama (16, 18.4, 20) | 16 test: baseline gate'i, 8 varyant, araç sınırları sabitlendi (3.1 tip körlüğü, opsiyonel istek alanı adı, operationId); 9 mutasyon, 8 yakalandı + 1 beklenen uyumlu; ACCEPT | 1 | `contract-example` |
+| gitleaks (geçmiş + çalışma ağacı, tarama hatası ayrımı) + config-lint (15.3, 18.3, 19.5) | 30 test, 10/11 mutasyon; CI adımları fail-closed; ACCEPT | Y | `blueprint/scripts` |
+| İki uygulama arası saga, timeout/circuit breaker/bulkhead, delegasyon, restart (4.7, 9.2.1, 11.4) | *sprint koşuyor* | 3 | `runtime-example` (bekleniyor) |
+| RabbitMQ 4.3: confirms+returns, QQ+DLQ, native delayed retry, ack-after-commit, streams replay, consumer-timeout, broker down (12.3, 12.4) | 12 senaryo PASS: yerelde 4.3.0, CI'da 4.3.6 (Actions run 36554502553); 6 mutasyon yakalandı, 1 eşdeğer mutasyon açıklandı | 3 | `broker-example/BrokerBehaviourIT` |
+| Hook'lar ve skill'ler gerçek Claude Code oturumunda (19.3, 19.4) | Headless `claude -p` oturumunda migration hook'u engelledi, review-gate sordu, damga skill çağrısıyla yazıldı; 7 kusur bulundu ve düzeltildi (hook alt dizin fail-open'ı dahil) | S | `blueprint/README.md` gerçek oturum tablosu |
+| 12 review skill'i gerçek bir PR'da (19.3) | Tohumlanmış kusurlu PR'da 67 beklenen eşleşmeden 63'ü yakalandı, 3 tuzağın hiçbiri işaretlenmedi; kaçırılanlar skill metinlerine işlendi (revize metin yeniden koşulmadı) | S | doguyaras/doguyaras PR #1 özet yorumu |
+| **Kanıtı olmayanlar** | — | — | `docker-rollout` sıfır kesinti (Docker yok), deploy script/rollback provası, Debezium CDC, WebSocket/Redis fan-out, ScyllaDB/OpenSearch eşikleri, k6 yük testi, SOPS/OpenBao akışı, App Store/Play doğrulama, KVKK silme saga'sı uçtan uca. Bunlar projede yazılır; bu referans yalnız desenleri verir. |
+
+---
+
 ## Ek A — Sürüm Notları (tarihli anlık görüntü)
 
 > **Anlık görüntü tarihi: 2026-09.** Bu ek, dokümanın kural bölümlerinden ayrı tutulur: kurallar (Bölüm 25) değişmez, aşağıdaki sürümler ve tarihler eskir. Yeni projeye başlarken bu tablo kaynaklardan yeniden doğrulanır ve projede `docs/versions.md` olarak tarihli kopyalanır. Bölüm 2'deki sürüm numaraları da bu tarihe aittir.
@@ -2958,6 +3043,8 @@ Bu ekteki tarih ve sürüm iddiaları aşağıdaki kaynaklardan doğrulandı; ka
 | RFC 9745 Deprecation header, RFC 8594 Sunset | rfc-editor.org/info/rfc9745 |
 | PIT 1.30 (2026-08), JUnit 5 plugin | pitest.org, github.com/hcoles/pitest |
 | `docker-rollout` (wowu) aktif | github.com/wowu/docker-rollout |
+| CI şablonu gerçek GitHub Actions'ta koştu: gömülü PostgreSQL non-root runner'da, `rabbitmq:4.3-management` servis container'ı (4.3.6 / Erlang 27.3.4), 44 test, tam build 27 sn; hook kuru çalıştırması gerçek yollarla yeşil | github.com/doguyaras/doguyaras/actions/runs/36547695286 (run 2; run 1'deki kırmızı, CI adımının kendi tasarım hatasıydı) |
+| Flyway immutability hook'unda alt klasör (monorepo) fail-open hatası bulundu ve düzeltildi | `blueprint/scripts/flyway-immutability.js` `checkFile`, regresyon testi `flyway-immutability.test.js` (13 test) |
 | Hibernate `@UuidGenerator(style = VERSION_7)` (6.5+) | docs.hibernate.org UuidVersion7Strategy |
 
 ---
@@ -2977,6 +3064,8 @@ Bu ekteki tarih ve sürüm iddiaları aşağıdaki kaynaklardan doğrulandı; ka
 - `docs/ai/review-checklist.md`
 - `docs/ai/operation-consistency.md`
 - `docs/adr/0000-template.md`
+- `docs/versions.md`
+- `.github/workflows/ci.yml`
 - `.agents/skills/proj-api-contract-review/SKILL.md`
 - `.agents/skills/proj-architecture-boundary-review/SKILL.md`
 - `.agents/skills/proj-client-integration-doc/SKILL.md`
@@ -3000,6 +3089,14 @@ Bu ekteki tarih ve sürüm iddiaları aşağıdaki kaynaklardan doğrulandı; ka
 - `.claude/hooks/tree-state.sh`
 - `scripts/flyway-immutability.js`
 - `scripts/flyway-immutability.test.js`
+- `scripts/config-lint.js`
+- `scripts/config-lint.test.js`
+- `scripts/gitleaks-check.sh`
+- `scripts/gitleaks-check.test.js`
+- `scripts/fixtures/config-lint/application-local.yml`
+- `scripts/fixtures/config-lint/prod.env.example`
+- `scripts/fixtures/config-lint/service-bad.yml`
+- `scripts/fixtures/config-lint/service-ok.yml`
 - `tests/ArchitectureRulesTest.java`
 - `tests/ErrorCodeUniquenessTest.java`
 - `tests/ConfigDriftTest.java`
@@ -3018,7 +3115,8 @@ blueprint/
 ├── CLAUDE.md                         # Yalnız AGENTS.md'ye yönlendirir
 ├── .github/
 │   ├── copilot-instructions.md       # Yalnız AGENTS.md'ye yönlendirir
-│   └── PULL_REQUEST_TEMPLATE.md      # Çalıştırılan review skill'leri ve kararları burada kayda geçer
+│   ├── PULL_REQUEST_TEMPLATE.md      # Çalıştırılan review skill'leri ve kararları burada kayda geçer
+│   └── workflows/ci.yml              # PR gate: SHA-pinli action'lar, script/hook kuru çalıştırma, mvn verify (gömülü PG), RabbitMQ servis container'ı, test sayısı koruması — gerçek Actions'ta doğrulandı
 ├── docs/
 │   ├── ai/
 │   │   ├── repo-context.md           # Modül haritası, portlar, stack, yüksek sinyalli dosyalar, sıcak yol tablosu
@@ -3026,6 +3124,7 @@ blueprint/
 │   │   ├── context-boundaries.md     # Token ekonomisi: hariç klasörler, şartlı açılacak yüzeyler
 │   │   ├── review-checklist.md       # Değişiklik sonrası kontrol listesi (skill'lere link)
 │   │   └── operation-consistency.md  # Servisler arası tutarlılık standardı (outbox / event / saga)
+│   ├── versions.md                   # Tarihli sürüm/destek anlık görüntüsü (kurallar referans Bölüm 25'te)
 │   └── adr/
 │       └── 0000-template.md          # Architecture Decision Record şablonu
 ├── .agents/skills/                   # TEK KAYNAK — .claude/skills buna symlink'tir
@@ -3049,8 +3148,12 @@ blueprint/
 │       ├── review-stamp.sh           # PostToolUse(Skill): damga = epoch + çalışma ağacı içerik hash'i
 │       └── tree-state.sh             # ortak: git write-tree ile içerik kimliği (commit atmak damgayı bozmaz, dosya değiştirmek bozar)
 ├── scripts/
-│   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım
-│   └── flyway-immutability.test.js   # node --test
+│   ├── flyway-immutability.js        # Kuralın TEK kaynağı: CI + hook + elle kullanım (alt klasör/monorepo fail-open hatası düzeltildi)
+│   ├── flyway-immutability.test.js   # node --test (13 test)
+│   ├── config-lint.js                # Secret hijyeni: ${ENV:literal} fallback, local dışı düz secret, local-only "# lint:allow-secret-fallback <gerekçe>" (0/1/3)
+│   ├── config-lint.test.js           # node --test (20 test) + fixtures/config-lint/ (4 dosya)
+│   ├── gitleaks-check.sh             # gitleaks sarmalayıcısı: history (git) + tree (dir), --redact; "tarama yapılamadı" ≠ "temiz" (0/1/3)
+│   └── gitleaks-check.test.js        # GITLEAKS=<ikili> node --test (8 test; gerçek gitleaks 8.24.3, geçici git depoları)
 ├── tests/                            # Makine zorlamalı kurallar için Java test şablonları (skeleton-example'da doğrulandı)
 │   ├── ArchitectureRulesTest.java    # ArchUnit (düz @Test): katmanlar, controller→repository yok, core→core yok, config/, @Valid, döngü yok
 │   ├── ErrorCodeUniquenessTest.java  # Tüm ErrorCode enum'larında global tekillik + blok + mesaj formatı
@@ -3065,7 +3168,7 @@ blueprint/
 
 | Seviye | Ne | Durum |
 |---|---|---|
-| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (12 test); hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
+| **Yapısal** (kural derlenir, ihlal yakalanır) | `scripts/flyway-immutability.js` (13 test; alt klasör regresyonu dahil); `scripts/config-lint.js` (20 test: fallback, boş/iç içe fallback, düz secret, local profil, allow işareti, çoklu dosya, 0/1/3; skeleton config'i temiz) ve `scripts/gitleaks-check.sh` (8 test, gerçek gitleaks 8.24.3: gömülü sahte AWS anahtarı + private key → 1, temiz → 0, silinmiş secret yalnız geçmişte, depo değil → 3; skeleton ağacı ve repo geçmişi → 0) — 11 mutasyonun 10'u yakalandı, 1'i eşdeğer; hook'lar (11 senaryo: damga yok / damga var / içerik değişti / commit sonrası damga geçerli / ignore edilen dosya / eski biçim / git yok); `tests/*.java` + enforcer (`skeleton-example` içinde `mvn test`, pozitif + 8 kasıtlı ihlal) | **Doğrulandı** (2026-09-29) |
 | **Davranışsal** (sistem koşarken tutarlılık güvenceleri) | outbox tekrar teslimi çift iş üretmez, iki worker aynı satırı işlemez, kira devri, inbox atomikliği, üretici sıralaması, lane izolasyonu, backoff/DEAD; saga: replay, eşzamanlı aynı key, çökme noktaları, yanıt kaybı, tombstone, istek-recovery yarışı, MANUAL_REVIEW, cleanup | **Doğrulandı** (2026-09-29, seviye 2, gerçek PostgreSQL 17.5, gömülü/Docker'sız): `OutboxBehaviourIT` 13 senaryo + `SagaBehaviourIT` 19 test (matris 1–20 + 21–32'nin outbox/inbox kısmı); 11 kasıtlı regresyon yakaladı (1 eşdeğer mutasyon). **Koşturulmadı:** katılımcı HTTP/JWT katmanı ve broker ile yeniden teslim (seviye 3), staging provası (seviye 4) — projede P0 çıkış koşulu |
 | **Skill'ler** | 12 skill metni | Gerçek bir PR üzerinde Claude Code oturumunda henüz koşturulmadı; ilk kullanımda karar formatlarının uyumu gözden geçirilir |
 
@@ -3074,16 +3177,38 @@ Yapısal `PASS` davranışsal `PASS` değildir; uyum raporu ve PR şablonu ikisi
 #### Kurulum
 
 ```bash
-cp -r blueprint/. <yeni-repo>/
+rsync -a --exclude 'skeleton-example/*/target' blueprint/ <yeni-repo>/      # build artefaktları kopyalanmaz (rsync yoksa: cp -r blueprint/. <yeni-repo>/ && rm -rf <yeni-repo>/skeleton-example/*/target)
+cp docs/mikroservis-mimari-referans.md <yeni-repo>/docs/                     # AGENTS.md ve skill'ler bu dosyaya "referans Bölüm N" diye gönderir
 cd <yeni-repo>
+for d in .agents/skills/proj-*; do mv "$d" ".agents/skills/<proje>-${d##*/proj-}"; done   # Claude Code skill'i KLASÖR adıyla kaydeder; yalnız frontmatter'ı değiştirmek yetmez
 grep -rl "proj-\|<proje>" . --exclude-dir=.git | xargs sed -i 's/proj-/<proje>-/g; s/<proje>/<proje-adı>/g'
-ln -s ../.agents/skills .claude/skills          # kopya değil, symlink
+ln -s ../.agents/skills .claude/skills          # kopya değil, symlink (CLI symlink'i takip eder — gerçek oturumda doğrulandı)
 chmod +x .claude/hooks/*.sh
 echo '.claude/.last-review-check' >> .gitignore   # review damgası yerel; commit'lenmez
+export FLYWAY_BASE_REF=origin/develop            # (opsiyonel) base branch adı; yoksa sırayla origin/develop, origin/main, origin/master, develop, main, master denenir
 node --test scripts/flyway-immutability.test.js  # script'in kendi testleri
+node --test scripts/config-lint.test.js          # config lint testleri (skeleton-example silindiyse son test yolunu uyarla)
+GITLEAKS=$(command -v gitleaks) node --test scripts/gitleaks-check.test.js && bash scripts/gitleaks-check.sh all .
 bash -n .claude/hooks/review-gate.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # hook kuru çalıştırma → "ask"
 echo '{"tool_input":{"skill":"proj-security-review"}}' | .claude/hooks/review-stamp.sh && echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh   # damga sonrası → sessiz (izin)
 ```
+
+#### Gerçek Claude Code oturumunda doğrulananlar (2026-09-29, claude 2.1.284, headless `claude -p`)
+
+| Test | Sonuç |
+|---|---|
+| Base'teki `V1__init.sql`'e Edit denemesi | PreToolUse hook exit 2 ile engelledi; model hook mesajını aynen aktardı; dosya değişmedi |
+| Yeni `V2__*.sql` yazma | Hook sessizce izin verdi (exit 0), dosya oluştu |
+| Review çalışmadan `git push` | review-gate "ask" → headless modda reddedildi; remote değişmedi |
+| Aynı içerikte review sonrası `git push` | sessiz izin; remote güncellendi |
+| Review sonrası içerik değişince `git push` | "içerik değişti" gerekçesiyle yeniden sordu |
+| `CLAUDE.md` → `AGENTS.md` yönlendirmesi | model AGENTS.md'yi okuyup 5. kuralı (sıcak yol) doğru aktardı |
+| Skill keşfi | 12 `proj-*` skill symlink üzerinden yüklendi |
+| `/proj-db-migration-review` slash komutu | skill formatında tam rapor üretti (immutability komutunu koştu, `Nihai karar` ile bitti) — ama **damga yazılmadı**: kullanıcı slash komutu Skill aracını çağırmaz. Düzeltme: `UserPromptSubmit` hook'u eklendi (settings.json); damga artık her iki yolda yazılır |
+
+Bulunan diğer kusurlar ve düzeltmeleri: skill klasör adları `sed` ile değişmiyordu (Kurulum'a `mv` adımı eklendi); referans doküman blueprint kopyasında yoktu ve ajan onu aramakla tur harcadı (Kurulum'a `cp` adımı, AGENTS.md'ye "yoksa net kanıt bulunamadı yaz" notu); hook mesajı base bulunamayınca `origin/develop` yazıyordu (gerçek kullanılan ref yazılır); dar `--allowedTools` ile `; echo $?` gibi bileşik komutlar reddediliyordu (settings.json'a okuma amaçlı `permissions.allow` listesi eklendi; script'ler zaten `OK/IHLAL/DOGRULANAMADI` basar, çıkış kodu yakalamak gerekmez). Headless kullanımda review skill'i için `--max-turns` ≥ 25 verilmelidir (okuma sırası + komutlar 19–29 tur sürdü).
+
+**Headless/CI'da `permissions.allow` (D7):** Claude Code 2.1.284, **güvenilmemiş** (ilk kez açılan) bir çalışma alanında `.claude/settings.json`'daki `permissions.allow` girdilerini yok sayar (`Ignoring 19 permissions.allow entries … this workspace has not been trusted`) ve `node scripts/flyway-immutability.js …` gibi komutlar onaya düşer → `-p` modunda reddedilir. Taze clone ve CI container'ı her zaman güvenilmemiştir. Doğrulanmış iki çözüm: `claude -p … --settings .claude/settings.json` (hook'lar çift koşmaz) **veya** çalışma alanını bir kez güvenilir işaretlemek (`~/.claude.json` → `projects["<mutlak yol>"].hasTrustDialogAccepted: true`, ya da bir kez etkileşimli açmak). Yeniden doğrulama (2026-09-29): slash komutu damgası UserPromptSubmit ile yazıldı, klasör adı değiştirilen `acme-*` skill'ler CLI'da listelendi, hook mesajı gerçek base'i (`origin/main`) ve HEAD fallback'ini doğru gösterdi, referans doküman kopyalanınca ajan aramaya tur harcamadı.
 
 #### İlkeler
 
@@ -3114,7 +3239,7 @@ Bu dosya tüm AI kodlama ajanları (Claude Code, Codex, Copilot, Cursor vb.) iç
 | Değişiklik bitince | `docs/ai/review-checklist.md` (hangi skill'ler çalışacak) |
 | Servisler arası yazma, outbox, event, saga | `docs/ai/operation-consistency.md` |
 | Mimari karar (yeni servis, yeni altyapı bileşeni, veri ayrımı) | `docs/adr/` (mevcut ADR'leri oku, yenisini şablondan aç) |
-| Mimari referans (nasıl inşa edilir) | `docs/mikroservis-mimari-referans.md` — yalnız ilgili bölüm |
+| Mimari referans (nasıl inşa edilir) | `docs/mikroservis-mimari-referans.md` — yalnız ilgili bölüm. Dosya repoda yoksa **aramaya tur harcama**: ilgili maddeyi "net kanıt bulunamadı (referans yok)" diye işaretle ve `docs/ai/*` ile devam et |
 
 #### 2. Temel Kurallar
 
@@ -3533,12 +3658,13 @@ Repo'nun dosya sayısı/boyutu gibi hızlı değişen sayılar.
 | Yeni event/komut, envelope, tüketici, şema değişikliği | `proj-event-design-review` | |
 | Release PR (`release`/`main`'e) | `proj-release-readiness-review` | |
 
-#### 2. Makine kontrolleri (CI'da; lokalde de çalıştırılır)
+#### 2. Makine kontrolleri (CI'da; lokalde de çalıştırılır; komutlar proje kökünden çalışır, bu repoda `blueprint/`)
 
 ```bash
 mvn -B -ntp verify -pl <değişen modüller> -amd          # testler + ArchUnit + ErrorCode tekilliği + config drift
 node scripts/flyway-immutability.js check --base origin/<hedef>
-gitleaks detect --no-banner
+node scripts/config-lint.js <değişen *.yml / *.properties / *.env* dosyaları>   # secret key'de ${ENV:literal} fallback ve local dışı düz secret yok (0/1/3)
+bash scripts/gitleaks-check.sh all .                   # gitleaks 8.24.3: tüm geçmiş (git) + çalışma ağacı (dir), --redact (0/1/3)
 npm --prefix <panel>-web run lint && npm --prefix <panel>-web run build && npm --prefix <panel>-web test
 ```
 
@@ -3683,6 +3809,139 @@ Bu karar şu metrik/olay gerçekleşince yeniden açılır: …
 
 ---
 
+### `docs/versions.md`
+
+### versions.md — Sürüm ve Destek Anlık Görüntüsü
+
+> **Tarih:** <YYYY-MM-DD> (çeyrekte bir güncellenir; `proj-release-readiness-review` bu tarihi kontrol eder). Kurallar mimari referans Bölüm 25'te; bu dosya yalnız **sayıları ve tarihleri** taşır. Kaynağı olmayan satır yazılmaz.
+
+| Bileşen | Kullanılan sürüm | OSS destek sonu | Kaynak | Not |
+|---|---|---|---|---|
+| Java | 25 LTS | – (LTS) | endoflife.date/oracle-jdk | |
+| Spring Boot | 4.1.x | 2027-07-31 | spring.io/projects/spring-boot#support | 4.0.x: 2026-12-31 |
+| Spring Cloud | 2025.1.x | Boot 4.1 hattıyla | github.com/spring-cloud/spring-cloud-release/wiki/Supported-Versions | 2026.0 → Boot 4.2 |
+| Spring Modulith (şekil A/C) | 2.1.x | – | spring.io/projects/spring-modulith | |
+| PostgreSQL | 18.x | 2030-11 | postgresql.org/support/versioning | |
+| Valkey / Redis | 9.x / 8.x | – | valkey.io, redis.io/legal/licenses | lisans: BSD / AGPLv3 |
+| RabbitMQ | 4.3.x | en yeni minor community | rabbitmq.com/release-information | Erlang 27.x; `khepri_db` |
+| Grafana Alloy / Loki / Tempo | 1.x / 3.x / 2.x | – | GitHub releases | Promtail EOL 2026-03-02 |
+| Testcontainers | 2.x | – | GitHub releases | `testcontainers-` önekli artefaktlar |
+| Node (panel/CI) | 24 LTS | 2028-04-30 | nodejs.org/en/about/eol | |
+| Docker base image | eclipse-temurin:25-jre | – | hub.docker.com | Renovate |
+
+**Bilinen CVE tetikleyicileri** (yaması yalnız ticari sürümde olan → upgrade): <liste veya "yok">
+
+**Son kontrol komutları:** `mvn versions:display-dependency-updates`, Renovate panosu, `osv-scanner`.
+
+---
+
+### `.github/workflows/ci.yml`
+
+```yaml
+# PR gate (referans Bolum 18.3, 16, 19.5). Bu dosya blueprint'in kopyalanabilir sablonudur; repo koku = proje koku varsayar.
+# Kurallar: (1) ucuncu taraf action'lar 40 karakterlik commit SHA'ya pinli (tag'ler mutable; tj-actions olayi 2025),
+#           (2) permissions en dar, (3) gercek DB testleri her PR'da kosar (gomulu PostgreSQL veya Testcontainers),
+#           (4) mimari/tutarlilik testleri "0 test = basarisiz" (failIfNoTests + toplam sayi korumasi),
+#           (5) migration degismezligi PR'in base'ine karsi, (6) hook'lar kuru calistirilir (bozuk hook = sessiz gate).
+# Dogrulama: ayni yapi doguyaras/doguyaras deposunda .github/workflows/skeleton-ci.yml olarak gercek GitHub Actions'ta kostu
+# (RabbitMQ 4.3 servis container'i, gomulu PostgreSQL 18, 56+ test; broker senaryolari dahil ~2 dk).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [develop, release, main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts-and-hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '24' }
+      - name: gitleaks ikilisi (surum sabit; testler ve tarama ayni ikiliyi kullanir)
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          echo "GITLEAKS=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
+      - name: script testleri (immutability, config-lint, gitleaks sarmalayicisi)
+        # "test -f ... || true" kalibi kullanilmaz: script varken test kirmizisini da yutar (fail-open).
+        run: |
+          node --test scripts/flyway-immutability.test.js
+          node --test scripts/config-lint.test.js
+          node --test scripts/gitleaks-check.test.js
+      - name: migration degismezligi (PR base'ine karsi)
+        if: github.event_name == 'pull_request'
+        run: node scripts/flyway-immutability.js check --base "origin/${{ github.base_ref }}"
+      - name: config lint (secret fallback / literal secret yok)
+        # dosya listesi bossa script exit 3 verir (dogrulanamadi); glob'lar proje yerlesimine gore uyarlanir
+        run: node scripts/config-lint.js $(git ls-files 'services/*/*/src/main/resources/*.yml' 'services/*/*/src/main/resources/config/*.yml' 'deploy/*.env*')
+      - name: hook kuru calistirma (bozuk hook sessizce etkisiz kalmasin)
+        run: |
+          set -euo pipefail
+          export CLAUDE_PROJECT_DIR="$PWD"
+          export FLYWAY_BASE_REF=HEAD   # kuru calistirma: HEAD agacindaki V dosyasi "base'te var" sayilsin (repo'nun gercek base branch'inden bagimsiz)
+          for h in .claude/hooks/*.sh; do bash -n "$h"; done
+          OUT=$(echo '{"tool_input":{"command":"git push"}}' | .claude/hooks/review-gate.sh)
+          echo "$OUT" | grep -q '"permissionDecision":"ask"' || { echo "review-gate sormadi"; exit 1; }
+          # base'te var olan bir V dosyasi: hook engellemeli (exit 2)
+          FIRST=$(git ls-files '*/db/migration/V*.sql' | head -1)
+          if [ -n "$FIRST" ]; then
+            if echo '{"tool_input":{"file_path":"'"$PWD/$FIRST"'"}}' | node .claude/hooks/flyway-immutability.js; then echo "hook base migration'a izin verdi"; exit 1; fi
+          fi
+          # yeni V dosyasi: serbest (exit 0)
+          echo '{"tool_input":{"file_path":"'"$PWD"'/x/src/main/resources/db/migration/V9999__new.sql"}}' | node .claude/hooks/flyway-immutability.js
+      - name: gitleaks (tum gecmis + calisma agaci; 0 temiz, 1 bulgu, 3 dogrulanamadi)
+        run: bash scripts/gitleaks-check.sh all .
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:4.3-management
+        ports: ['5672:5672', '15672:15672', '5552:5552']
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - name: testlerin kullandigi yerel ikililer (redis-server, pgbouncer)
+        run: sudo apt-get update -q && sudo apt-get install -y -q redis-server pgbouncer && (sudo systemctl stop redis-server pgbouncer || true)
+      - name: build + test (gercek DB testleri dahil; ArchUnit, ErrorCode tekilligi, config drift, gercek broker senaryolari)
+        env:
+          BVT_RABBITMQCTL: docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl   # kaos senaryosu (stop_app/start_app) servis container'inin icinde kosar
+          BVT_RABBITMQ_NODE: local                                                   # container icinde yerel node; "-n" verilmez
+        run: mvn -B -ntp verify
+      - name: toplam test sayisi korumasi (sessiz kucultme yok; esik projeye gore)
+        run: |
+          total=$(grep -ho 'tests="[0-9]*"' $(find . -path '*/target/surefire-reports/TEST-*.xml') | grep -o '[0-9]*' | paste -sd+ | bc)
+          echo "toplam test: $total"; test "$total" -ge "${MIN_TESTS:-40}"
+      - name: OpenAPI ciktisi ve diff (contract-example'daki gibi CI-style test zaten verify icinde kosar)
+        run: echo "openapi-diff testleri verify asamasinda kostu"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with: { name: surefire-reports, path: '**/target/surefire-reports/' }
+
+  frontend:
+    if: hashFiles('**/package.json') != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '24', cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - run: npm ci && npm run lint && npx tsc -b && npm test && npm run build
+        working-directory: ${{ vars.PANEL_DIR || 'panel-web' }}
+```
+
+---
+
 ### `.agents/skills/proj-api-contract-review/SKILL.md`
 
 ---
@@ -3690,7 +3949,9 @@ name: proj-api-contract-review
 description: Use this skill when reviewing API contracts — DTO placement, api/core dependency direction, backward compatibility for mobile/panel/internal callers, HTTP parameter binding, OpenAPI diff and versioning.
 ---
 
-Contract değişikliğini mimari referans Bölüm 3.3, 5.3–5.4, 6 ve 20'ye göre incele. OpenAPI diff çıktısı varsa önce onu oku. Sorun yoksa: **"Bu kapsamda contract bulgusu yok."**
+Contract değişikliğini `docs/mikroservis-mimari-referans.md` Bölüm 3.3, 5.3–5.4, 6 (özellikle 6.2 zarf, 6.4 idempotency, 6.5 kimlik, 6.7 cache, 6.8 internal client), 18.4 (rollout) ve 20'ye göre incele; internal çağıran için `docs/ai/repo-context.md` Bölüm 3.1 delegasyon matrisine bak. OpenAPI diff çıktısı (CI artefaktı veya PR yorumu) varsa önce onu oku; yoksa `git diff <base>...<head> -- '*-api/**' '**/controller/**'` ile DTO ve controller imzalarını karşılaştır ve raporda "OpenAPI diff yok, elle çıkarıldı" yaz. Sorun yoksa: **"Bu kapsamda contract bulgusu yok."**
+
+Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity: `BLOCKER` = çalışan istemciyi mevcut sürümde kıran ve rollout planı olmayan değişiklik → `BLOCK`; `HIGH` = versiyonsuz breaking veya hesap kimliğinin istemciden alınması → `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez (yalnız bunlar varsa `APPROVE WITH NON-BLOCKING COMMENTS`).
 
 Kontrol et:
 
@@ -3698,14 +3959,14 @@ Kontrol et:
 - Servisler arası DTO/enum/event payload'ı hedefin `<domain>-api` modülünde (`com.<org>.<domain>.api.*`); core'da kopyası yok.
 - `*-api` hiçbir `*-core`'a bağımlı değil; `*-core` başka `*-core`'a bağımlı değil (enforcer).
 - Entity dışarı açılmıyor; `toResponse` ile DTO.
-- Servisler arası okunan DTO'da `@NoArgsConstructor` (Jackson).
-- Event payload'ı `api/event` altında; CloudEvents attribute'ları platform'dan.
+- Servisler arası okunan DTO Lombok sınıfıysa `@NoArgsConstructor` (Jackson); Java record ise gerekmez.
+- Event payload'ı `api/event` altında bir record (string literal JSON değil); yayın platform outbox'ı üzerinden ve `type/source/id/time` attribute'ları ile.
 
 #### Geriye uyumluluk
 - Alan silme/yeniden adlandırma/tip değişimi/zorunlu alan ekleme = **breaking**. Etkilenen çağıranlar: mobil (mağazadaki eski sürüm aylarca yaşar), panel, internal client'lar, event tüketicileri.
 - Breaking ise: yeni versiyon (`/v2` veya yeni `type`), eski versiyon sunset tarihiyle yaşıyor, ADR var.
 - Enum'a yeni değer: tüketiciler bilinmeyen değeri tolere ediyor (`from()` fallback); **tüketici önce deploy**.
-- Yanıt zarfı tutarlı (hata her zaman zarflı; başarı için tek karar); 200 ile `success=false` yok.
+- Yanıt zarfı: projenin 6.2 kararına bak (`ApiResponse<T>{ok,data,error}` veya ham); hata her zaman zarflı; 200 ile `success=false` yok. Mevcut doğru örnekten sapan ucu işaretle, doğru ucu karşılaştırma için kusurlu sayma.
 - Hata kodları servisin bloğunda ve global tekil; istemci kod→mesaj tablosu güncellendi (contract testi).
 - Sayfalama: boyut sınırı, sıralama allowlist, keyset alanları tutarlı.
 
@@ -3714,23 +3975,28 @@ Kontrol et:
 - `required`/`defaultValue` bilinçli; opsiyonel parametre `Optional` veya default.
 - Binding gerçek MVC üzerinden test edilmiş (`MockMvc standaloneSetup`; geçersiz tip 400 ve servise ulaşmıyor).
 - Idempotent uçlar `X-Idempotency-Key` alıyor; UUID tipiyle bağlanmış.
-- Kimlik `@CurrentAccount`; path/body'de hesap kimliği yok.
+- Kimlik `@CurrentAccount`; path/query/body'de hesap kimliği yok; `@CurrentAccount` için bir `HandlerMethodArgumentResolver` `WebMvcConfigurer.addArgumentResolvers` ile kayıtlı mı (yoksa parametre query'den bağlanır → IDOR/500; dosya:satır ile kanıtla)?
 
 #### Path ve isim
 - Kaynak çoğul kebab-case; fiiller yalnız durum geçişi alt kaynaklarında (`/{id}/cancel`); güncelleme `PUT/PATCH`; versiyon prefix'i var.
 - Internal uç `/internal/<kaynak-çoğul>/...`; public/internal karışmıyor.
 
 #### OpenAPI ve istemci
-- OpenAPI diff: breaking değişiklik işaretli mi; istemci client generate ediliyor mu; `docs/<client>-<feature>-integration-vN.md` gerekli mi (→ `proj-client-integration-doc`).
+- OpenAPI diff: breaking değişiklik işaretli mi; istemci client generate ediliyor mu.
+- Breaking değişiklik veya yeni public uç varsa `docs/<client>-<feature>-integration-vN.md` var mı? Yoksa ayrı bulgu yaz (dosya: eksik doküman yolu) ve `proj-client-integration-doc`'a yönlendir.
+- PR gövdesindeki "breaking" ve "istemciyi etkiliyor" beyanlarını diff kanıtıyla karşılaştır; yanlışsa bulgu yaz.
+- Makine kontrollerini koş (proje kökünden; bu repoda `blueprint/`): `mvn -B -ntp -pl <svc>-core -am test -Dtest=ArchitectureRulesTest,ErrorCodeUniquenessTest -Dsurefire.failIfNoSpecifiedTests=false`; FAIL olan kural bulgunun kanıtıdır. Not: `-am` ile upstream modülde `failIfNoTests=true` sabitse filtreli koşu düşer; `-fn` ekle veya filtresiz `test` koş.
 - Örnek değerler ve açıklamalar üretilen OpenAPI'de anlamlı (springdoc anotasyonları).
 
 Çıktı:
-1. **Contract risk seviyesi:** `HIGH` / `MEDIUM` / `LOW` / `OK`.
+1. **Contract risk seviyesi:** `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `OK`.
 2. **Breaking-change riski:** evet/hayır + gerekçe; etkilenen çağıranlar (mobil / panel / internal / event tüketicileri).
 3. **Yerleşim/bağımlılık bulguları:** `dosya:satır · kanıt · düzeltme`.
 4. **Binding bulguları:** `dosya:satır · kanıt · düzeltme · eksik test`.
+4b. **Uyumluluk/zarf/hata kodu bulguları** ve **Event contract bulguları:** aynı biçim (checklist'in geriye uyumluluk, zarf, hata kodu, event payload, idempotency maddeleri).
 5. **Daha güvenli yapı önerisi** (breaking ise versiyonlama/çift yayın planı).
-6. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`.
+6. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK` (kriterler yukarıdaki severity satırında).
+7. **Kapsam dışı gözlemler** (→ ilgili skill): tek satır. Uzun kanıtlarda bulgular çok satırlı madde işaretli yazılabilir.
 
 ---
 
@@ -3741,7 +4007,8 @@ name: proj-architecture-boundary-review
 description: Use this skill before writing code that touches another module's data, adds a cross-service dependency, a new HTTP client, a read-model, or changes api/core dependency direction — and when reviewing such changes.
 ---
 
-Modül sınırı ihlallerini ve bağımlılık yönünü `AGENTS.md` Bölüm 4–5, `docs/ai/operation-consistency.md` ve mimari referans Bölüm 1.1/3.3/4.6/10.1'e göre incele. Bu skill **kod yazılmadan önce** de çalıştırılır: ihtiyaç bir sınırı aşıyorsa alternatif önerilir ve kullanıcıya sorulur. Sorun yoksa: **"Bu kapsamda sınır bulgusu yok."**
+Modül sınırı ihlallerini ve bağımlılık yönünü `AGENTS.md` Bölüm 4–5, `docs/ai/operation-consistency.md`, `docs/ai/repo-context.md` Bölüm 2 (servis kimlik tablosu), 3 (sıcak yol), 3.1 (delegasyon matrisi) ve mimari referans (yolu `AGENTS.md` Bölüm 1'de; bu repoda `docs/mikroservis-mimari-referans.md`) Bölüm 1.1/3.3/4.6/5.6/10.1'e göre incele. Bu skill **kod yazılmadan önce** de çalıştırılır: ihtiyaç bir sınırı aşıyorsa alternatif önerilir ve kullanıcıya sorulur. Sorun yoksa: **"Bu kapsamda sınır bulgusu yok."** Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity: `BLOCKER` = veri sahipliği/bağımlılık yönü ihlali (`BLOCK` kuralları) → `BLOCK`; `HIGH` → `REQUEST CHANGES`; `MEDIUM`/`LOW` → `REQUEST CHANGES` veya gerekçeli `APPROVE`.
+Sınırla iç içe bulguları (saga → operation-consistency, outbox/routing → event-design, timeout/CB/retry → resilience, kimlik kaynağı → security) tek satırda ilgili skill'e devret; kararı yalnız sınır bulguları belirler.
 
 Kontrol et:
 
@@ -3749,7 +4016,7 @@ Kontrol et:
 - Başka modülün tablosu, şeması, repository'si, entity'si, migration'ı okunuyor/yazılıyor mu? (native SQL'de başka şema adı, JPQL'de başka modül entity'si, `@Table(schema=…)` uyuşmazlığı). Yönetim servisi de dahil. **Varsa `BLOCK`.**
 - Cross-schema FK/join var mı?
 - DB rolü hatası "GRANT" ile mi çözülmüş? (**`BLOCK`**)
-- Başka servisin verisi gerekiyorsa hangi yol seçilmiş: (a) hedefin public/internal API'si (yalnız yazma/rezervasyon türü, sıcak yol dışı okuma), (b) event ile read-model, (c) JWT claim. Sıcak yolda (a) ile okuma → `REQUEST CHANGES`, (b)/(c) öner.
+- Başka servisin verisi gerekiyorsa hangi yol seçilmiş: (a) hedefin public/internal API'si (yalnız yazma/rezervasyon türü, sıcak yol dışı okuma), (b) event ile read-model, (c) JWT claim — anotasyonun varlığı kanıt değildir: `@CurrentAccount` gibi özel parametre anotasyonu için bu modülde bir `HandlerMethodArgumentResolver` kayıtlı mı (`WebMvcConfigurer.addArgumentResolvers` veya classpath'teki platform auto-config; dosya:satır ile kanıtla)? Yoksa Spring parametreyi request'ten (query/path) bağlar → IDOR veya 500: **`HIGH`**, ayrıntılı değerlendirme `proj-security-review`'da. Sıcak yolda (a) ile okuma → `REQUEST CHANGES`, (b)/(c) öner.
 
 #### Bağımlılık yönü
 - `*-api` → `*-core` bağımlılığı yok; `*-core` → başka `*-core` yok; `platform-*` → servis modülü yok.
@@ -3758,24 +4025,29 @@ Kontrol et:
 - Hedef servis başına tek client; client çağıranın `client/` paketinde; DTO hedefin api'sinden.
 
 #### Read-model kuralları
-- Read-model tüketicinin kendi şemasında; `revision` ile UPSERT; eskime eşiği ve "satır yok" davranışı yazılı; dışa açılmıyor; rebuild yolu var.
+- Read-model tüketicinin kendi şemasında; kaynak başına `source_revision` ile koşullu UPSERT (tek `revision` kolonu yetmez); eskime eşiği ve "satır yok" davranışı yazılı; dışa açılmıyor; rebuild yolu var.
 - Read-model'den **yazma** kararı (hak/stok) veriliyor mu? Bu yasak; saga/rezervasyon gerekir.
 
 #### Paylaşılan altyapı sözleşmeleri
-- Redis key formatı başka serviste kopyalanmış mı? `RedisKeys` (platform-core) veya API/event'e çevir.
+- Redis key formatı başka serviste kopyalanmış mı? `RedisKeys` (projede varsa; platform-core) veya API/event'e çevir.
 - RabbitMQ queue/exchange adı başka servisin sahasına giriyor mu (kendi queue'sunu tanımlıyor mu)?
-- Parametre okuması yalnız kendi `SystemParameterProvider`'ı üzerinden mi?
+- Parametre okuması yalnız kendi `SystemParameterProvider`'ı üzerinden mi (projede varsa; yoksa bu kontrol `N/A`)?
 
 #### Mimari şekil
+- PR çapraz kesen bir mekanizma (argument resolver, interceptor, auth filter, `platform-*` auto-config) kullanıyor ve bağlaması bu modülde eksik mi? Anotasyon/arayüzün nerede kayıtlı olduğunu bul, classpath'te olduğunu doğrula; kanıtlamadan doğru yolu "doğru" sayma.
 - Değişiklik "dağıtık monolit" sinyali üretiyor mu (yeni senkron zincir, ortak kütüphaneye servis-özel kod, birlikte deploy zorunluluğu)? ADR gerekiyor mu?
 - Yeni servis/modül ekleniyorsa Bölüm 1.1 kararıyla tutarlı mı (modül olarak mı, servis olarak mı)?
 
+Makine kanıtı (proje kökünden; bu repoda `blueprint/`): `mvn -B -o -fn -pl <core> -am test -Dtest=ArchitectureRulesTest -Dsurefire.failIfNoSpecifiedTests=false` (enforcer + ArchUnit); `-am` upstream `failIfNoTests` yüzünden `-fn` ister. Migration değiştiyse `node scripts/flyway-immutability.js check --base <base>` (`OK`/`IHLAL`/`DOGRULANAMADI` satırını aynen yaz).
+
 Çıktı:
 1. **Sınır risk seviyesi:** `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `OK`.
-2. **İhlaller:** `dosya:satır/fonksiyon · hangi kural · kanıt`.
+2. **İhlaller:** `dosya:satır/fonksiyon · SEVERITY · hangi kural · kanıt`.
 3. **Alternatif:** her ihlal için sınır içinde kalan tasarım (API / event + read-model / claim / saga) ve maliyeti.
 4. **Kod yazmadan önce sorulacak sorular** (belirsizlik varsa).
-5. **Nihai karar:** `APPROVE` / `REQUEST CHANGES` / `BLOCK` — sınır ihlali `APPROVE WITH COMMENTS` alamaz.
+5. **Nihai karar:** `APPROVE` / `REQUEST CHANGES` / `BLOCK` — sınır ihlali `APPROVE WITH COMMENTS` alamaz. `BLOCKER` → `BLOCK`; `HIGH` → `REQUEST CHANGES`; `OK` → `APPROVE`.
+
+Sorun yoksa bölüm 1 = `OK`, 2 = "Bu kapsamda sınır bulgusu yok.", 5 = `APPROVE`; 3–4 atlanır. Diff yoksa (kod öncesi): 2 yerine planlanan değişikliğin sınır riskleri (`dosya/paket · SEVERITY · kural`), 3–4 aynen.
 
 ---
 
@@ -3786,7 +4058,7 @@ name: proj-client-integration-doc
 description: Use this skill after backend changes to decide whether a client (mobile/web) is affected and, if so, to produce the versioned integration document from code and OpenAPI — never from memory.
 ---
 
-İstemci etkisini değerlendir ve gerekiyorsa `docs/<client>-<feature>-integration-vN.md` üret. Kapsam: push edilmemiş her değişiklik. Gerçekler **koddan ve üretilen OpenAPI'den** toplanır; hatırlanan/varsayılan bilgi yazılmaz. Endpoint ve alan listesi OpenAPI'den gelir; doküman **davranış, ekran akışı, hata kodu → ekran** eşlemesine odaklanır.
+İstemci etkisini değerlendir ve gerekiyorsa `docs/<client>-<feature>-integration-vN.md` üret. Kapsam: base branch'e göre diff (`git diff <base>...HEAD` + `--stat`; izlenmeyen dosyalar dahil). Doküman dosyası PR'a eklenir (kod değişikliği değildir); üretim kodunu düzeltme. Gerçekler **koddan ve üretilen OpenAPI'den** toplanır; hatırlanan/varsayılan bilgi yazılmaz. Endpoint ve alan listesi OpenAPI'den gelir; doküman **davranış, ekran akışı, hata kodu → ekran** eşlemesine odaklanır.
 
 #### 1. Etki gate'i (biri evetse doküman gerekir)
 - Yeni/değişen public endpoint, path, method, versiyon?
@@ -3799,24 +4071,27 @@ description: Use this skill after backend changes to decide whether a client (mo
 
 Hiçbiri evet değilse çıktı: **"İstemci etkisi yok."** + gerekçe (hangi dosyalar incelendi).
 
+`<client>`: etkilenen istemciyi `docs/ai/repo-context.md` Bölüm 2 (servis kimlik tablosu) ve çağıranlardan belirle; birden çok istemci → istemci başına ayrı doküman; belirsizse Açık sorulara yaz. Severity: `BLOCKER` = istemci akışını bozan/veri kaybı/güvenlik (dokümandaki `Kritik`) → `BLOCK`; `HIGH` = breaking (mevcut uçta alan silme/yeniden adlandırma/zorunlu yapma, enum daraltma, status değişimi) ve `Deprecation`/`Sunset` veya `/v(N+1)` yok → `REQUEST CHANGES`; `MEDIUM` diğer istemci etkileri; `LOW` bilgi notu.
+
 #### 2. Gerçekleri topla
-- OpenAPI diff (CI artifact'ı) — breaking işaretleri.
+- OpenAPI diff (CI artifact'ı) — breaking işaretleri. OpenAPI üretimi/CI artifact'ı yoksa: endpoint/alan listesini controller imzaları + `*-api` DTO'larından çıkar, dokümanın başına "OpenAPI doğrulanmadı" damgası koy; şablondaki `<proje>-api.yaml`/generated client alanlarına `yok / net kanıt bulunamadı` yaz; bunu bulgu değil Öz-kontrol notu olarak raporla.
 - Controller imzaları, DTO'lar (`*-api`), `ErrorCode` enum'ları, validation anotasyonları.
-- Gateway route/permitAll, rate-limit scope'ları (429 davranışı), idempotency header'ları.
-- Yanıt zarfı biçimi (zarflı/ham) — uç bazında.
+- Gateway route/permitAll, rate-limit scope'ları (429 davranışı), idempotency header'ları (dosyalar `repo-context.md` Bölüm 4 tablosunda; gateway/scope yoksa `net kanıt bulunamadı`).
+- Yanıt zarfı biçimi (zarflı/ham) — uç bazında; proje standardına uyan `{data}` kısmi zarfı zarflı sayılır. Hata zarfı `GlobalServiceExceptionHandler`'a bağlıdır; handler bulunamazsa `needs verification`.
+- Kanıt komutları (proje kökünden; bu repoda `blueprint/`): `mvn -B -ntp -pl <core> -am test -Dtest=ErrorCodeUniquenessTest,ConfigDriftTest`; `node scripts/flyway-immutability.js check --base <base>` (`OK`/`IHLAL`/`DOGRULANAMADI` satırını aynen yaz). `-am` ile upstream `failIfNoTests=true` filtreli koşuyu düşürürse `-fn` ekle.
 - Realtime/push: topic adları, zarf alanları, `seq`/history pull.
 
 #### 3. Dokümanı üret (`template.md`)
-- Sürüm: mevcut `vN` üzerine yazılmaz; `v(N+1)` açılır; "Önceki sürüme göre farklar" bölümü doldurulur.
+- Sürüm: mevcut `vN` üzerine yazılmaz; `v(N+1)` açılır; "Önceki sürüme göre farklar" bölümü doldurulur; ilk doküman `v1`, farklar bölümü "önceki doküman yok".
 - Her senaryo: HTTP status + body örneği (zarflı mı ham mı açık), alan eşleme, istemci dilinde örnek (`dio`/`fetch`), **bilinmeyen enum değeri için fallback**.
 - Hata kodları ve ekran davranışı tablosu (kod → mesaj → ekran aksiyonu → retry?).
 - Güvenlik ve log kuralları (istemci ne loglamaz, token nerede tutulur).
-- Manuel test akışı: uygulama + API koleksiyonu (OpenAPI'den üretilmiş).
+- Manuel test akışı: uygulama + API koleksiyonu (OpenAPI'den üretilmiş; OpenAPI yoksa curl örnekleri kabul).
 - "Kritik" etiketi yalnız veri kaybı / güvenlik / ücret / bozuk akış için.
 - Kaynak damgası: "<tarih> tarihli <branch> <sha> koduna dayanır."
 
 #### 4. Öz-kontrol
-- [ ] Her endpoint OpenAPI'de var ve path/method aynı.
+- [ ] Her endpoint OpenAPI'de var ve path/method aynı (OpenAPI yoksa alt-kanıt: modül derleniyor ve controller mapping'leri diff ile eşleşiyor; kutuyu `[ ]` bırak, nota yaz).
 - [ ] Her hata kodu backend enum'unda var; istemci kod→mesaj tablosu güncellendi.
 - [ ] Zarf biçimi uç başına doğru.
 - [ ] Örneklerde gerçek kişisel veri/secret yok.
@@ -3824,10 +4099,12 @@ Hiçbiri evet değilse çıktı: **"İstemci etkisi yok."** + gerekçe (hangi do
 - [ ] Deploy sırası / eski istemci uyumluluğu (sunset) yazılı.
 
 Çıktı:
-1. **Gate kararı:** etkiliyor / etkilemiyor + kanıt.
+1. **Gate kararı:** `İstemci etkisi yok` / `Doküman üretildi` / `Doküman üretilemedi: <sebep>` + kanıt. PR tablosuna eşleme: ilk ikisi → `APPROVE` (`HIGH` bulgu varsa `REQUEST CHANGES`); `Doküman üretilemedi` → `REQUEST CHANGES`; `BLOCKER` → `BLOCK`.
 2. **Doküman yolu:** `docs/<client>-<feature>-integration-vN.md` (yeni sürüm) ve özet (Türkçe, 5–8 madde).
 3. **Breaking değişiklikler** ve istemci için zorunlu aksiyonlar.
 4. **Açık sorular** (ürün/istemci ekibine).
+
+Bulgu listesi yalnız istemci sözleşmesini/davranışını değiştiren maddeleri içerir (alan, enum, status/hata kodu, zarf, rate-limit, auth). Güvenlik/DB/mimari ihlalleri istemciyi etkiliyorsa dokümanda tek satır "Kritik" notu olarak geçer; ayrıntısı ilgili `proj-*-review` skill'ine bırakılır.
 
 ---
 
@@ -3909,9 +4186,11 @@ name: proj-db-migration-review
 description: Use this skill when reviewing PostgreSQL schema changes, Flyway migrations, indexes, constraints, partitioning, retention, seed data, module ownership or production migration risk.
 ---
 
-`db/migration/` değişikliklerini mimari referans Bölüm 10 ve `docs/ai/security-rules.md` Bölüm 7'ye göre incele. Her bulgu için **çalıştırılabilir doğrulama SQL'i** ver. Sorun yoksa: **"Bu kapsamda migration bulgusu yok."**
+`db/migration/` değişikliklerini mimari referans Bölüm 10 ve `docs/ai/security-rules.md` Bölüm 7'ye göre incele. Her bulgu için **çalıştırılabilir doğrulama SQL'i** ver. Sorun yoksa: **"Bu kapsamda migration bulgusu yok."** Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Bulgular yalnız bu PR'ın değiştirdiği/eklediği satırlar içindir; PR öncesinden kalan veya repoda kanıtlanamayan rol/timeout/`ALTER DEFAULT PRIVILEGES` maddeleri bulgu değil, "Doğrulanamayan maddeler" altında listelenir.
 
-Önce çalıştır: `node scripts/flyway-immutability.js check --base origin/<hedef>` — çıkış 0 değilse `BLOCKER`.
+İncelenecek dosyalar: `git diff --name-status <base>...HEAD -- '**/db/migration/**'` + bu migration'lara dokunan Java/SQL/config dosyaları.
+
+Önce çalıştır (proje kökünden; bu repoda `blueprint/`): `node scripts/flyway-immutability.js check --base origin/<hedef>` — çıktıdaki `OK` / `IHLAL` / `DOGRULANAMADI` satırını kanıt olarak aynen yaz (çıkış kodunu ayrıca yakalama; kod 0/1/3'tür). `IHLAL` = `BLOCKER` ve `git diff <base>...HEAD -- <dosya>` farkı kanıta eklenir; `DOGRULANAMADI` = base'i düzeltip yeniden çalıştır, olmazsa `needs verification`.
 
 Kontrol et:
 
@@ -3920,23 +4199,23 @@ Kontrol et:
 - Sürüm sıralı; `out-of-order`, `V9999`, "temp" adlı migration yok.
 - `R__*` yalnız idempotent referans verisi/view; iş verisi veya parola içermiyor.
 - Seed/test verisi prod location'ında değil (`db/seed-<env>`, yalnız local/test profili).
-- Migration **migration rolüyle** (`svc_<x>_migrate`, şema sahibi) koşuyor; uygulama **ayrı rolle** (`svc_<x>`, yalnız DML) çalışıyor; `ALTER DEFAULT PRIVILEGES` uygulama rolüne yeni tablolarda DML veriyor; uygulama rolüne DDL/`OWNER` verilmemiş. `GRANT` başka şemaya erişim açmıyor (varsa `BLOCKER`). Kesin GRANT listesi gözlenen ihtiyaca dayalı ("her ihtimale karşı" yok).
+- Migration **migration rolüyle** (`svc_<x>_migrate`, şema sahibi) koşuyor; uygulama **ayrı rolle** (`svc_<x>`, yalnız DML) çalışıyor; `ALTER DEFAULT PRIVILEGES` uygulama rolüne yeni tablolarda DML veriyor; uygulama rolüne DDL/`OWNER` verilmemiş. `GRANT` başka şemaya erişim açmıyor (varsa `BLOCKER`). Kesin GRANT listesi gözlenen ihtiyaca dayalı ("her ihtimale karşı" yok). Migration rolü için config'te `spring.flyway.user`/datasource kullanıcısına bak; yoksa bulgu değil, "Doğrulanamayan maddeler".
 - Uygulama rolünde `statement_timeout`/`lock_timeout`/`idle_in_transaction_session_timeout` role bağlı; migration rolünde `lock_timeout` kısa, `statement_timeout` yok. Yeni yüksek churn tablo (outbox/inbox/log) için tablo bazlı autovacuum ayarı (`autovacuum_vacuum_scale_factor`) veya partition.
 - `spring.flyway.baseline-on-migrate: true` config'te kalıcı olarak yok (varsa `HIGH`); mevcut DB'yi Flyway'e alma tek seferlik belgelenmiş `baseline` adımı.
 
 #### Modül sahipliği
-- Dosyada yalnız kendi şeması; tam nitelikli adlar; başka şema adı geçmiyor (test de bunu kontrol eder).
+- Dosyada yalnız kendi şeması; tam nitelikli adlar; başka şema adı geçmiyor. Ayrıca `grep -rn '"<başka_şema>"\.' src/main/java` ile native SQL/JdbcTemplate sorgularında yabancı şema okuması ara; bulunursa ayrı bulgu (`HIGH`) — düzeltme kendi şemada `rm_` read-model (referans Bölüm 4.6).
 - Cross-schema FK yok; başka servisin kimliği düz UUID.
-- Read-model tablosu tüketicinin kendi şemasında; **kaynak başına** ayrı tablo ve `source_revision`; tek `revision` kolonlu birleşik tablo yok; `rm_consumer_position` var. Inbox tablosu `(handler, event_id)` PK.
+- Read-model tablosu tüketicinin kendi şemasında; **kaynak başına** ayrı tablo ve `source_revision`; tek `revision` kolonlu birleşik tablo yok; `rm_consumer_position` var (referans Bölüm 4.6). Inbox tablosu `(handler, event_id)` PK.
 
 #### Mevcut veri ve expand/contract
 - Yeni `NOT NULL`, unique, FK öncesi mevcut veri kontrolü SQL'i verilmiş (`SELECT count(*) … WHERE … IS NULL`, duplicate sorgusu).
-- Büyük tabloda: `NOT VALID` + ayrı `VALIDATE`; `CREATE INDEX CONCURRENTLY` (transaction dışı migration, Flyway `executeInTransaction=false`); DDL / backfill / validate ayrı dosyalar.
+- Büyük tabloda: `NOT VALID` + ayrı `VALIDATE`; `CREATE INDEX CONCURRENTLY` (transaction dışı: aynı ada sahip `V<n>__x.sql.conf` sidecar dosyasında `executeInTransaction=false`); prod satır sayısı bilinmiyorsa `CONCURRENTLY` / `NOT VALID` varsayılan; DDL / backfill / validate ayrı dosyalar.
 - Yıkıcı değişiklik expand → backfill → contract; guard `DO $$ … RAISE EXCEPTION`; kolon silme uygulama deploy'undan **sonraki** release'te.
 - Tablo rewrite'ı tetikleyen değişiklik (tip değişimi, default'lu NOT NULL eski PG'de) işaretlenmiş; lock süresi tahmini var.
 
 #### Tip ve constraint
-- Zaman `TIMESTAMPTZ`; enum `TEXT + CHECK`; id UUID (v7, DB default `uuidv7()` PG18); isimli `uq_/ck_/fk_/idx_`.
+- Zaman `TIMESTAMPTZ`; enum `TEXT + CHECK`; id UUID (v7; uygulamada üretim veya PG18 `uuidv7()` default, ikisi de kabul — hedef PG sürümünü compose/README'den oku, yoksa `needs verification`); isimli `uq_/ck_/fk_/idx_`.
 - Eşzamanlılık kuralı DB'de: unique / partial unique (`WHERE status = 'ACTIVE'`); repository sorgusu aynı predicate'i kullanıyor.
 - Soft delete'te unique kural partial index ile.
 - `ON DELETE CASCADE` bilinçli; audit, ödeme, yasal kayıt, moderasyon kanıtı cascade ile silinmiyor.
@@ -3951,7 +4230,7 @@ Kontrol et:
 
 #### Büyüme ve retention
 - Sürekli büyüyen tablo (outbox, log, audit, olay, mesaj) için retention politikası ve gerekirse partition (pg_partman) tanımlı; `DELETE` ile retention yerine `DROP PARTITION`.
-- Tahmini satır/boyut büyümesi ve eşik (referans Bölüm 24) yorumda.
+- Tahmini satır/boyut büyümesi ve eşik (referans Bölüm 24 — Ölçek Eşikleri ve Evrim Yolu) yorumda.
 
 #### Privacy
 - Kişisel veri kolonu: HMAC+pepper/şifreleme kararı; envanter güncel; silme saga'sı kapsamına alınmış.
@@ -3961,14 +4240,14 @@ Kontrol et:
 - Yeni `system_parameter` satırı: kolon sırası registry/testin beklediği gibi; `data_type`, `criticality`, `usage_status` doğru; enum sabiti api modülüne eklenmiş.
 
 #### Entity uyumu
-- `ddl-auto: validate` ile uyumlu (kolon adı/tip/nullable); JPQL doğrulama testi geçiyor.
+- JPA varsa `ddl-auto: validate` + JPQL testi; JPA yoksa (JdbcTemplate/native SQL) SQL string'lerindeki kolon adlarını migration ile karşılaştır; yeni kolonun uygulamada gerçekten yazıldığını/okunduğunu grep ile doğrula (ölü kolon = `MEDIUM`).
 
 Çıktı:
 1. **Risk:** `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `OK`.
 2. **İncelenen kapsam:** dosya listesi + immutability komut çıktısı.
-3. **Bulgular:** `severity · dosya:satır · kanıt · etki (lock, veri kaybı, sahiplik, privacy) · düzeltme`.
-4. **Doğrulama SQL'leri:** production'da migration öncesi çalıştırılacak sorgular.
-5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`.
+3. **Bulgular:** `severity · dosya:satır · kanıt · etki (lock, veri kaybı, sahiplik, privacy) · düzeltme` (SQL bloğu gerektiren düzeltme çok satırlı yazılabilir).
+4. **Doğrulama SQL'leri:** production'da migration öncesi çalıştırılacak sorgular. **Doğrulanamayan maddeler:** repo dışı rol/timeout/`ALTER DEFAULT PRIVILEGES`/autovacuum için `pg_roles` / `pg_default_acl` sorgusu; checksum için `flyway_schema_history` sorgusu.
+5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. Herhangi bir `BLOCKER` → `BLOCK`; `HIGH` → `REQUEST CHANGES`; yalnız `MEDIUM`/`LOW` → `APPROVE WITH NON-BLOCKING COMMENTS`; bulgu yok → `APPROVE`.
 
 ---
 
@@ -3979,7 +4258,7 @@ name: proj-environment-impact-review
 description: Use this skill when a change adds or modifies configuration, environment variables, secrets, ports, audiences, issuers, rate-limit scopes, internal endpoints, feature flags, service URLs, tracing/observability settings, Dockerfile or deploy definitions.
 ---
 
-Config/env etkisini `AGENTS.md` Bölüm 9 ve mimari referans Bölüm 15, 18, 8'e göre incele. Amaç: bir yüzeyde eklenip diğerinde unutulan key (drift) ve deploy'da patlayan ayar. Sorun yoksa: **"Bu kapsamda environment bulgusu yok."**
+Config/env etkisini `AGENTS.md` Bölüm 9 ve mimari referans Bölüm 15, 18 ve 8.6–8.7'ye göre incele. Amaç: bir yüzeyde eklenip diğerinde unutulan key (drift) ve deploy'da patlayan ayar. Sorun yoksa: **"Bu kapsamda environment bulgusu yok."** Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Gerçek yollar (`config/<svc>.yml`, deploy `env_file`) `ConfigDriftTest` sabitlerinden veya servis README'sinden alınır (örn. `order-core/src/main/resources/config/order.yml`, `deploy/prod.env.example`). Karar: `BLOCK` (= `BLOCKER`) = gerçek secret değeri PR'da / veri kaybı / geri alınamaz etki; `REQUEST CHANGES` (= `HIGH`) = drift, secret literal fallback, deploy'u kıran config/migration; `APPROVE WITH NON-BLOCKING COMMENTS` = yalnız `MEDIUM`/`LOW` ve doküman eksikleri.
 
 Kontrol et:
 
@@ -3989,13 +4268,17 @@ Yeni/değişen her key için tabloyu doldur:
 | Key | `config/<svc>.yml` | `application-local.yml` | deploy `env_file` / `secrets/<env>.enc.yaml` | compose `secrets:` | Dockerfile (yalnız build/runtime) | Gateway route | Prometheus/alert | Not |
 |---|---|---|---|---|---|---|---|---|
 
-- Eksik hücre = bulgu. `scripts/config-drift-check` / `ConfigDriftTest` bu key'i kapsıyor mu?
+- Hücre: `var` · `eksik` (bulgu) · `n/a` (yüzey bu repoda yok) · `?` (kanıt yok). Yüzey repoda hiç yoksa (Dockerfile, compose, gateway, Prometheus, SOPS, Config Server) tek satırda `net kanıt bulunamadı` yaz; madde madde gerekçelendirme.
+- Eksik hücre = bulgu. `ConfigDriftTest` sabitlerini oku (`MIRRORED_KEY_PREFIXES`, taranan dosyalar); yeni key'in prefix'i listede değilse ya da secret-fallback kontrolü yalnız `config/<svc>.yml`'i tarıyorsa ayrı bulgu yaz.
+- Değişen her YAML dosyasını parse et (`python3 -c 'import yaml,sys;yaml.safe_load(open(sys.argv[1]))' <file>`); base dosya newline'sız bitiyorsa eklenen blok önceki satıra yapışır.
+- PR şablonundaki "Etki" beyanlarını (config/env/secret yüzeyi, güvenlik etkisi, rollout sırası) diff kanıtıyla tek tek karşılaştır; yanlış beyan = bulgu.
 - Key adı üç ortamda **aynı**; profil dosyaları yalnız ortam farkı taşıyor, iş config'i base'de.
 - Dockerfile'a config için `ENV` **eklenmemiş**.
 - Secret: `${ENV:literal}` fallback yok; `/run/secrets` yolu; SOPS dosyasına eklenmiş; `.dockerignore` kapsıyor; PR'da değeri yok. Config Server'a konmamış.
-- Admin'in değiştirebileceği iş kuralı config'e değil parametre kataloğuna gitmiş (Bölüm 14).
+- Admin'in değiştirebileceği iş kuralı config'e değil parametre kataloğuna gitmiş (Bölüm 14); rate-limit kuralları (`rate-limit.rules.<scope>`) altyapı config'idir, admin panelinden değişecek iş eşiği kataloğa gider.
 
 #### Servisler arası
+- Yeni bağımlılık starter'ı (amqp, redis, jdbc) eklendiyse bağlantı config'i (`spring.rabbitmq.*` vb.) her yüzeyde var mı? Kodda sabit URL / `RestClient.create("http://...")` config'i by-pass ediyor mu?
 - Yeni internal uç: hedefin `service-jwt.internal-access` kuralı dar ve catch-all'dan önce; local + deploy'da birlikte.
 - Yeni client: `spring.http.serviceclient.<grup>.base-url` + timeout + circuit breaker/bulkhead config'i her ortamda; `services.<svc>.base-url` compose servis adıyla uyumlu.
 - Yeni audience/issuer: JWKS'e public key + `kid`; doğrulayanların `iss` listesi; gateway route `metadata.audience`.
@@ -4014,16 +4297,16 @@ Yeni/değişen her key için tabloyu doldur:
 - Yeni log alanı structured JSON'a uyuyor; label kardinalitesi artmıyor.
 
 #### Deploy
-- Deploy sırası (sahip → tüketici → auth → gateway) yeni değişiklik için doğru; migration expand/contract ile uyumlu.
+- Deploy sırası (sahip → tüketici → auth → gateway) yeni değişiklik için doğru; migration expand/contract ile uyumlu. Migration değişikliği varsa `node scripts/flyway-immutability.js check --base <PR base>` koştur (proje kökünden; bu repoda `blueprint/`; `OK`/`IHLAL`/`DOGRULANAMADI` satırını aynen yaz): base'teki `V<n>` değişikliği deploy'da checksum mismatch'tir.
 - Rollback yolu: önceki digest ile geri dönüldüğünde yeni config eski image'ı bozar mı?
 - Image build CI'da; `.dockerignore`; non-root; healthcheck.
 
 Çıktı:
 1. **Etki özeti** (2–4 cümle) ve etkilenen yüzey tablosu (yukarıdaki).
-2. **Güncellenen dosyalar** (kanıtla) / **eksik dosyalar** (bulgu).
+2. **Güncellenen dosyalar** (kanıtla) / **eksik dosyalar** (bulgu). Tablo yeterliyse 2 ve 3 yalnız tabloya sığmayanları listeler.
 3. **Kanıtsız/doğrulanamayan yüzeyler** (`net kanıt bulunamadı`).
 4. **Güvenlik etkisi** var mı (secret, audience, allowlist) — varsa `proj-security-review`'a yönlendir.
-5. **Doğrulama komutu:** drift testi / `docker compose config` / `mvn verify -pl … -amd`.
+5. **Doğrulama komutu (proje kökünden; bu repoda `blueprint/`):** `mvn -B -ntp -pl <svc>-core -am verify` (`ConfigDriftTest` dahil) + `node scripts/flyway-immutability.js check --base <base>` + `docker compose config` (compose varsa). Not: `-am` ile upstream modülde `failIfNoTests=true` sabitse filtreli koşu düşer; `-fn` ekle veya filtresiz `test` koş.
 6. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`.
 
 ---
@@ -4035,7 +4318,7 @@ name: proj-event-design-review
 description: Use this skill when adding or changing a domain event, a command, an outbox handler, a consumer, a read-model projection, an event schema, or RabbitMQ topology (exchange/queue/binding/DLQ).
 ---
 
-Olay tasarımını `docs/ai/operation-consistency.md` Bölüm 3–4 ve mimari referans Bölüm 12'ye göre incele. Temel sorular: **Bu bir komut mu, olay mı? Sahibi kim? Yarın üçüncü bir tüketici geldiğinde üretici değişmeden çalışır mı?** Sorun yoksa: **"Bu kapsamda event tasarım bulgusu yok."**
+Olay tasarımını `docs/ai/operation-consistency.md` Bölüm 3–4 ve mimari referans Bölüm 12'ye göre incele. Temel sorular: **Bu bir komut mu, olay mı? Sahibi kim? Yarın üçüncü bir tüketici geldiğinde üretici değişmeden çalışır mı?** Sorun yoksa: **"Bu kapsamda event tasarım bulgusu yok."** Önce: `AGENTS.md` Bölüm 8, `operation-consistency.md` Bölüm 3–4, referans Bölüm 12 ve 18.4. Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity: `BLOCKER` = zorunlu güvence ihlali → `BLOCK`; `HIGH` → `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez. Uygulanmayan checklist maddeleri (stream/replay, lane izolasyonu, delta boşluk tespiti) için `N/A` yaz; yalnız ilgili PR türünde değerlendir. Olay bileşeni (ör. `platform-messaging` ce-* eşlemesi, `OutboxHandler` gerçeklemesi) projede yoksa "net kanıt bulunamadı" yaz, bulgu üretme.
 
 Kontrol et:
 
@@ -4046,10 +4329,10 @@ Kontrol et:
 
 #### İsim ve envelope
 - `type` = `<servis>.<aggregate>.<olay>` (geçmiş zaman: `created`, `cancelled`, `changed`); routing key aynı.
-- CloudEvents attribute'ları: `id` (UUIDv7), `source`, `specversion`, `type`, `subject` (aggregate id), `time`, `dataschema`, `traceparent`. AMQP 0-9-1 header eşlemesi `platform-messaging`'den.
-- Payload sınıfı `<domain>-api/event`; `@NoArgsConstructor`; kopya yok. Payload **gerçeği** taşır (id'ler, durum, revision), tüketiciye "ne yapması gerektiğini" değil.
+- CloudEvents attribute'ları: `id` (UUIDv7), `source`, `specversion`, `type`, `subject` (aggregate id), `time`, `dataschema`, `traceparent`. AMQP 0-9-1 header eşlemesi `platform-messaging`'den (bileşen yoksa: "net kanıt bulunamadı" yaz, bulgu üretme).
+- Payload sınıfı `<domain>-api/event`; `record` veya `@NoArgsConstructor`; kopya yok. Payload **gerçeği** taşır (id'ler, durum, revision), tüketiciye "ne yapması gerektiğini" değil.
 - Payload'da PII/secret/şifreli içerik yok (mesaj olayı yalnız metadata).
-- `revision`/sıra numarası var ve **kapsamı** yazılı (aggregate başına / kaynak geneli); kaynaklar arası karşılaştırılmıyor.
+- `revision`/sıra numarası var ve **kapsamı** yazılı (aggregate başına / kaynak geneli); sabit literal (ör. `1`) değil, aggregate kolonundan/sequence'tan monoton artan; kaynaklar arası karşılaştırılmıyor.
 - **Olay sözleşmesi** yazılı: **tam durum** (snapshot; küçük revizyon atlanabilir) mi **değişiklik** (delta; hiçbir olay atlanamaz, sıra boşluğunda uygulama durur + uzlaştırma + alarm) mi. Delta olayı için boşluk tespiti (`source_seq` monoton) ve rebuild/`since` yolu var.
 
 #### Şema evrimi
@@ -4065,7 +4348,9 @@ Kontrol et:
 - Replay gerekiyorsa stream kopyası (`domain.events.stream`) ve retention.
 
 #### Üretici
-- Yayın yalnız outbox'tan (domain TX'i içinde satır); `convertAndSend` doğrudan yok.
+- **Zorunlu güvence:** yayın yalnız outbox'tan (domain TX'i içinde satır); `convertAndSend` doğrudan yok. Doğrudan yayın veya yutulan yayın hatası (`catch (Exception) { log }`) → `BLOCK`.
+- `OutboxRepository.append(...)` domain TX içinde çağrılıyorsa mekanizma doğrudur; envelope/revision/UUIDv7 eksiklerini ayrı madde yaz, mekanizmayı bulgu sayma.
+- Üretici domain TX içinde senkron uzak çağrı yapmıyor (geri alınabilir uzak mutasyon → olay/local saga); ayrıntısı `proj-resilience-review` / `proj-operation-consistency-review`.
 - Publisher confirm + mandatory; NACK/unroutable → outbox retry.
 - Aynı olay birden çok tabloya/outbox'a yazılmıyor (tek satır, çok tüketici).
 - **Üretici tarafı sıralama:** sıra gereken aggregate için claim aynı aggregate'i tek worker'a sırayla veriyor; başarısız satırın ardılları bekletiliyor. Sıra gerekmiyorsa bu kısıt yok (throughput).
@@ -4081,14 +4366,16 @@ Kontrol et:
 
 #### Gözlem ve test
 - Metrik/alarm: DLQ derinliği, `outbox_oldest_pending_age_seconds`, tüketici lag.
-- Testler: outbox satırı TX ile rollback; tüketici duplicate (tek etki); handler ortasında exception → inbox satırı yok; sıra bozuk olay; delta'da sıra boşluğu → dur + alarm; bilinmeyen tip; şema uyumluluğu (eski payload yeni tüketicide, yeni payload eski tüketicide); iki poller + sıralı satırlar; lane izolasyonu. Her `PASS` için kanıt kaydı (commit, komut, sonuç — `operation-consistency.md` Bölüm 9).
-- Analytics sink bu olayı alıyor mu (Bölüm 14.4)?
+- Testler: outbox satırı TX ile rollback; tüketici duplicate (tek etki); handler ortasında exception → inbox satırı yok; sıra bozuk olay; delta'da sıra boşluğu → dur + alarm; bilinmeyen tip; şema uyumluluğu (eski payload yeni tüketicide, yeni payload eski tüketicide); iki poller + sıralı satırlar; lane izolasyonu. Testi olmayan senaryo `BLOCKED` sayılır; reviewer var/yok + koştu/koşmadı yazar (kanıt kaydı `operation-consistency.md` Bölüm 9).
+- Analytics sink: yalnız repoda sink tanımı varsa kontrol et; yoksa bulgu üretme.
+- Koştur (proje kökünden; bu repoda `blueprint/`): `git grep -n "convertAndSend\|RabbitTemplate\|@RabbitListener" -- <servis>`; `git grep -n outbox_event -- <servis>/src/main/resources/db/migration` (yoksa outbox tablosu eksik); `grep -rn "record .*Event\|record .*Command" <domain>-api/event`; migration değiştiyse `node scripts/flyway-immutability.js check --base <base>`.
 
 Çıktı:
 1. **Sınıflandırma:** komut / olay / HTTP — doğru mu.
-2. **Olay tablosu:** `type · üretici · tüketiciler · routing key · queue · DLQ · replay (evet/hayır) · revision alanı`.
-3. **Bulgular:** `severity · dosya:satır/config · kanıt · düzeltme`.
-4. **Şema evrimi ve rollout notu:** uyumlu / kırıcı + plan; değişiklik türüne göre sıra (Bölüm 18.4) ve kırıcıysa uyumluluk matrisi.
+2. **Olay tablosu:** `type · üretici · tüketiciler (kaynak: repo-context Bölüm 2) · routing key · queue · DLQ · replay (evet/hayır) · revision alanı`.
+3. **Bulgular:** `severity (BLOCKER|HIGH|MEDIUM|LOW) · dosya:satır/config · kanıt · düzeltme`; kural sınıfını (zorunlu güvence / varsayılan tercih) etiketle.
+3a. **Devir:** event tasarımı dışındaki bulguları (migration, güvenlik logu, ArchUnit, config drift) Bulgular'a koyma; tek satır `→ proj-db-migration-review / proj-security-review / …` ile devret. Nihai karar yalnız event bulgularına dayanır.
+4. **Şema evrimi ve rollout notu:** uyumlu / kırıcı + plan; değişiklik türüne göre sıra (Bölüm 18.4) ve kırıcıysa uyumluluk matrisi; olay şeması ve DB şeması için ayrı satır/matris.
 5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`.
 
 ---
@@ -4100,7 +4387,7 @@ name: proj-operation-consistency-review
 description: Use this skill for any cross-service write, outbox, inbox, idempotency or saga work — to assess whether a saga is needed, to implement it correctly, and to verify it against the mandatory scenario matrix.
 ---
 
-Servisler arası tutarlılığı `docs/ai/operation-consistency.md` (tek kaynak) ve mimari referans Bölüm 11'e göre üç fazda ele al. Kapsam: push edilmemiş her değişiklik. Mevcut altyapı sınırı: `LocalSagaStore` **tek adımlı, tek katılımcı**; merkezi coordinator yok. Çok adımlı ihtiyaç → `extension required` + ADR.
+Servisler arası tutarlılığı `docs/ai/operation-consistency.md` (tek kaynak) ve mimari referans Bölüm 11'e göre üç fazda ele al. Kaynaklar: `docs/ai/repo-context.md` Bölüm 3 (kritik akış/sıcak yol kaydı; eksik kayıt `REQUEST CHANGES`); Adım 1–4 için yalnız `operation-consistency.md` yeter, Bölüm 11 yalnız katılımcı/recovery sözleşmesi için okunur. Kapsam: push edilmemiş her değişiklik; PR incelemesinde `git diff <base>...<head> --stat` + diff (base = PR'ın hedef branch'i); izlenmeyen dosyalar da kapsamdadır. Severity: `BLOCKER` = zorunlu güvence ihlali → `BLOCK`; `HIGH` = düzeltilmesi gereken kusur → `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez. Mevcut altyapı sınırı: `LocalSagaStore` **tek adımlı, tek katılımcı**; merkezi coordinator yok. Çok adımlı ihtiyaç → `extension required` + ADR.
 
 #### Faz 1 — Assessment (`references/assessment.md`)
 - İhtiyacı sınıflandır: yalnız okuma / tek local TX / duplicate koruması / commit sonrası tepki (event) / dış iş emri (komut) / local commit + uzak geri alınabilir mutation (saga) / geri alınamaz-global-insan onayı (saga uygun değil).
@@ -4118,17 +4405,21 @@ Servisler arası tutarlılığı `docs/ai/operation-consistency.md` (tek kaynak)
 - Outbox lane izolasyonu ve üretici tarafı sıralama; `claim_token` ≠ uzak idempotency; publisher confirm ≠ işlendi.
 - Loglar: `sagaId`/`operationKey` ile, hesap kimliği yok; metrikler: `saga_unresolved_total`, `outbox_oldest_pending_age_seconds`.
 - Config: `operation-consistency.*` key'leri local + deploy.
+- TX sınırı: `@Transactional` metot içinde uzak HTTP/broker çağrısı yok (senkron broker publish de uzak çağrı bütçesine sayılır); `REQUIRES_NEW`/`MANDATORY` yalnız public + başka bean üzerinden çağrılan metotta (private/self-invocation'da proxy'siz → etkisiz); durum geçişi check-then-act değil koşullu `UPDATE ... WHERE status=?` (0 satır ⇒ hata) veya `FOR UPDATE`.
+- Faz 1 kararı `saga unnecessary` ise saga'ya özgü adımlar (begin/consume/katılımcı/recovery) `N/A`; yalnız idempotency, outbox/inbox ve TX sınırı adımları değerlendirilir.
 
 #### Faz 3 — Verification (`references/verification.md`)
 - Yapısal kontroller (statik) + senaryo matrisi (operation-consistency.md Bölüm 6) + kanıt seviyesi (1 unit/MVC, 2 gerçek PG, 3 owner→participant runtime, 4 release).
-- Her senaryo için: test adı / dosya / kanıt seviyesi / **commit SHA / ortam / sonuç linki / tarih** (kanıt kaydı, `operation-consistency.md` Bölüm 9). Testi olmayan senaryo `FAIL` değil `BLOCKED` (kanıt yok) sayılır ve listelenir. Yapısal kontrol (`ArchUnit` yeşil) davranışsal senaryo için kanıt değildir.
+- Her senaryo için: test adı / dosya / kanıt seviyesi / **commit SHA / ortam / sonuç linki / tarih** (kanıt kaydı, `operation-consistency.md` Bölüm 9). Testi olmayan senaryo `FAIL` değil `BLOCKED` (kanıt yok) sayılır ve listelenir. Yapısal kontrol (`ArchUnit` yeşil) davranışsal senaryo için kanıt değildir; ama garantiyi yapısal olarak imkânsız kılan kod satırı (ör. outbox yok, yayın commit öncesi) gösterilebiliyorsa satır `FAIL (statik)` yazılır (statik kanıt yalnız PASS için kabul edilmez).
+- Matris Faz 1 kararına göre daralır: `saga unnecessary` ise saga'ya özgü satırlar (#1, #7, #10, #11, #13–#16, #19) `N/A`; yalnız idempotency (#2–#6, #17–#18) ve outbox/inbox (#20–#32) satırları değerlendirilir. `platform-messaging` IT'leri kütüphanenin kanıtıdır, incelenen servisin kullanımı için kanıt değildir. Yerel koşu kanıt kaydında `ortam=local, sonuç linki=yok`; CI varsa `pull_request_read`/`actions_list` ile job URL'si verilir.
+- Koştur (proje kökünden; bu repoda `blueprint/`): `mvn -pl <svc>-core -am test` (ArchUnit, `ConfigDriftTest`, ErrorCodeUniqueness); parse/drift hatası = config kanıtı yok → `REQUEST CHANGES`. Not: `-am` ile upstream modülde `failIfNoTests=true` sabitse filtreli koşu düşer; `-fn` ekle veya filtresiz `test` koş.
 
 Çıktı:
 1. **Uygunluk kararı:** `saga unnecessary` / `existing saga suitable` / `extension required` / `decision blocked` + gerekçe.
-2. **Implementasyon bulguları:** `adım · dosya:satır · kanıt · düzeltme`.
-3. **Doğrulama tablosu:** senaryo → test → kanıt seviyesi → `PASS/FAIL/BLOCKED`.
+2. **Implementasyon bulguları:** `adım · severity · dosya:satır · kanıt · düzeltme`.
+3. **Doğrulama tablosu:** senaryo → test → kanıt seviyesi → `PASS/FAIL/BLOCKED/N/A`.
 4. **Doğrulama durumu:** `PASS` / `FAIL` / `BLOCKED`.
-5. **Nihai karar:** `APPROVE` / `REQUEST CHANGES` / `BLOCK`.
+5. **Nihai karar:** `APPROVE` / `REQUEST CHANGES` / `BLOCK`. Zorunlu güvence ihlali (outbox dışı yayın, TX içinde uzak mutation, cross-schema erişim, loglarda hesap kimliği) → `BLOCK`; ihlal yok ama doğrulama durumu `FAIL`/`BLOCKED` → `REQUEST CHANGES`; hepsi `PASS` → `APPROVE`.
 
 ---
 
@@ -4264,18 +4555,24 @@ name: proj-release-readiness-review
 description: Use this skill on release PRs (to release/main), before the first production deploy of a new service, and quarterly — to verify backups, alerting, SLOs, runbooks, capacity, version/EOL status, security posture and rollback readiness.
 ---
 
-Sürümün üretime çıkmaya hazır olup olmadığını mimari referans Bölüm 8, 10.5, 18, 21.0, 24 ve 25'e göre değerlendir. Bu skill kod kalitesine değil **operasyonel gerçeklere** bakar: yedek var mı, alarm gidiyor mu, geri dönüş kaç dakika. Her madde için kanıt (dosya, config, pano linki, tarih) istenir; kanıtsız madde `BLOCKED`. Sorun yoksa: **"Release hazırlık kontrolü geçti."**
+Sürümün üretime çıkmaya hazır olup olmadığını mimari referans Bölüm 8.7 (Metrik ve Gözlem Yığını: asgari alarm seti), 10.5 (Yedekleme, PITR, HA ve Kapasite), 18.4 (Değişiklik Türüne Göre Rollout Sözleşmesi), 19.6 (Doğrulama Kapsamı ve Kanıt Kaydı), 24 (Ölçek Eşikleri ve Evrim Yolu), 25 (Sürüm ve Destek Takibi) ve Ek A'ya göre değerlendir (Bölüm 21.0 bu listeyle aynıdır, ayrıca okuma). Bu skill kod kalitesine değil **operasyonel gerçeklere** bakar: yedek var mı, alarm gidiyor mu, geri dönüş kaç dakika. Her madde için kanıt (dosya, config, pano linki, tarih) istenir; kanıtsız madde `BLOCKED`. Sorun yoksa: **"Release hazırlık kontrolü geçti."**
+
+Kapsam: release PR'ı, ilk prod deploy veya çeyreklik kontrol. Feature PR'ında çağrılırsa yalnız diff'e bağlı maddeleri değerlendir (migration, rollout sözleşmesi, rollback, secret/config, PII, doküman); operasyonel maddeleri tek satırda topla: `repo dışı: BLOCKED (proje geneli, çeyreklik kontrolde)`. Diff: `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen dosyalar dahil. CI/compose/obs/runbooks bu repoda yoksa hangi repoda olduğunu kullanıcıya bir kez sor; cevap yoksa ilgili bölümü tek satırlık `BLOCKED` geç.
+
+Durum kuralı: repo/PR içinde ya da kullanıcıdan alınan kanıtla eksikliği GÖSTERİLEN madde `FAIL`; kanıt bulunamayan madde `BLOCKED`. Bölüm durumu maddelerinin en kötüsüdür (`FAIL` > `BLOCKED` > `PASS`); en az bir `FAIL` varsa nihai durum `FAIL`, yoksa en az bir `BLOCKED` varsa `BLOCKED`, ikisi de yoksa `PASS`. Her `FAIL` için `Kaynak: bu release / mevcut durum` yaz; mevcut durumdan gelen eksik release'i ancak bu release o yüzeye dokunuyorsa engeller, dokunmuyorsa `Kabul edilen riskler` veya takip maddesi olarak raporla. Kanıt kaynakları: release notu = PR gövdesi (yoksa `CHANGELOG.md` ya da `docs/releases/<sürüm>.md`); CI sonucu = PR check run'ları; pano linki, son yedek tarihi ve test alarmı tarihi repo dışındadır — kullanıcıdan iste, gelmezse `BLOCKED`.
+
+Koştur (proje kökünden; bu repoda `blueprint/`): `node scripts/flyway-immutability.js check --base <base>` (`OK`/`IHLAL`/`DOGRULANAMADI` satırını aynen yaz); `mvn -B verify` (ya da `docs/ai/review-checklist.md` Bölüm 2 makine kontrolleri); `gitleaks detect` (kurulu değilse `BLOCKED`). "CI test sayısı kontrolü" maddesi mekanizmayı sorar (failIfNoTests / sayım adımı); son koşu sonucu "Doğrulama kapsamı" altında ayrıca yazılır. Filtreli koşu (`-pl X -am -Dtest=...`) `failIfNoTests=true` modüllerde kırılır: tam modül koşusu kullan ya da pom'daki `failIfNoTests`'i `${failIfNoTests}` property'sine bağla.
 
 Kontrol et:
 
-#### Veri ve yedek (yoksa `FAIL`)
+#### Veri ve yedek
 - WAL arşivi + base backup çalışıyor (son başarılı yedek tarihi); retention; şifreli.
 - **Restore provası** son 30 gün içinde yapılmış ve kayıtlı (süre, doğrulama).
 - RPO/RTO README'de; HA durumu (managed/standby/yok) açıkça yazılı ve kabul edilmiş.
 - Redis security instance AOF; RabbitMQ definitions yedeği; object storage versioning.
 - Bu release'in migration'ları prod benzeri veri hacminde denenmiş (süre, lock).
 
-#### Alarm ve gözlem (yoksa `FAIL`)
+#### Alarm ve gözlem
 - Alertmanager/Grafana alerting bir kanala **gerçekten** bildirim gönderiyor (test alarmı tarihi).
 - Asgari alarm seti (referans 8.7): restart-loop, health DOWN, disk/RAM, WAL arşiv gecikmesi, Redis bellek/eviction, RabbitMQ queue/DLQ, `outbox_oldest_pending_age_seconds`, `*_STUCK`, SLO burn-rate.
 - Yeni servis/uç için scrape hedefi, log kaynağı, pano.
@@ -4323,11 +4620,11 @@ Kontrol et:
 - `docs/ai/repo-context.md` güncel; `docs/versions.md` tarihli.
 
 Çıktı:
-1. **Kontrol tablosu:** her başlık → `PASS` / `FAIL` / `BLOCKED` + kanıt (dosya/link/tarih).
+1. **Kontrol tablosu:** her `##` başlığı için bir satır (8 satır) → `PASS` / `FAIL` / `BLOCKED` + kanıt (dosya/link/tarih); kanıt sütununda yalnız belirleyici madde(ler).
 2. **Engelleyiciler:** `FAIL` olanlar ve düzeltme; `BLOCKED` olanlar ve istenen kanıt.
-3. **Kabul edilen riskler:** yazılı, sahipli, tarihli.
+3. **Kabul edilen riskler:** yazılı, sahipli, tarihli (kaynak: `docs/adr` ya da release notunda `Risk kabulü: <madde> · sahip · tarih · bitiş` satırı).
 4. **Bölüm 24 eşik durumu:** yaklaşılan eşikler ve planlanan adım.
-5. **Nihai durum:** `PASS` / `FAIL` / `BLOCKED`. Yedek, restore provası veya alarm kanalı eksikse durum `FAIL`.
+5. **Nihai durum:** `PASS` / `FAIL` / `BLOCKED`. Yedek, restore provası veya alarm kanalı eksikliği kanıtlanmışsa `FAIL`, kanıtsızsa `BLOCKED`. `PASS` ise "Release hazırlık kontrolü geçti." yaz; `FAIL`/`BLOCKED` ise bu cümleyi kullanma.
 
 ---
 
@@ -4338,7 +4635,7 @@ name: proj-resilience-review
 description: Use this skill when a change adds or modifies a remote synchronous call, a hot-path flow, timeouts, retries, circuit breakers, bulkheads, thread/connection pools, caches with fallback, or any control-plane dependency (parameters, config, flags).
 ---
 
-Dayanıklılığı mimari referans Bölüm 1.2, 4.6, 4.7, 7.2/14.3 ve `AGENTS.md` Bölüm 5'e göre incele. Temel soru: **"Bu bağımlılık yavaşlar veya düşerse kullanıcı ne görür, servis ne yapar?"** Her uzak bağımlılık için bu cevap yazılı olmalı. Sorun yoksa: **"Bu kapsamda dayanıklılık bulgusu yok."**
+Dayanıklılığı mimari referans Bölüm 1.2, 4.6, 4.7, 6.8 (HTTP client konvansiyonu + resilience4j örneği), 8.8, 14 (bounded staleness) ve `AGENTS.md` Bölüm 5'e göre incele. Temel soru: **"Bu bağımlılık yavaşlar veya düşerse kullanıcı ne görür, servis ne yapar?"** Her uzak bağımlılık için bu cevap yazılı olmalı. Sorun yoksa: **"Bu kapsamda dayanıklılık bulgusu yok."** (PR başına bir kez; temiz uçlar bağımlılık tablosunda "bulgu yok" satırıyla geçer). Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. PR açıklamasındaki "Etki" kutuları (yeni uzak senkron çağrı vb.) girdidir. Severity: `BLOCKER` → `BLOCK` (kriter 5. maddede); `HIGH` → `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez.
 
 Kontrol et:
 
@@ -4353,6 +4650,9 @@ Kontrol et:
 - Her client grubunda `connect-timeout` ve `read-timeout` açıkça set; varsayılan/sonsuz timeout yok.
 - Uzun işlemler (export, toplu işlem) senkron uçta değil; job + poll.
 
+#### Client yapılandırması
+- Client, Boot'un `RestClient.Builder`/`@ImportHttpServices` grubuyla kurulmuş (statik `RestClient.create(...)` yok); base-url config'ten geliyor; başka servisin `/internal/**` ucuna giden çağrı servis JWT interceptor'ı (client-credentials token) taşıyor. Kimliksiz internal çağrı hedef auth'u sıkılaştırdığında 401 → hata yolu tanımsız; bulgu yaz ve `proj-security-review`'a devret.
+
 #### Circuit breaker / bulkhead / retry
 - Hedef başına `resilience4j.circuitbreaker.instances.<hedef>` ve `bulkhead` tanımlı; açıkken tanımlı `ServiceException` (503 `UPSTREAM_UNAVAILABLE`) ve fallback davranışı belgeli.
 - Spring Cloud CircuitBreaker kullanılıyorsa **TimeLimiter (varsayılan 1 sn)** ve thread-pool bulkhead ayarlanmış/kapatılmış.
@@ -4360,12 +4660,13 @@ Kontrol et:
 - Cascading failure hesabı: Tomcat/virtual thread modeli, Hikari havuzu, downstream timeout × istek hızı → havuz doluyor mu?
 
 #### Fail politikası
-- Yeni bağımlılık için fail-open/fail-closed kararı yazılı ve README tablosuyla uyumlu (güvenlik → closed; iş → open + metrik).
+- Yeni bağımlılık için fail-open/fail-closed kararı yazılı ve `<servis>/README.md` Fail politikası tablosuyla uyumlu (yoksa eksik olarak raporla) (güvenlik → closed; iş → open + metrik).
 - Control-plane bağımlılığı (parametre, config, flag): bounded-staleness (son bilinen değer + disk snapshot + `*_staleness_seconds` metriği + T eşiği); "5 sn cache + 503" **yok**.
 - Redis güvenlik state'i ile cache ayrı instance; eviction politikası doğru.
 - Read-model "satır yok/eski" davranışı tanımlı; tazelik tüketim konumundan (`readmodel_lag_seconds{source}`) ölçülüyor, satır yaşından değil; karar başına T farklı olabilir (engel kararı ≠ profil görseli).
 
 #### Kapasite ve kaynak
+- Repoda karşılığı olmayan kontrol (gateway bütçesi, PgBouncer, WebSocket, Redis ayrımı) → tabloya `N/A (kanıt yok: <aranan yer>)` yaz; uydurma ya da sessizce atlama.
 - Yeni thread pool/executor sınırlı ve isimli; virtual thread'lerle pinning riski (`synchronized` + IO) yok.
 - Hikari `maximum-pool-size` × instance ≤ PgBouncer/`max_connections` bütçesi.
 - Bellek: yeni cache'in üst sınırı ve TTL'i var.
@@ -4377,12 +4678,14 @@ Kontrol et:
 - Yük testi senaryosu güncellendi mi (sıcak yol değiştiyse).
 - Runbook: bağımlılık düştüğünde ne yapılır (Bölüm 8.8).
 
+Asgari kanıt (proje kökünden; bu repoda `blueprint/`): `git diff --name-status <base>...<head>`; `grep -rnE 'RestClient\.create|@Retryable|resilience4j|CircuitBreaker|Bulkhead|EnableResilientMethods|rabbitTemplate\.convertAndSend' <modül>`; `grep -rn hikari`.
+
 Çıktı:
 1. **Bağımlılık tablosu:** her uzak çağrı → sıcak yol mu · timeout · CB/bulkhead · fail politikası · düşünce kullanıcı ne görür.
-2. **Bulgular:** `severity · dosya:satır/config key · kanıt · düzeltme`.
-3. **Kritik akış kaydı:** önce/sonra (bağımlılık sayısı, bütçe); kayıt güncellendi mi; varsayılan aşıldıysa ADR linki.
+2. **Bulgular:** `severity (BLOCKER|HIGH|MEDIUM|LOW) · dosya:satır/config key · kanıt · düzeltme`.
+3. **Kritik akış kaydı:** önce/sonra (bağımlılık sayısı, bütçe; "sonra" sütunu bağımlılık tablosuna atıf verebilir); kayıt güncellendi mi; varsayılan aşıldıysa ADR linki.
 4. **Eksik testler/alarmlar.**
-5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. Kaydı eksik veya gerekçesiz ek senkron bağımlılık → en az `REQUEST CHANGES`.
+5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. Kaydı eksik veya gerekçesiz ek senkron bağımlılık → en az `REQUEST CHANGES`. `BLOCK`: tasarımın baştan değişmesi gerekiyorsa (ör. sıcak yolu tamamen senkron zincire çeviren mimari) ya da veri kaybı/güvenlik etkisi PR içinde düzeltilemiyorsa; aynı PR'da düzeltilebilir `BLOCKER` bulgular → `REQUEST CHANGES`.
 
 ---
 
@@ -4393,7 +4696,11 @@ name: proj-security-review
 description: Use this skill when reviewing authentication, authorization, service JWT, input validation, sensitive logging, uploads, rate limiting, DB queries, WebSocket, privacy, secrets or supply-chain aspects of a change.
 ---
 
-Değişikliği `docs/ai/security-rules.md` (tek kaynak) ve OWASP ASVS/API Security Top 10 ile karşılaştır. Her bulgu için **exploit senaryosu** yaz; senaryo yazamıyorsan bulgu değil, öneridir. Kanıt yoksa `needs verification`. Sorun yoksa: **"Bu kapsamda güvenlik bulgusu yok."**
+Değişikliği `docs/ai/security-rules.md` (tek kaynak) ve OWASP ASVS/API Security Top 10 ile karşılaştır. Her bulgu için **exploit senaryosu** yaz; senaryo yazamıyorsan bulgu değil, öneridir. Kanıt yoksa `needs verification`. Sorun yoksa: **"Bu kapsamda güvenlik bulgusu yok."** (1., 4. ve 5. bölüm yine yazılır: risk `OK`; 2–3 atlanır).
+
+Referans: mimari referans Bölüm 6.5 (kimlik), 9.2.1 (delegasyon). Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity: `CRITICAL` (= `BLOCKER`: exploit doğrudan mümkün / `BLOCK` tetikleyicisi) → `BLOCK`; `HIGH` → `REQUEST CHANGES`; `security-rules.md` ihlali en az `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez. Güvenlikle doğrudan ilgisi olmayan bulguları (migration immutability, katman ihlali, hata kodu çakışması, test kalitesi) ayrıntılandırma; `Kapsam dışı — ilgili skill: …` başlığı altında tek satırla listele. Anotasyon/aspect/filtre için "bulgu yok" yazmadan önce onu çalıştıran bileşeni dosya:satır ile göster.
+
+Çalıştır (proje kökünden; bu repoda `blueprint/`): `mvn -B -ntp -pl <svc>-core -am test` (`ArchitectureRulesTest`, `ConfigDriftTest`, `ErrorCodeUniquenessTest`); migration değiştiyse `node scripts/flyway-immutability.js check --base <base>` (çıktıdaki `OK`/`IHLAL`/`DOGRULANAMADI` satırını aynen yaz); değişen yml'leri parse et. Not: `-am` ile upstream modülde `failIfNoTests=true` sabitse filtreli koşu düşer; `-fn` ekle veya filtresiz `test` koş.
 
 Kontrol et:
 
@@ -4403,10 +4710,12 @@ Kontrol et:
 - `internal-access` kuralı gerçek kullanım kadar dar; dar kural catch-all'dan önce; local yml ve deploy config **birlikte** güncellenmiş.
 - Kullanıcı adına internal uç `sub` == path hesabı kontrolü yapıyor; hesabı body'den alan internal uç hiçbir aktöre açık değil.
 - **Delegasyon** (`repo-context.md` Bölüm 3.1): yeni/değişen internal uç matriste satır aldı mı; hedef **üçünü birlikte** kontrol ediyor mu (çağıran allowlist'te + bu işlem için + `sub` bu kaynakta yetkili); arka plan token'ıyla (sub yok) kullanıcı-yetkisi gerektiren işlem reddediliyor mu; "her kullanıcı adına her şey" satırı var mı (varsa `BLOCK`); zincirde `act` korunuyor mu. Testler: izinli/izinsiz aktör + yanlış `sub` + arka plan token'ıyla kullanıcı işlemi.
+- Giden internal çağrılar: `/internal/**`'e giden her client (RestClient/WebClient/Feign) service JWT interceptor'ı ile kuruluyor; interceptor yoksa bulgu `HIGH` (platform modülü iskelette yoksa da `HIGH` + `needs verification`, `MEDIUM`'a düşürme).
 - Gateway: `/internal` engeli `StripPrefix` sonrası da; iç header temizliği; CORS `*` yok; token query'de yok; `gateway` actuator ucu kapalı; trusted-proxy ayarı; rate limit ve timeout bütçesi.
 
 #### Ownership / IDOR
 - Hesap kimliği yalnız `@CurrentAccount`; path/query/body'den değil. Path'teki id hedef kaynak; ownership serviste doğrulanıyor.
+- `@CurrentAccount` (veya herhangi bir özel parametre anotasyonu) tek başına kimlik kanıtı değildir: modülde onu çözen bir `HandlerMethodArgumentResolver` (`WebMvcConfigurer.addArgumentResolvers`) ya da classpath'te platform auto-config'i var mı? Yoksa Spring parametreyi query/path'ten bağlar → IDOR veya 500. Resolver'ı dosya:satır ile kanıtla; kanıtlamadan "bulgu yok" yazma. Resolver yok = `BLOCKER` (bu skill'de `CRITICAL`, karar `BLOCK`); parametre adı açık değilse `-parameters` derleme bayrağı da kontrol edilir.
 - Liste/sayfalama uçlarında sıralama alanı allowlist; boyut sınırı.
 - Read-model'den yetki kararı veriliyorsa "satır yok / eski" davranışı fail-closed; eskilik toleransı (T) bu karar için ayrıca yazılı (engel kararı ≤ 30 sn gibi) ve eski bir güvenlik kararı yeniden denemede yenisini ezemiyor.
 
@@ -4440,6 +4749,7 @@ Kontrol et:
 #### Log, hata, secret
 - `security-rules.md` Bölüm 4 yasak listesi: hiçbir ham PII/secret/body/exception mesajı log'da yok. Log'a özel neden `safeLogReason`'da; `details`'te yalnız istemciye gösterilebilir bilgi.
 - Yeni secret: değeri hiçbir yerde yok; `/run/secrets` ile geliyor; `${ENV:literal}` fallback yok; SOPS dosyasına eklenmiş; `.dockerignore` kapsıyor.
+- Değişen her `application-*.yml` / `config/*.yml` parse ediliyor (ör. `python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))'`); parse hatası güvenlik config'ini (allowlist, secret, rate limit) sessizce devre dışı bırakır → `HIGH`.
 - Hata yanıtları tek format (`ErrorResponse`); filtre redleri de aynı; altyapı hatası 503 (500 değil).
 - Audit: `details` allowlist; anahtar/şifreli içerik/serbest metin/ham IP yok; tablo değiştirilemez.
 
@@ -4447,6 +4757,7 @@ Kontrol et:
 - Yeni kişisel veri alanı: envanter + aydınlatma + retention + silme saga'sı kapsamı güncellendi.
 - Düşük entropili kimlik için HMAC+pepper; varlık oracle'ı yok; konum deterministik grid; kişisel veri dönen uç `no-store`.
 - Arama index'i/cache/yedek aynı kurallara uyuyor.
+- Olay/komut payload'ları (outbox, `domain.events`) ham telefon/e-posta/serbest metin taşımıyor; tüketici kişisel veriyi kendi kaynağından çözüyor.
 
 #### Tedarik zinciri
 - Yeni bağımlılık: lisans (GPL/AGPL/BSL) ve bilinen CVE kontrolü; sürüm OSS destekli.
@@ -4454,11 +4765,11 @@ Kontrol et:
 - Workflow'larda action'lar commit SHA'ya pinli (tag pin'i `REQUEST CHANGES`); `permissions` en dar.
 
 Çıktı:
-1. **Risk seviyesi:** `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `OK`.
-2. **Bulgular** (her biri): `severity · dosya:satır · kanıt · exploit senaryosu (kim, nasıl, sonuç) · düzeltme · doğrulayan test`.
-3. **Kural referansı:** her bulgu için `security-rules.md` bölümü.
-4. **Net kanıt bulunamayan alanlar.**
-5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. `CRITICAL` veya `HIGH` bulgu varsa karar `APPROVE` olamaz.
+1. **Risk seviyesi:** `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `OK` — yanına nihai kararı da yaz (çıktı kısalırsa karar kaybolmasın).
+2. **Bulgular** (her biri `B1…` id'li; çok satırlı olabilir): `severity · dosya:satır` + alt etiketler `Kanıt / Exploit (kim, nasıl, sonuç) / Düzeltme / Test` + kural referansı (`security-rules.md` Bölüm N). Kanıtsız bulguda severity yanına `(needs verification)`. LOW bulgu tek satır.
+3. **Kural referansı:** bulgu satırına gömülür (2. madde); ayrı liste gerekmez.
+4. **Net kanıt bulunamayan alanlar** (`N/A` = yüzey yok; `kanıt yok` = yüzey var ama doğrulanamadı — ayrı işaretle).
+5. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`. `CRITICAL` → `BLOCK`; `CRITICAL` veya `HIGH` bulgu varsa karar `APPROVE` olamaz. Kararı başta (1. madde) da yaz.
 
 ---
 
@@ -4471,14 +4782,17 @@ description: Use this skill when reviewing Spring Boot service code in code revi
 
 Spring servis kodunu mimari referansa ve `AGENTS.md`'ye göre incele. Kanıt odaklı ol: her bulgu dosya + satır + gerekçe taşır. Spekülatif bulgu üretme; kanıt yoksa `needs verification` yaz. Sorun yoksa sabit cümle: **"Bu kapsamda bulgu yok."**
 
+Referans bölümleri: 1.2, 4.3, 6.5, 7.4, 9.2.1, 11.1–11.2, 14. Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity: `BLOCKER` = zorunlu güvence ihlali veya kırmızı yapısal test → `BLOCK`; `HIGH` = gerekçesiz varsayılan tercih sapması / düzeltilmesi gereken kusur → `REQUEST CHANGES`; `MEDIUM`/`LOW` engellemez. Yeni anotasyon, aspect veya config sınıfı için "Bu kapsamda bulgu yok" yazmadan önce onu çalıştıran bileşeni (resolver, interceptor, proxy) dosya:satır kanıtıyla göster. Platform bileşeni (`safeLogReason`, `SystemParameterProvider`, `*TransactionService`, `X-Subject-Id` interceptor, `SensitiveLogSanitizer`…) projede yoksa ilgili madde `N/A` yazılır, bulgu üretilmez. Başka skill'in alanındaki bulguları (contract, config drift, event PII, cross-schema) tek satırla ilgili `proj-*-review`'a devret.
+
 Kontrol et:
 - Controller ince mi: yalnız binding, `@Valid`, `@CurrentAccount`, header okuma, status/`Cache-Control`. Business logic, repository erişimi, try/catch ile hata dönüşü **yok**.
-- Constructor injection (`@RequiredArgsConstructor`); field injection yok.
+- Constructor injection (`@RequiredArgsConstructor`) her yeni/değişen bean'de (controller, ServiceImpl, client, reader). `grep -n '@Autowired' <değişen dosyalar>` çalıştır, her dosya:satır'ı yaz; bir dosyadaki bulgu diğerini kapsamaz.
 - Geniş `catch (Exception)` yok; yakalanan hata ya tipli ServiceException'a çevriliyor ya da yeniden fırlatılıyor.
 - Use-case servisleri arayüz + `service/impl/*ServiceImpl`; guard/policy/provider/poller somut sınıf. `service.impl` altında Impl olmayan sınıf yok; `@Configuration` yalnız `config/`.
 - Mapping servis katmanında veya `*Mapper`; tek metot adı (`toResponse`). Controller'da mapping yok.
 - Hedef servis başına **tek** HTTP client (`client/` paketi); DTO'lar hedefin `*-api` modülünden; `X-Subject-Id` karşı tarafta beklenmiyor (`@CurrentAccount` ile okunuyor).
 - Kimlik yalnız `@CurrentAccount`; path/query/body'den hesap kimliği alınmıyor.
+- `@CurrentAccount` (veya herhangi bir özel parametre anotasyonu) tek başına kimlik kanıtı değildir: modülde onu çözen bir `HandlerMethodArgumentResolver` (`WebMvcConfigurer.addArgumentResolvers`) ya da classpath'te platform auto-config'i var mı? Yoksa Spring parametreyi query/path'ten bağlar → IDOR veya 500. Resolver'ı dosya:satır ile kanıtla; kanıtlamadan "bulgu yok" yazma. Resolver yok = `BLOCKER`.
 - Yeni `@RequestBody` → `@Valid`; `@PathVariable("...")`, `@RequestParam("...")`, `@RequestHeader("...")` adları açık.
 
 #### Transaction ve Sıcak Yol
@@ -4499,7 +4813,7 @@ Kontrol et:
 - Ham `e.getMessage()`, body, token, PII loglanmıyor (`docs/ai/security-rules.md` Bölüm 4). Log'a özel neden `safeLogReason`'da, `details`'te değil.
 - Normal Flow Logging: akış INFO'dan izlenebilir (`operation=`, `outcome=`); her metot loglanmıyor; batch'ler özetleniyor; boş poll turu loglanmıyor; commit görülmeden "success" yazılmıyor.
 - Tek log stili (`"<Olay>: key=value"`); `[TAG]`/snake_case karışımı yok.
-- `ErrorCode` yeni sabiti servisin bloğunda ve global tekil (test geçiyor mu?).
+- `ErrorCode` yeni sabiti servisin bloğunda ve global tekil (`ErrorCodeUniquenessTest` çıktısını kanıt olarak yaz).
 
 #### Tracing ve Async Context
 - Outbox satırında `traceparent/tracestate`; poller span'i bu bağlamdan başlıyor; MQ header'larına inject; span attribute'larında PII yok.
@@ -4519,15 +4833,19 @@ Kontrol et:
 - Kilit sırası birden çok kilit alan akışta belgelenmiş; lock timeout hint'i var.
 - Native sorgular tam nitelikli `<schema>.<tablo>` ve **yalnız kendi şeması**.
 
-Çıktı (7 madde):
+Çalıştır (proje kökünden; bu repoda `blueprint/`):
+- `mvn -q -o -B -ntp -pl <modül> -am test` (`ArchitectureRulesTest`, `ErrorCodeUniquenessTest`, `ConfigDriftTest` yeşil olmalı; `-o` yalnız offline ortamda); migration değiştiyse `node scripts/flyway-immutability.js check --base <base>` ve çıktıdaki `OK`/`IHLAL`/`DOGRULANAMADI` satırını kanıt olarak aynen yaz. Not: `-am` ile upstream modülde `failIfNoTests=true` sabitse filtreli koşu düşer; `-fn` ekle veya filtresiz `test` koş.
+- Build koşamazsa ilgili iddiayı `needs verification` yaz; bir test başka hata yüzünden düştüyse (ör. YAML parse) kalan iddiaları da `needs verification` işaretle.
+
+Çıktı (8 madde):
 1. **Ne değişti** (2–4 cümle, dosya listesi).
 2. **Neden önemli** (risk: doğruluk / güvenlik / operasyon / performans).
-3. **Bulgular**: her biri `severity (BLOCKER|HIGH|MEDIUM|LOW) · dosya:satır · kanıt · düzeltme`.
+3. **Bulgular**: her biri `severity (BLOCKER|HIGH|MEDIUM|LOW) · dosya:satır · kanıt · düzeltme`; severity'ye göre sıralı. 5–7. maddede bulgu yoksa o maddeye `Bu kapsamda bulgu yok.` yaz.
 4. **Testler**: eksik test case'leri (negatif, yetki, concurrency, log privacy).
 5. **Log doğrulaması**: hassas veri sızıntısı var mı; seviye politikası doğru mu.
 6. **INFO akış görünürlüğü**: akış DEBUG açmadan izlenebilir mi.
 7. **Parametre ve sıcak yol uyumu**: parametre kuralları; sıcak yol uzak çağrı sayısı (tablo güncellendi mi).
-8. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK`.
+8. **Nihai karar:** `APPROVE` / `APPROVE WITH NON-BLOCKING COMMENTS` / `REQUEST CHANGES` / `BLOCK` (`BLOCK` = zorunlu güvence ihlali veya kırmızı yapısal test).
 
 ---
 
@@ -4538,35 +4856,37 @@ name: proj-test-writer
 description: Use this skill when writing or reviewing unit, HTTP binding, security access, repository/concurrency, contract, resilience, log-privacy or regression tests for a change.
 ---
 
-Testleri mimari referans Bölüm 16 ve `docs/ai/security-rules.md` Bölüm 4'e göre yaz/incele. Önce **davranış ve edge case listesi**, sonra test. Anlamsız test (yalnız mock'un çağrıldığını doğrulayan) yazılmaz. Çıktıda eklenen case'ler, kalan boşluklar ve çalıştırma komutları listelenir.
+Testleri mimari referans Bölüm 16, 23.5, 23.6 ve (log privacy için) `docs/ai/security-rules.md` Bölüm 4'e göre yaz/incele. Girdi: diff = `git diff <base>...HEAD` + `git diff --stat` (base = hedef branch; PR diff'i verilmişse o); izlenmeyen (untracked) dosyalar da kapsamdadır. Severity (bulgular için): `BLOCKER` = zorunlu güvence açığı/veri kaybı → Sonuç `FAIL`; `HIGH` = düzeltilmesi gereken kusur → `FAIL`; `MEDIUM`/`LOW` engellemez. Komutlar proje kökünden çalışır (bu repoda `blueprint/`). Önce **davranış ve edge case listesi**, sonra test. Anlamsız test (yalnız mock'un çağrıldığını doğrulayan) yazılmaz. Çıktıda eklenen case'ler, kalan boşluklar ve çalıştırma komutları listelenir.
 
 Kontrol et / yaz:
 
 #### Kapsam kuralları
 - Negatif case'ler ve **yetki hataları** zorunlu (izinsiz aktör 403, kimliksiz 400/401, başka kullanıcının kaynağı 404/403).
-- Her bug için regression testi.
+- Her bug için regression testi. Review modunda üretim kodu değiştirilmez; kusuru gösteren kırmızı test `@Disabled` yapılmaz, commit edilir ve bulgu 6. bölüme yazılır.
+- İncelenen PR'daki mevcut testler de değerlendirilir: doğrudan controller çağrısı, `Thread.sleep`, yalnız 200/key kontrolü, negatif/yetki case'i olmaması bulgu olarak yazılır (dosya:satır).
 - Poller, worker ve check-then-act kodu için **concurrency** testi: iki paralel claim ayrık satır; eşzamanlı ikinci insert reddedilir; expired lease'te eski worker complete edemez (gerçek PG).
-- Kırılgan test yok: sıra, saat (`Instant now()` metodu üzerinden verilir), rastgelelik, dış servis bağımlılığı yok.
+- Kırılgan test yok: sıra, saat (enjekte edilen `Clock` bean'inden gelir; `Instant.now()` doğrudan çağrılmaz), rastgelelik, dış servis bağımlılığı yok.
 - Test isimlendirmesi tek stil (`metot_whenKoşul_beklenenSonuç`); yorumlar ekibin dilinde.
 
 #### Türler
 - **HTTP binding:** `MockMvcBuilders.standaloneSetup(controller)` + `CurrentAccountArgumentResolver` + `GlobalServiceExceptionHandler`; kimlik `requestAttr("x.accountId", …)`. Geçerli / geçersiz tip / eksik kimlik / eksik header; geçersiz girdide `verifyNoInteractions(service)`. Controller metodunu doğrudan çağırmak binding'i kanıtlamaz.
 - **Security erişimi:** gerçek `ServiceJwtVerificationFilter` + config'ten okunan allowlist + sentetik token (test anahtar çiftiyle imzalı): izinli aktör 200, diğerleri 403, `/internal` kural yoksa 403, kodlanmış path (`%2e%2e`) 400. JWT doğrulaması tamamen mock'lanmaz.
+- Üretimde `CurrentAccountArgumentResolver` / `GlobalServiceExceptionHandler` / `ServiceJwtVerificationFilter` yoksa: eksiklik `HIGH` bulgu olarak yazılır, binding testi test kopyasıyla koşturulur ve 3. bölümde "test kopyası" diye işaretlenir.
 - **Client contract:** `MockRestServiceServer`/sahte `Client` ile giden istek (method, path, header, body) yakalanır; interface mock'u yeterli değil.
-- **Repository / gerçek DB:** Testcontainers `@ServiceConnection`; gerçek Flyway migration'ları; JPQL doğrulama testi (DB'siz parse) ayrıca.
+- **Repository / gerçek DB:** Testcontainers `@ServiceConnection`; Docker yoksa `platform-messaging`'deki zonky embedded-postgres deseni kullanılır; gerçek Flyway migration'ları; JPQL doğrulama testi (DB'siz parse) ayrıca.
 - **Outbox/event:** satır domain TX ile rollback oluyor; handler idempotent; tüketici duplicate/sıra bozuk/bilinmeyen tip davranışı.
-- **Saga:** `references/verification.md` matrisi (operation-consistency skill'i).
+- **Saga:** `blueprint/.agents/skills/proj-operation-consistency-review/references/verification.md` matrisi.
 - **Parametre:** kaynak erişilemez (bounded-staleness: T içinde son değer, T sonrası kritik grup 503), key yok / değer bozuk → hiç yan etki yok, default'a düşülmüyor.
 - **Dayanıklılık:** hedef yanıt vermiyor → timeout bütçesi, circuit açılıyor, tanımlı hata; retry yok.
-- **Log privacy:** Logback `ListAppender`; sentetik hassas işaret (`SENSITIVE-MARKER-…`, telefon, token) rendered mesajda / argümanlarda / MDC'de / exception'da **yok**; güvenli alan (`outcome=`) **var**; "hiç log yok" testi geçirmez; `@AfterEach` appender detach + seviye reset.
+- **Log privacy:** Logback `ListAppender`; sentetik hassas işaret (`SENSITIVE-MARKER-…`, telefon, token) rendered mesajda / argümanlarda / MDC'de / exception'da **yok**; güvenli alan (`outcome=`) **var** (`outcome=` servis katmanında yapılır; controller testinde servis mock'luysa yalnız sızıntı yokluğu doğrulanır); "hiç log yok" testi geçirmez; `@AfterEach` appender detach + seviye reset.
 - **ArchUnit / statik:** yeni paket veya kural varsa `ArchitectureRulesTest` güncel; config drift testi yeni key'i kapsıyor; ErrorCode tekillik testi geçiyor.
 - **Frontend:** Vitest + Testing Library; kod→mesaj tablosu backend enum'larıyla contract testi.
 
 #### Komutlar
 ```bash
-mvn -B -ntp verify -pl <modül> -amd
-mvn -B -ntp test -pl <modül> -Dtest='<Sınıf>Test'
-node --test scripts/
+mvn -B -ntp verify -pl <modül> -am
+mvn -B -ntp install -DskipTests -pl <modül> -am && mvn -B -ntp test -pl <modül> -Dtest='<Sınıf>Test'
+node --test scripts/*.test.js
 npm --prefix <panel>-web test
 ```
 
@@ -4576,6 +4896,8 @@ npm --prefix <panel>-web test
 3. **Kalan boşluklar:** yazılamayan/atlanan case'ler ve nedeni.
 4. **Doğrulanan binding ve log davranışı** (kısa).
 5. **Çalıştırma komutları ve sonuç** (geçti/kaldı; kaldıysa çıktı).
+6. **Testlerin yakaladığı kusurlar:** `dosya:satır · ciddiyet (BLOCKER/HIGH/MEDIUM/LOW) · kanıtlayan test#metot · hata çıktısı`.
+7. **Sonuç:** `PASS` (tüm yeni testler yeşil) | `FAIL` (kırmızı test PR kusurunu gösteriyor) | `BLOCKED` (test altyapısı eksik).
 
 ---
 
@@ -4617,6 +4939,40 @@ npm --prefix <panel>-web test
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/review-stamp.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status*)",
+      "Bash(git show*)",
+      "Bash(git ls-files*)",
+      "Bash(git branch*)",
+      "Bash(git rev-parse*)",
+      "Bash(node scripts/*)",
+      "Bash(node --test*)",
+      "Bash(echo *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(mvn -B -ntp*)"
     ]
   }
 }
@@ -4633,7 +4989,8 @@ npm --prefix <panel>-web test
  * Kuralin tek kaynagi scripts/flyway-immutability.js'dir; bu dosya yalnizca adaptordur.
  *
  * Fail-closed: beklenmeyen hata veya bozuk girdi de engeller (exit 2). stderr Claude'a gider.
- * Base: FLYWAY_BASE_REF yoksa origin/develop; origin yoksa HEAD agacina gore korur.
+ * Base: FLYWAY_BASE_REF; yoksa sirayla origin/develop, origin/main, origin/master, develop, main, master;
+ * hicbiri yoksa HEAD agacina gore korur (mesajda gercekten kullanilan ref yazilir).
  */
 'use strict';
 const path = require('node:path');
@@ -4667,7 +5024,8 @@ process.stdin.on('end', () => {
   try {
     const r = script.checkFile(filePath, { baseRef: process.env.FLYWAY_BASE_REF, onMissingBase: 'head', cwd: root });
     if (r.protected) {
-      fail(`${r.file} base branch'te (${r.base}) mevcut bir Flyway migration'i; degistirilemez/silinemez. Degisikligi yeni bir V<sonraki>__*.sql dosyasiyla yap.`);
+      const where = r.fallback ? 'HEAD agacinda (base branch bulunamadi, FLYWAY_BASE_REF ayarlanabilir)' : `base'te (${r.base})`;
+      fail(`${r.file} ${where} mevcut bir Flyway migration'i; degistirilemez/silinemez. Degisikligi yeni bir V<sonraki>__*.sql dosyasiyla yap.`);
     }
     process.exit(0);
   } catch (e) {
@@ -4730,13 +5088,17 @@ exit 0
 
 ```bash
 #!/usr/bin/env bash
-# Claude Code PostToolUse hook (Skill): review skill'i calistiysa damga yaz.
+# Claude Code hook — iki olayda calisir (settings.json):
+#  - PostToolUse(Skill): model bir review skill'ini Skill araciyla cagirdiysa,
+#  - UserPromptSubmit: kullanici prompt'a /proj-*-review gibi bir slash komutu yazdiysa (bu durumda Claude Code
+#    Skill aracini CAGIRMAZ; komut kullanici turuna genisletilir — gercek oturum testinde goruldu, D1).
+# Damga prompt gonderildigi anda yazilir; review'in bittigini degil, baslatildigini gosterir (damga kanit degildir).
 # Damga calisma agacinin icerigine baglidir: "<epoch> <tree hash>". Icerik degisince damga gecersizdir
 # (review-gate.sh karsilastirir); commit atmak icerigi degistirmedigi icin damgayi bozmaz. Damga KANIT DEGILDIR; yalnizca "bir review skill'i bu agac uzerinde calisti" der.
 # Zorunlu guvence CI'dir (referans Bolum 19.6).
 set -euo pipefail
 INPUT="$(cat)"
-NAME="$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String((j.tool_input&&(j.tool_input.skill||j.tool_input.name))||""))}catch(e){process.stdout.write("")}})')"
+NAME="$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);const t=j.tool_input&&(j.tool_input.skill||j.tool_input.name);const m=!t&&typeof j.prompt==="string"&&j.prompt.trim().match(/^\/([\w.-]+)/);process.stdout.write(String(t||(m&&m[1])||""))}catch(e){process.stdout.write("")}})')"
 case "$NAME" in
   *-review|*test-writer|*integration-doc)
     ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
@@ -4821,24 +5183,36 @@ function assertSafeRef(ref) {
   return ref;
 }
 
+/** Acik ref (arguman/env) verilmisse yalniz o; verilmemisse sirayla denenecek adaylar (ilk bulunan kazanir). */
+const FALLBACK_BASES = ['origin/develop', 'origin/main', 'origin/master', 'develop', 'main', 'master'];
+
 function resolveBase(explicit) {
   return assertSafeRef(explicit || process.env.FLYWAY_BASE_REF || DEFAULT_BASE);
 }
 
-/** merge-base bulunamazsa: 'fail' → hata (exit 3), 'head' → HEAD agacina gore koru. */
-function resolveComparePoint({ baseRef, onMissingBase = 'fail', cwd }) {
-  try {
-    return git(['merge-base', baseRef, 'HEAD'], { cwd }).trim();
-  } catch (err) {
-    if (onMissingBase === 'head') {
-      try {
-        return git(['rev-parse', 'HEAD'], { cwd }).trim();
-      } catch (e2) {
-        throw new Error(`HEAD cozumlenemedi: ${e2.message}`);
-      }
-    }
-    throw new Error(`merge-base bulunamadi (base=${baseRef}): ${err.message}`);
+function mergeBaseOf(ref, cwd) {
+  try { return git(['merge-base', ref, 'HEAD'], { cwd }).trim(); } catch (e) { return null; }
+}
+
+/**
+ * Karsilastirma noktasi: acik ref varsa onun merge-base'i; yoksa FALLBACK_BASES sirayla denenir.
+ * Hicbiri yoksa: 'fail' → hata (exit 3), 'head' → HEAD agacina gore koru (base='HEAD').
+ * Donus: { point, base } — base, GERCEKTEN kullanilan ref'tir (hata mesajlari yaniltmasin diye).
+ */
+function resolveComparePoint({ baseRef, onMissingBase = 'fail', cwd, explicit = true }) {
+  const candidates = explicit ? [baseRef] : [baseRef, ...FALLBACK_BASES.filter((b) => b !== baseRef)];
+  for (const ref of candidates) {
+    const point = mergeBaseOf(ref, cwd);
+    if (point) return { point, base: ref, fallback: false };
   }
+  if (onMissingBase === 'head') {
+    try {
+      return { point: git(['rev-parse', 'HEAD'], { cwd }).trim(), base: 'HEAD', fallback: true };
+    } catch (e2) {
+      throw new Error(`HEAD cozumlenemedi: ${e2.message}`);
+    }
+  }
+  throw new Error(`merge-base bulunamadi (denenen: ${candidates.join(', ')})`);
 }
 
 function repoRoot(cwd) {
@@ -4856,8 +5230,8 @@ function toRepoRelative(filePath, cwd) {
  * --no-renames: yeniden adlandirma D + A olarak gorunur; D ihlaldir.
  */
 function check({ baseRef, onMissingBase = 'fail', cwd } = {}) {
-  const base = resolveBase(baseRef);
-  const point = resolveComparePoint({ baseRef: base, onMissingBase, cwd });
+  const explicit = Boolean(baseRef || process.env.FLYWAY_BASE_REF);
+  const { point, base } = resolveComparePoint({ baseRef: resolveBase(baseRef), onMissingBase, cwd, explicit });
   const out = git(['diff', '--name-status', '--no-renames', '-z', point], { cwd });
   const parts = out.split('\0').filter((s) => s.length > 0);
   const violations = [];
@@ -4875,10 +5249,13 @@ function check({ baseRef, onMissingBase = 'fail', cwd } = {}) {
 function checkFile(filePath, { baseRef, onMissingBase = 'fail', cwd } = {}) {
   const rel = toRepoRelative(filePath, cwd);
   if (!isMigrationPath(rel)) return { protected: false, file: rel };
-  const base = resolveBase(baseRef);
-  const point = resolveComparePoint({ baseRef: base, onMissingBase, cwd });
-  const listed = git(['ls-tree', '-r', '--name-only', point, '--', rel], { cwd }).trim();
-  return { protected: listed.length > 0, file: rel, base, point };
+  const explicit = Boolean(baseRef || process.env.FLYWAY_BASE_REF);
+  const { point, base, fallback } = resolveComparePoint({ baseRef: resolveBase(baseRef), onMissingBase, cwd, explicit });
+  // ls-tree pathspec'i calisilan dizine goredir: proje koku repo kokunun alt klasoruyse (monorepo) yanlis yol
+  // aranir ve base dosyasi "yok" sanilir (fail-open). Bu yuzden git her zaman repo kokunde calistirilir.
+  const root = repoRoot(cwd);
+  const listed = git(['ls-tree', '-r', '--name-only', point, '--', rel], { cwd: root }).trim();
+  return { protected: listed.length > 0, file: rel, base, point, fallback };
 }
 
 function parseArgs(argv) {
@@ -4926,7 +5303,7 @@ function main(argv) {
   }
 }
 
-module.exports = { MIGRATION_RE, isMigrationPath, resolveBase, check, checkFile, main };
+module.exports = { MIGRATION_RE, FALLBACK_BASES, isMigrationPath, resolveBase, resolveComparePoint, check, checkFile, main };
 
 if (require.main === module) {
   process.exit(main(process.argv.slice(2)));
@@ -5044,6 +5421,36 @@ test('check-file: base dosyasi korunur, yeni dosya korunmaz, migration disi dosy
   assert.equal(script.checkFile(abs, { baseRef: 'develop', cwd: repo }).protected, true);
 });
 
+test('proje koku repo kokunun alt klasoruyse (monorepo) base dosyasi yine korunur', () => {
+  // cwd = alt klasor; ls-tree pathspec'i cwd'ye gore olsaydi dosya "yok" sanilir ve yazma serbest kalirdi (fail-open)
+  const sub = path.join(repo, 'svc');
+  const r = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V1__init.sql'), { baseRef: 'develop', cwd: sub });
+  assert.equal(r.protected, true);
+  const n = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V9__new.sql'), { baseRef: 'develop', cwd: sub });
+  assert.equal(n.protected, false);
+});
+
+test('acik base yoksa aday zinciri: origin/develop yok, local main var → main kullanilir', () => {
+  delete process.env.FLYWAY_BASE_REF;
+  git('branch', '-m', 'develop', 'main');                       // base branch'in adi main
+  write('svc/src/main/resources/db/migration/V1__init.sql', 'CREATE SCHEMA s; -- changed');
+  const r = script.check({ cwd: repo });                        // ne arguman ne env
+  assert.equal(r.base, 'main');
+  assert.equal(r.violations.length, 1);
+  const f = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V1__init.sql'), { cwd: repo });
+  assert.equal(f.protected, true);
+  assert.equal(f.base, 'main');
+});
+
+test('hicbir aday yoksa: head → base HEAD olarak raporlanir', () => {
+  delete process.env.FLYWAY_BASE_REF;
+  git('branch', '-m', 'develop', 'trunk');                      // adaylardan hicbiri yok
+  const f = script.checkFile(path.join(repo, 'svc/src/main/resources/db/migration/V1__init.sql'), { onMissingBase: 'head', cwd: repo });
+  assert.equal(f.protected, true);
+  assert.equal(f.base, 'HEAD');
+  assert.throws(() => script.check({ cwd: repo }));             // fail modu: exit 3'e karsilik hata
+});
+
 test('base yoksa: fail → hata; head → HEAD agacina gore', () => {
   assert.throws(() => script.check({ baseRef: 'no-such-branch', cwd: repo }));
   const r = script.checkFile('svc/src/main/resources/db/migration/V1__init.sql', {
@@ -5065,6 +5472,881 @@ test('main: cikis kodlari', () => {
     process.chdir(cwd);
   }
 });
+```
+
+---
+
+### `scripts/config-lint.js`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * Config lint — secret hijyeni (referans Bolum 15.3, 19.5). Bagimliliksiz; CI ve elle kullanim ayni kodu cagirir.
+ *
+ * Kurallar:
+ *  (a) secret-fallback: secret gorunumlu bir key'de (ya da secret gorunumlu bir ${ENV} adinda) Spring placeholder'i
+ *      literal fallback tasiyamaz: ${SECRET_DB_PASSWORD:changeme}, ${X:} (bos fallback da fallback'tir),
+ *      ${A:${B:lit}}. Neden: env eksikse uygulama sahte/bos secret ile ayaga kalkar; fail-fast yerine sessiz hata.
+ *      ${A:${B}} serbesttir (fallback yine env'den gelir, literal yok).
+ *      Secret dosya yolu key'leri (private-key-path gibi) icin tek izinli fallback /run/secrets/... yoludur.
+ *  (b) literal-secret: local profil disindaki dosyalarda secret key'e duz deger yazilamaz. Izinli degerler:
+ *      bos, ${...} iceren deger, /run/secrets/... yolu. Block scalar (| veya >) literal sayilir (PEM govdesi).
+ *  (c) Local profildeki bir satirda "# lint:allow-secret-fallback <gerekce>" varsa o satir muaftir (local sahte
+ *      degerler icin). Gerekce zorunlu; baska bir yorum muafiyet saglamaz; local disi dosyada isaret yok sayilir.
+ *
+ * Local profil: dosya adinda "local" parcasi (application-local.yml, .env.local, local.env) ya da YAML belgesinde
+ * spring.config.activate.on-profile: local / spring.profiles: local.
+ *
+ * Kullanim:  node scripts/config-lint.js <dosya>...     (.yml/.yaml, .properties, *.env*)
+ * Cikis kodlari: 0 uygun · 1 ihlal · 3 dogrulanamadi (okunamayan/desteklenmeyen dosya ya da dosya verilmedi; fail-closed).
+ * Cikti "dosya:satir: [kural] key" bicimindedir; literal degerler log'a YAZILMAZ (CI log'u da secret sizdirmasin).
+ */
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+/** Parca icinde gecmesi yeterli olan secret kelimeleri (dbpassword, clientsecret, privatekey...). */
+const SECRET_SUBSTRINGS = ['password', 'passwd', 'secret', 'pepper', 'private', 'credential', 'apikey', 'accesskey'];
+/** Kisa kelimeler yalniz TAM parca olarak eslesir (monkey, keyspace, tokenizer, salty yanlis pozitif olmasin). */
+const SECRET_EXACT = new Set(['key', 'token', 'salt', 'pwd', 'pw', 'pass']);
+/** Son parca bunlardan biriyse key secret'in KENDISI degil, dosyasina isaret eder (secret-ref). */
+const REF_DESCRIPTORS = new Set(['path', 'file', 'location', 'dir', 'directory']);
+/** Son parca bunlardan biriyse key secret'in niteligidir, degeri secret degildir (key-store-type, token-ttl...). */
+const NON_SECRET_DESCRIPTORS = new Set([
+  'type', 'prefix', 'suffix', 'header', 'name', 'id', 'alias', 'algorithm', 'alg', 'size', 'length', 'ttl',
+  'expiry', 'expiration', 'expires', 'validity', 'lifetime', 'duration', 'timeout', 'enabled', 'issuer', 'audience',
+  'format', 'count', 'mode', 'strategy', 'version', 'kid', 'uri', 'url', 'seconds', 'minutes', 'hours', 'days',
+  'policy', 'provider', 'required',
+]);
+
+const ALLOW_RE = /#\s*lint:allow-secret-fallback\s+\S/;
+const RUN_SECRETS_RE = /^\/run\/secrets\/[^\s]+$/;
+
+/** Key/env adini parcalara boler: spring.datasource.password, SECRET_DB_PASSWORD, clientSecret, key-store[0]. */
+function tokens(name) {
+  return String(name)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 0);
+}
+
+/** 'secret' | 'secret-ref' | 'none' */
+function classify(name) {
+  const t = tokens(name);
+  if (t.length === 0) return 'none';
+  // Sondaki rakam atilir: key1/token2 (anahtar rotasyonu listeleri) de secret'tir.
+  const hit = t.some((p) => SECRET_EXACT.has(p.replace(/\d+$/, '')) || SECRET_SUBSTRINGS.some((s) => p.includes(s)));
+  if (!hit) return 'none';
+  const last = t[t.length - 1];
+  if (REF_DESCRIPTORS.has(last)) return 'secret-ref';
+  if (NON_SECRET_DESCRIPTORS.has(last)) return 'none';
+  return 'secret';
+}
+
+/** Iki siniflandirmadan daha siki olani (secret > secret-ref > none). */
+function stricter(a, b) {
+  const rank = { none: 0, 'secret-ref': 1, secret: 2 };
+  return rank[a] >= rank[b] ? a : b;
+}
+
+/**
+ * Metindeki ust duzey ${...} placeholder'larini ic ice destekli cozer.
+ * Donus: [{ start, end, name, fallback }] — fallback: null (yok) ya da ham fallback metni ('' dahil).
+ */
+function placeholders(text) {
+  const out = [];
+  let i = 0;
+  while ((i = text.indexOf('${', i)) !== -1) {
+    let depth = 0;
+    let j = i;
+    for (; j < text.length; j++) {
+      if (text.startsWith('${', j)) { depth++; j++; continue; }
+      if (text[j] === '}') { depth--; if (depth === 0) break; }
+    }
+    if (depth !== 0) break; // kapanmamis placeholder: Spring de cozemez, burada da atlanir
+    const inner = text.slice(i + 2, j);
+    const colon = topLevelColon(inner);
+    out.push({
+      start: i,
+      end: j + 1,
+      name: colon === -1 ? inner : inner.slice(0, colon),
+      fallback: colon === -1 ? null : inner.slice(colon + 1),
+    });
+    i = j + 1;
+  }
+  return out;
+}
+
+function topLevelColon(s) {
+  let depth = 0;
+  for (let k = 0; k < s.length; k++) {
+    if (s.startsWith('${', k)) { depth++; k++; continue; }
+    if (s[k] === '}') depth--;
+    else if (s[k] === ':' && depth === 0) return k;
+  }
+  return -1;
+}
+
+/**
+ * Fallback zincirinde literal var mi? ${A:${B}} → yok; ${A:${B:x}} → var; ${A:} → var (bos string).
+ * Donus: literal varsa { name } (literal'i tasiyan placeholder adi), yoksa null.
+ */
+function literalFallback(ph) {
+  if (ph.fallback === null) return null;
+  const nested = placeholders(ph.fallback);
+  let rest = ph.fallback;
+  for (let k = nested.length - 1; k >= 0; k--) rest = rest.slice(0, nested[k].start) + rest.slice(nested[k].end);
+  if (nested.length === 0 || rest.trim().length > 0) return { name: ph.name, literal: ph.fallback };
+  for (const n of nested) {
+    const inner = literalFallback(n);
+    if (inner) return inner;
+  }
+  return null;
+}
+
+/** Placeholder zincirindeki tum env adlari (ic ice fallback'ler dahil). */
+function placeholderNames(ph) {
+  const names = [ph.name];
+  if (ph.fallback !== null) for (const n of placeholders(ph.fallback)) names.push(...placeholderNames(n));
+  return names;
+}
+
+function formatOf(file) {
+  const base = path.basename(file).toLowerCase();
+  if (/\.ya?ml$/.test(base)) return 'yaml';
+  if (/\.properties$/.test(base)) return 'properties';
+  if (/(^|\.)env(\.|$)/.test(base)) return 'env';
+  return null;
+}
+
+function isLocalFile(file) {
+  return /(^|[-_.])local([-_.]|$)/i.test(path.basename(file));
+}
+
+/** Tirnak disindaki satir ici yorumu (bosluk + #) atar; tirnak icindeki # korunur. */
+function stripInlineComment(s) {
+  let q = null;
+  for (let k = 0; k < s.length; k++) {
+    const c = s[k];
+    if (q) { if (c === q) q = null; continue; }
+    if (c === '"' || c === "'") q = c;
+    else if (c === '#' && (k === 0 || /\s/.test(s[k - 1]))) return s.slice(0, k);
+  }
+  return s;
+}
+
+function unquote(v) {
+  const t = v.trim();
+  if (t.length >= 2 && ((t[0] === '"' && t.endsWith('"')) || (t[0] === "'" && t.endsWith("'")))) return t.slice(1, -1);
+  return t;
+}
+
+/** Flow mapping { a: b, c: "d" } → [[a, b], [c, d]] (tek seviye; tirnak ve ${} icindeki virgul bolmez). */
+function flowPairs(v) {
+  const t = v.trim();
+  if (!(t.startsWith('{') && t.endsWith('}'))) return null;
+  const inner = t.slice(1, -1);
+  const parts = [];
+  let depth = 0; let q = null; let cur = '';
+  for (let k = 0; k < inner.length; k++) {
+    const c = inner[k];
+    if (q) { if (c === q) q = null; cur += c; continue; }
+    if (c === '"' || c === "'") q = c;
+    else if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') depth--;
+    else if (c === ',' && depth === 0) { parts.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts.map((p) => {
+    const m = /^\s*([^:]+?)\s*:\s*(.*)$/.exec(p);
+    return m ? [unquote(m[1]), m[2].trim()] : null;
+  }).filter(Boolean);
+}
+
+/**
+ * Tek bir (key, deger) ciftini kurallara karsi denetler.
+ * keyClass: key'in kendi siniflandirmasi; local: literal-secret kurali uygulanmaz.
+ */
+function checkPair({ file, line, key, value, local, allowed, violations }) {
+  // Muafiyet yalniz local profilde: deploy config'i kendi kendini muaf tutamasin (yanlis pozitif kuralda duzeltilir).
+  if (allowed && local) return;
+  const note = allowed ? ' (allow isareti yalniz local profilde gecerli)' : '';
+  const keyClass = classify(key);
+  const phs = placeholders(value);
+  for (const ph of phs) {
+    const lit = literalFallback(ph);
+    if (!lit) continue;
+    const cls = placeholderNames(ph).map(classify).reduce(stricter, keyClass);
+    if (cls === 'none') continue;
+    // secret dosya yolu icin /run/secrets/... fallback'i kabul: yol secret degildir, standart mount noktasidir.
+    if (cls === 'secret-ref' && RUN_SECRETS_RE.test(lit.literal.trim())) continue;
+    violations.push({ file, line, rule: 'secret-fallback', key, detail: `\${${lit.name}:<redacted>}${note}` });
+  }
+  if (local || keyClass !== 'secret') return;
+  const v = unquote(value);
+  if (v === '' || v === '~' || v === 'null' || phs.length > 0 || RUN_SECRETS_RE.test(v)) return;
+  if (/^(true|false)$/i.test(v)) return; // bayrak; secret degil
+  violations.push({ file, line, rule: 'literal-secret', key, detail: `<redacted>${note}` });
+}
+
+function lintYaml(text, file) {
+  const violations = [];
+  const docs = [[]];
+  text.split(/\r?\n/).forEach((raw, idx) => {
+    if (/^---(\s|$)/.test(raw)) docs.push([]);
+    else docs[docs.length - 1].push({ raw, no: idx + 1 });
+  });
+  for (const doc of docs) {
+    const local = isLocalFile(file) || doc.some(({ raw }) =>
+      /^\s*(on-profile|profiles|spring\.config\.activate\.on-profile|spring\.profiles)\s*:\s*["']?local["']?\s*$/.test(raw));
+    const stack = []; // { indent, key }
+    let blockIndent = -1; // | veya > block scalar icerigi: key olarak ayrisilmaz
+    for (const { raw, no } of doc) {
+      const indent = raw.search(/\S/);
+      if (indent === -1) continue;
+      if (blockIndent >= 0) {
+        if (indent > blockIndent) continue;
+        blockIndent = -1;
+      }
+      const trimmed = raw.trim();
+      if (trimmed.startsWith('#')) continue;
+      const allowed = ALLOW_RE.test(raw);
+      const body = stripInlineComment(raw);
+      // "- key: value" liste elemani: key'in girintisi "- " sonrasidir
+      const m = /^(\s*(?:-\s+)?)([^\s#'"{}[\],][^:#{}]*?|"[^"]+"|'[^']+')\s*:(?:\s+(.*)|\s*)$/.exec(body);
+      if (!m) {
+        // anahtarsiz satir (liste skaleri vb.): mevcut yolun degeri gibi denetlenir
+        const key = stack.map((s) => s.key).join('.');
+        checkPair({ file, line: no, key, value: trimmed.replace(/^-\s+/, ''), local, allowed, violations });
+        continue;
+      }
+      const keyIndent = m[1].length;
+      while (stack.length && stack[stack.length - 1].indent >= keyIndent) stack.pop();
+      const key = unquote(m[2]);
+      const value = (m[3] || '').trim();
+      const full = [...stack.map((s) => s.key), key].join('.');
+      if (value === '') { stack.push({ indent: keyIndent, key }); continue; }
+      if (/^[|>][+-]?\d*$/.test(value)) {
+        // block scalar: icerik literal'dir (PEM gibi) — secret key'de literal-secret
+        checkPair({ file, line: no, key: full, value: 'block-scalar', local, allowed, violations });
+        blockIndent = keyIndent;
+        continue;
+      }
+      const pairs = flowPairs(value);
+      if (pairs) {
+        for (const [k, v] of pairs) checkPair({ file, line: no, key: `${full}.${k}`, value: v, local, allowed, violations });
+      } else {
+        checkPair({ file, line: no, key: full, value, local, allowed, violations });
+      }
+    }
+  }
+  return violations;
+}
+
+function lintKeyValue(text, file, format) {
+  const violations = [];
+  const local = isLocalFile(file);
+  text.split(/\r?\n/).forEach((raw, idx) => {
+    const trimmed = raw.trim();
+    if (trimmed === '' || trimmed.startsWith('#') || (format === 'properties' && trimmed.startsWith('!'))) return;
+    const allowed = ALLOW_RE.test(raw);
+    let key; let value;
+    if (format === 'env') {
+      const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$/.exec(trimmed);
+      if (!m) return;
+      key = m[1];
+      value = stripInlineComment(m[2]);
+    } else {
+      const m = /^([^=:\s]+)\s*[=:\s]\s*(.*)$/.exec(trimmed);
+      if (!m) return;
+      key = m[1];
+      // .properties satir ici yorum tanimaz; yalniz lint isaretini degerden ayiririz
+      value = m[2].replace(/\s#\s*lint:allow-secret-fallback.*$/, '');
+    }
+    checkPair({ file, line: idx + 1, key, value: value.trim(), local, allowed, violations });
+  });
+  return violations;
+}
+
+/** Metni verilen bicimde denetler (test ve dosya yolu icin ortak). */
+function lintText(text, file, format = formatOf(file)) {
+  if (format === 'yaml') return lintYaml(text, file);
+  if (format === 'env' || format === 'properties') return lintKeyValue(text, file, format);
+  throw new Error(`desteklenmeyen dosya turu: ${file}`);
+}
+
+/** Dosyalari toplu denetler; okunamayan/desteklenmeyen dosyalar errors'a gider (fail-closed). */
+function lintFiles(files) {
+  const violations = [];
+  const errors = [];
+  for (const file of files) {
+    const format = formatOf(file);
+    if (!format) { errors.push({ file, message: 'desteklenmeyen dosya turu (.yml/.yaml/.properties/*.env*)' }); continue; }
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      errors.push({ file, message: e.code || e.message });
+      continue;
+    }
+    violations.push(...lintText(text, file, format));
+  }
+  return { violations, errors };
+}
+
+function main(argv) {
+  const files = argv.filter((a) => a.length > 0);
+  if (files.length === 0) {
+    console.error('Kullanim: node scripts/config-lint.js <dosya>...   (0 uygun, 1 ihlal, 3 dogrulanamadi)');
+    return 3;
+  }
+  const { violations, errors } = lintFiles(files);
+  for (const v of violations) console.error(`${v.file}:${v.line}: [${v.rule}] ${v.key} = ${v.detail}`);
+  for (const e of errors) console.error(`${e.file}: DOGRULANAMADI — ${e.message}`);
+  if (errors.length > 0) {
+    console.error(`config-lint: DOGRULANAMADI — ${errors.length} dosya okunamadi, ${violations.length} ihlal`);
+    return 3;
+  }
+  if (violations.length > 0) {
+    console.error(`config-lint: IHLAL — ${violations.length} bulgu (${files.length} dosya). Duzeltme: fallback'i kaldir `
+      + '(${ENV} fail-fast) ya da degeri /run/secrets/<ad> uzerinden ver; yalniz local sahte deger icin '
+      + '"# lint:allow-secret-fallback <gerekce>".');
+    return 1;
+  }
+  console.log(`config-lint: OK (${files.length} dosya)`);
+  return 0;
+}
+
+module.exports = { classify, tokens, placeholders, literalFallback, formatOf, isLocalFile, lintText, lintFiles, main, ALLOW_RE };
+
+if (require.main === module) {
+  process.exit(main(process.argv.slice(2)));
+}
+```
+
+---
+
+### `scripts/config-lint.test.js`
+
+```javascript
+'use strict';
+// node --test scripts/config-lint.test.js
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const lint = require('./config-lint.js');
+
+const SCRIPT = path.join(__dirname, 'config-lint.js');
+const FIX = path.join(__dirname, 'fixtures', 'config-lint');
+const SKELETON_RES = path.join(__dirname, '..', 'skeleton-example', 'order-core', 'src', 'main', 'resources');
+
+function run(...files) {
+  const r = spawnSync(process.execPath, [SCRIPT, ...files], { encoding: 'utf8' });
+  return { code: r.status, out: r.stdout + r.stderr };
+}
+function yaml(text, file = 'config/svc.yml') {
+  return lint.lintText(text, file);
+}
+function tmpFile(name, content) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-lint-'));
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, content);
+  return p;
+}
+
+test('(a) secret key + literal fallback: file:line ile raporlanir, exit 1', () => {
+  const v = yaml('spring:\n  datasource:\n    password: ${SECRET_DB_PASSWORD:changeme}\n');
+  assert.deepEqual(v.map((x) => [x.line, x.rule, x.key]), [[3, 'secret-fallback', 'spring.datasource.password']]);
+  const f = tmpFile('svc.yml', 'spring:\n  datasource:\n    password: ${SECRET_DB_PASSWORD:changeme}\n');
+  const r = run(f);
+  assert.equal(r.code, 1);
+  assert.match(r.out, new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:3: \\[secret-fallback\\] spring\\.datasource\\.password`));
+  assert.doesNotMatch(r.out, /changeme/, 'literal fallback CI log\'una yazilmamali');
+});
+
+test('(a) key secret gorunmese de env adi secret ise fallback yakalanir', () => {
+  const v = yaml('app:\n  db-auth: ${SECRET_DB_PASSWORD:changeme}\n');
+  assert.equal(v.length, 1);
+  assert.equal(v[0].rule, 'secret-fallback');
+});
+
+test('(a) bos fallback ve ic ice literal fallback da fallback sayilir; ${A:${B}} serbest', () => {
+  assert.equal(yaml('db:\n  password: ${SECRET_DB_PASSWORD:}\n').length, 1);
+  assert.equal(yaml('db:\n  password: ${SECRET_DB_PASSWORD:${LEGACY_DB_PASSWORD:changeme}}\n').length, 1);
+  assert.equal(yaml('db:\n  password: ${SECRET_DB_PASSWORD:${LEGACY_DB_PASSWORD}}\n').length, 0);
+});
+
+test('(a) rakam iceren env adi (S3) ve kucuk harfli property placeholder da yakalanir', () => {
+  assert.equal(yaml('storage:\n  s3-secret-key: ${S3_SECRET_KEY:minioadmin}\n').length, 1);
+  assert.equal(yaml('storage:\n  secret: ${storage.fallback-secret:minioadmin}\n').length, 1);
+});
+
+test('(a) flow mapping icindeki secret key fallback\'i da yakalanir', () => {
+  const v = yaml('services:\n  sms: { base-url: "${SMS_URL}", api-key: "${SECRET_SMS_API_KEY:dev}" }\n');
+  assert.deepEqual(v.map((x) => x.key), ['services.sms.api-key']);
+});
+
+test('${ENV} fallback\'siz: gecer (a ve b)', () => {
+  assert.deepEqual(yaml('spring:\n  datasource:\n    password: ${SECRET_DB_PASSWORD}\n'), []);
+  assert.deepEqual(yaml('service-jwt:\n  private-key-path: ${SECRET_ORDER_SIGNING_KEY_PATH}\n'), []);
+});
+
+test('/run/secrets yolu gecer: duz deger olarak ve secret dosya yolu fallback\'i olarak', () => {
+  assert.deepEqual(yaml('spring:\n  datasource:\n    password: /run/secrets/db_password\n'), []);
+  assert.deepEqual(yaml('jwt:\n  private-key-path: ${SECRET_KEY_PATH:/run/secrets/order_signing_key}\n'), []);
+  // secret dosya yolu icin /run/secrets disi fallback: prod sessizce dev anahtariyla kalkmasin
+  assert.equal(yaml('jwt:\n  private-key-path: ${SECRET_KEY_PATH:./dev-keys/order.pem}\n').length, 1);
+  assert.deepEqual(lint.lintText('DB_PASSWORD=/run/secrets/db_password\n', 'deploy/prod.env'), []);
+});
+
+test('secret olmayan key + fallback gecer (timeout, url, ttl, key-store-type, monkey/keyspace)', () => {
+  assert.deepEqual(yaml([
+    'services:',
+    '  timeout: ${SMS_TIMEOUT:2s}',
+    '  inventory: { base-url: "${INVENTORY_URL:http://localhost:8086}", connect-timeout: 2s }',
+    'jwt:',
+    '  token-ttl: ${JWT_TOKEN_TTL:15m}',
+    'server:',
+    '  ssl:',
+    '    key-store-type: ${KEY_STORE_TYPE:PKCS12}',
+    'cassandra:',
+    '  keyspace: ${KEYSPACE:orders}',
+    '  monkey: ${MONKEY:yes}',
+  ].join('\n')), []);
+});
+
+test('(b) local disi dosyada duz secret degeri raporlanir; local dosyada serbest', () => {
+  const text = 'security:\n  pepper: not-a-real-pepper\n';
+  assert.deepEqual(yaml(text, 'config/order.yml').map((x) => [x.line, x.rule]), [[2, 'literal-secret']]);
+  assert.deepEqual(yaml(text, 'src/main/resources/application-local.yml'), []);
+  assert.equal(lint.lintText('DB_PASSWORD=changeme\n', 'deploy/prod.env.example')[0].rule, 'literal-secret');
+  assert.deepEqual(lint.lintText('DB_PASSWORD=changeme\n', 'deploy/.env.local'), []);
+  assert.deepEqual(lint.lintText('DB_PASSWORD=\n', 'deploy/prod.env.example'), [], 'bos sablon degeri serbest');
+});
+
+test('(b) rotasyon listesindeki numarali anahtar (key1/key2) duz degerle raporlanir', () => {
+  const v = yaml('jwt:\n  keys:\n    key1: not-a-real-signing-key\n    key2: ${JWT_KEY2}\n', 'config/order.yml');
+  assert.deepEqual(v.map((x) => [x.line, x.rule, x.key]), [[3, 'literal-secret', 'jwt.keys.key1']]);
+});
+
+test('(b) YAML belgesi on-profile: local ise o belge local sayilir, digeri sayilmaz', () => {
+  const v = yaml([
+    'spring:',
+    '  datasource:',
+    '    password: prod-literal',
+    '---',
+    'spring:',
+    '  config:',
+    '    activate:',
+    '      on-profile: local',
+    '  datasource:',
+    '    password: local-literal',
+  ].join('\n'), 'application.yml');
+  assert.deepEqual(v.map((x) => x.line), [3]);
+});
+
+test('(b) block scalar (PEM govdesi) literal sayilir; icerik satirlari key sanilmaz', () => {
+  const v = yaml('jwt:\n  private-key: |\n    MIIEvQ: fake\n    secret: nope\n  issuer: order\n');
+  assert.deepEqual(v.map((x) => [x.line, x.rule, x.key]), [[2, 'literal-secret', 'jwt.private-key']]);
+});
+
+test('(b) .properties bicimi', () => {
+  const v = lint.lintText('spring.datasource.password=changeme\nspring.datasource.username=app\nx.token=${TOKEN:abc}\n', 'app.properties');
+  assert.deepEqual(v.map((x) => [x.line, x.rule]), [[1, 'literal-secret'], [3, 'secret-fallback']]);
+});
+
+test('(c) allow isareti + gerekce local dosyada muaf tutar', () => {
+  const f = 'src/main/resources/application-local.yml';
+  assert.deepEqual(yaml('sms:\n  api-key: ${SECRET_SMS_API_KEY:fake} # lint:allow-secret-fallback local sahte saglayici\n', f), []);
+});
+
+test('(c) baska bir yorum, gerekcesiz isaret veya local disi dosya muafiyet saglamaz', () => {
+  const f = 'src/main/resources/application-local.yml';
+  assert.equal(yaml('sms:\n  api-key: ${SECRET_SMS_API_KEY:fake} # TODO sonra bakilacak\n', f).length, 1);
+  assert.equal(yaml('sms:\n  api-key: ${SECRET_SMS_API_KEY:fake} # lint:allow-secret-fallback\n', f).length, 1);
+  assert.equal(yaml('sms:\n  api-key: ${SECRET_SMS_API_KEY:fake} # lint:allow-anything local\n', f).length, 1);
+  const prod = yaml('sms:\n  api-key: ${SECRET_SMS_API_KEY:fake} # lint:allow-secret-fallback prod icin de\n', 'config/order.yml');
+  assert.equal(prod.length, 1);
+  assert.match(prod[0].detail, /yalniz local/);
+});
+
+test('fixture\'lar: coklu dosya birlestirilir, satirlar dogru, exit 1', () => {
+  const r = run(
+    path.join(FIX, 'service-bad.yml'), path.join(FIX, 'service-ok.yml'),
+    path.join(FIX, 'application-local.yml'), path.join(FIX, 'prod.env.example'),
+  );
+  assert.equal(r.code, 1);
+  const found = r.out.split('\n').filter((l) => /: \[/.test(l)).map((l) => l.replace(`${FIX}${path.sep}`, '').replace(/ = .*$/, ''));
+  assert.deepEqual(found, [
+    'service-bad.yml:5: [secret-fallback] spring.datasource.password',
+    'service-bad.yml:7: [literal-secret] security.pepper',
+    'service-bad.yml:9: [secret-fallback] services.sms.api-key',
+    'application-local.yml:8: [secret-fallback] services.sms.webhook-secret',
+    'prod.env.example:3: [literal-secret] DB_PASSWORD',
+  ]);
+  assert.match(r.out, /IHLAL — 5 bulgu \(4 dosya\)/);
+  const { violations } = lint.lintFiles([path.join(FIX, 'service-bad.yml'), path.join(FIX, 'prod.env.example')]);
+  assert.equal(new Set(violations.map((v) => v.file)).size, 2, 'iki dosyanin bulgulari tek sonucta');
+});
+
+test('cikis kodlari: 0 temiz, 1 ihlal, 3 okunamayan / desteklenmeyen / dosya yok', () => {
+  assert.equal(run(path.join(FIX, 'service-ok.yml')).code, 0);
+  assert.equal(run(path.join(FIX, 'service-bad.yml')).code, 1);
+  const missing = run(path.join(FIX, 'service-ok.yml'), path.join(FIX, 'does-not-exist.yml'));
+  assert.equal(missing.code, 3);
+  assert.match(missing.out, /does-not-exist\.yml: DOGRULANAMADI — ENOENT/);
+  // okunamayan dosya ihlalden once gelir: dogrulanamayan kume "uygun" ya da yalniz "ihlal" sayilmaz
+  assert.equal(run(path.join(FIX, 'service-bad.yml'), path.join(FIX, 'does-not-exist.yml')).code, 3);
+  assert.equal(run(FIX + path.sep + 'service-ok.yml', FIX).code, 3, 'klasor (EISDIR) okunamaz');
+  assert.equal(run(tmpFile('notes.txt', 'password: x')).code, 3, 'desteklenmeyen tur');
+  assert.equal(run().code, 3, 'dosya verilmedi');
+});
+
+test('okuma izni olmayan dosya: exit 3 (root degilse gercek EACCES)', () => {
+  const f = tmpFile('svc.yml', 'a: b\n');
+  fs.chmodSync(f, 0o000);
+  try {
+    let readable = true;
+    try { fs.readFileSync(f); } catch (e) { readable = false; }
+    const r = run(f);
+    // root her dosyayi okuyabilir; o durumda icerik temiz oldugu icin 0 beklenir — iki dal da acikca dogrulanir
+    assert.equal(r.code, readable ? 0 : 3);
+    if (!readable) assert.match(r.out, /EACCES/);
+  } finally {
+    fs.chmodSync(f, 0o600);
+  }
+});
+
+test('skeleton-example gercek config dosyalari temiz (kural mesru config\'i isaretlemez)', () => {
+  const files = [
+    path.join(SKELETON_RES, 'application-local.yml'),
+    ...fs.readdirSync(path.join(SKELETON_RES, 'config')).filter((f) => f.endsWith('.yml')).map((f) => path.join(SKELETON_RES, 'config', f)),
+    path.join(__dirname, '..', 'skeleton-example', 'deploy', 'prod.env.example'),
+  ];
+  assert.ok(files.length >= 3);
+  const r = run(...files);
+  assert.equal(r.code, 0, r.out);
+});
+
+test('siniflandirma', () => {
+  assert.equal(lint.classify('spring.datasource.password'), 'secret');
+  assert.equal(lint.classify('SECRET_DB_PASSWORD'), 'secret');
+  assert.equal(lint.classify('clientSecret'), 'secret');
+  assert.equal(lint.classify('security.pepper'), 'secret');
+  assert.equal(lint.classify('hash.salt'), 'secret');
+  assert.equal(lint.classify('github.token'), 'secret');
+  assert.equal(lint.classify('jwt.keys.key1'), 'secret');
+  assert.equal(lint.classify('webhook.token2'), 'secret');
+  assert.equal(lint.classify('service-jwt.private-key-path'), 'secret-ref');
+  assert.equal(lint.classify('server.ssl.key-store-type'), 'none');
+  assert.equal(lint.classify('jwt.token-ttl'), 'none');
+  assert.equal(lint.classify('cassandra.keyspace'), 'none');
+  assert.equal(lint.classify('services.inventory.base-url'), 'none');
+});
+```
+
+---
+
+### `scripts/gitleaks-check.sh`
+
+```bash
+#!/usr/bin/env bash
+# gitleaks sarmalayicisi — secret taramasi (referans Bolum 15.3, 19.5). CI, pre-commit ve elle kullanim ayni komutu cagirir.
+#
+# Kullanim:
+#   bash scripts/gitleaks-check.sh [all|history|tree] [yol]        (varsayilan: all .)
+#     history : gitleaks git --no-banner --redact --exit-code 1 <yol>   — TUM commit gecmisi (silinmis secret dahil)
+#     tree    : gitleaks dir --no-banner --redact --exit-code 1 <yol>   — calisma agaci (commit'lenmemis dosyalar dahil)
+#     all     : ikisi birden; biri bile bulursa 1
+#   Ortam:
+#     GITLEAKS           gitleaks ikilisinin yolu (varsayilan: PATH'teki gitleaks; surum 8.19+ — git/dir alt komutlari)
+#     GITLEAKS_LOG_OPTS  history modunda --log-opts (ornek: "origin/develop..HEAD"); bos = tum gecmis
+#     GITLEAKS_CONFIG    gitleaks'in kendi degiskeni; verilmezse proje kokundeki .gitleaks.toml kullanilir (varsa)
+#
+# Cikis kodlari: 0 temiz · 1 secret bulundu · 3 dogrulanamadi (ikili yok, git deposu degil, gitleaks hatasi).
+# Neden rapor dosyasina bakiliyor: gitleaks hata durumunda da (ornek: "not a git repository", kismi tarama) exit 1
+# doner ve "no leaks found in partial scan" yazar. Exit kodu tek basina "secret var" ile "tarama yapilamadi"yi
+# ayirmaz; bulgu JSON raporunda yoksa sonuc "dogrulanamadi" (fail-closed) sayilir, "temiz" sayilmaz.
+# --redact: bulunan secret CI log'una yazilmaz (log'lar genis erisimlidir).
+set -uo pipefail
+
+MODE="${1:-all}"
+TARGET="${2:-.}"
+BIN="${GITLEAKS:-gitleaks}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # proje koku (scripts/..)
+
+case "$MODE" in
+  all|history|tree) ;;
+  *) echo "gitleaks-check: kullanim: [all|history|tree] [yol]" >&2; exit 3 ;;
+esac
+if ! command -v "$BIN" >/dev/null 2>&1; then
+  echo "gitleaks-check: DOGRULANAMADI — gitleaks bulunamadi (GITLEAKS=$BIN)" >&2
+  exit 3
+fi
+if [ ! -e "$TARGET" ]; then
+  echo "gitleaks-check: DOGRULANAMADI — yol yok: $TARGET" >&2
+  exit 3
+fi
+
+COMMON=(--no-banner --redact --exit-code 1)
+# Allowlist tek yerde: proje kokundeki .gitleaks.toml (alt klasor taranirken gitleaks onu kendiliginden bulmaz).
+if [ -z "${GITLEAKS_CONFIG:-}" ] && [ -f "$ROOT/.gitleaks.toml" ]; then COMMON+=(--config "$ROOT/.gitleaks.toml"); fi
+if [ -f "$ROOT/.gitleaksignore" ]; then COMMON+=(--gitleaks-ignore-path "$ROOT/.gitleaksignore"); fi
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# run <ad> <gitleaks argumanlari...> → 0 temiz, 1 bulgu, 3 dogrulanamadi
+run() {
+  local name="$1"; shift
+  local report="$TMP/$name.json" rc
+  "$BIN" "$@" "${COMMON[@]}" --report-format json --report-path "$report"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then echo "gitleaks-check: $name OK"; return 0; fi
+  if [ "$rc" -eq 1 ] && [ -s "$report" ] && grep -q '"RuleID"' "$report"; then
+    echo "gitleaks-check: $name IHLAL — $(grep -c '"RuleID"' "$report") bulgu:" >&2
+    grep -o '"RuleID": *"[^"]*"\|"File": *"[^"]*"\|"StartLine": *[0-9]*\|"Commit": *"[^"]*"' "$report" \
+      | paste -d' ' - - - - >&2 || true
+    return 1
+  fi
+  echo "gitleaks-check: $name DOGRULANAMADI — gitleaks exit $rc, raporda bulgu yok (tarama tamamlanmadi)" >&2
+  return 3
+}
+
+worst=0
+note() { if [ "$1" -eq 3 ] || { [ "$1" -eq 1 ] && [ "$worst" -ne 3 ]; }; then worst="$1"; fi; }
+
+if [ "$MODE" = all ] || [ "$MODE" = history ]; then
+  args=(git "$TARGET")
+  if [ -n "${GITLEAKS_LOG_OPTS:-}" ]; then args+=(--log-opts "$GITLEAKS_LOG_OPTS"); fi
+  run history "${args[@]}"; note $?
+fi
+if [ "$MODE" = all ] || [ "$MODE" = tree ]; then
+  run tree dir "$TARGET"; note $?
+fi
+exit "$worst"
+```
+
+---
+
+### `scripts/gitleaks-check.test.js`
+
+```javascript
+'use strict';
+// GITLEAKS=<gitleaks ikilisi> node --test scripts/gitleaks-check.test.js
+// Gercek gitleaks ikilisiyle gecici git depolarinda kosar. Ikili yoksa test ATLANMAZ, basarisiz olur
+// (sessizce atlanan secret taramasi testi, kirik tarayiciyi yesil gosterir).
+const { test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync, spawnSync } = require('node:child_process');
+
+const WRAPPER = path.join(__dirname, 'gitleaks-check.sh');
+const CONFIG_LINT = path.join(__dirname, 'config-lint.js');
+const BIN = process.env.GITLEAKS || 'gitleaks';
+
+// Sahte secret'lar KAYNAKTA literal olarak durmaz, calisma aninda uretilir: aksi halde bu dosya deponun kendi
+// gitleaks taramasinda bulgu olur. Rastgele govde, gitleaks'in "EXAMPLE" gibi stopword allowlist'ine takilmaz.
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function fakeAwsKeyId() {
+  const bytes = crypto.randomBytes(16);
+  return ['AK', 'IA'].join('') + Array.from(bytes, (b) => B32[b % 32]).join('');
+}
+function fakePrivateKeyBlock() {
+  const body = crypto.randomBytes(384).toString('base64').match(/.{1,64}/g).join('\n');
+  const dash = '-'.repeat(5);
+  return `${dash}BEGIN ${'PRIVATE'} KEY${dash}\n${body}\n${dash}END ${'PRIVATE'} KEY${dash}\n`;
+}
+
+let repo;
+function git(...args) {
+  return execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+function write(rel, content) {
+  const p = path.join(repo, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, content);
+}
+function commitAll(msg) {
+  git('add', '-A');
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', msg);
+}
+function wrapper(mode, target = repo, env = {}) {
+  const r = spawnSync('bash', [WRAPPER, mode, target], {
+    encoding: 'utf8', env: { ...process.env, GITLEAKS: BIN, ...env },
+  });
+  return { code: r.status, out: r.stdout + r.stderr };
+}
+
+beforeEach(() => {
+  repo = fs.mkdtempSync(path.join(os.tmpdir(), 'gitleaks-check-'));
+  git('init', '-q', '-b', 'main');
+  write('README.md', '# temiz depo\n');
+  write('src/main/resources/config/order.yml', 'spring:\n  datasource:\n    password: ${SECRET_DB_PASSWORD}\n');
+  commitAll('init');
+});
+
+afterEach(() => {
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('gitleaks ikilisi mevcut (yoksa bu test kirmizi; diger testler de kosamaz)', () => {
+  const r = spawnSync(BIN, ['version'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `gitleaks calismadi (GITLEAKS=${BIN}): ${r.error || r.stderr}`);
+  assert.match(r.stdout, /^8\./);
+});
+
+test('(1) gecmise girmis sahte AWS anahtari + private key blogu: exit 1, bulgular raporlanir, secret log\'a yazilmaz', () => {
+  const aws = fakeAwsKeyId();
+  write('deploy/aws.env', `AWS_ACCESS_KEY_ID=${aws}\n`);
+  write('keys/order.pem', fakePrivateKeyBlock());
+  commitAll('oops');
+  for (const mode of ['history', 'all']) {
+    const r = wrapper(mode);
+    assert.equal(r.code, 1, `${mode}: ${r.out}`);
+    assert.match(r.out, /"RuleID": *"aws-access-token"/);
+    assert.match(r.out, /"RuleID": *"private-key"/);
+    assert.match(r.out, /history IHLAL — 2 bulgu/);
+    assert.ok(!r.out.includes(aws), '--redact: anahtar cikti/log\'da gorunmemeli');
+  }
+});
+
+test('(2) temiz depo: history, tree ve all exit 0', () => {
+  for (const mode of ['history', 'tree', 'all']) {
+    const r = wrapper(mode);
+    assert.equal(r.code, 0, `${mode}: ${r.out}`);
+  }
+});
+
+test('commit\'lenmemis secret: tree yakalar (1), history yakalamaz (0) — iki mod birbirinin yerine gecmez', () => {
+  write('deploy/aws.env', `AWS_ACCESS_KEY_ID=${fakeAwsKeyId()}\n`);
+  assert.equal(wrapper('tree').code, 1);
+  assert.equal(wrapper('history').code, 0);
+  assert.equal(wrapper('all').code, 1);
+});
+
+test('commit\'lenip sonra silinen secret: history yakalar (1), tree temiz (0) — gecmis taramasi sart', () => {
+  write('deploy/aws.env', `AWS_ACCESS_KEY_ID=${fakeAwsKeyId()}\n`);
+  commitAll('oops');
+  fs.rmSync(path.join(repo, 'deploy/aws.env'));
+  commitAll('remove');
+  assert.equal(wrapper('tree').code, 0);
+  const h = wrapper('history');
+  assert.equal(h.code, 1, h.out);
+  assert.match(h.out, /"Commit": *"[0-9a-f]{40}"/);
+});
+
+test('GITLEAKS_LOG_OPTS ile yalniz PR araligi taranir', () => {
+  write('deploy/aws.env', `AWS_ACCESS_KEY_ID=${fakeAwsKeyId()}\n`);
+  commitAll('eski sizinti');
+  const base = git('rev-parse', 'HEAD').trim();
+  write('docs/x.md', 'temiz\n');
+  commitAll('yeni temiz commit');
+  assert.equal(wrapper('history', repo, { GITLEAKS_LOG_OPTS: `${base}..HEAD` }).code, 0);
+  assert.equal(wrapper('history', repo, { GITLEAKS_LOG_OPTS: '' }).code, 1);
+});
+
+test('fail-closed: git deposu olmayan hedef, olmayan yol, ikili yok, bilinmeyen mod → exit 3', () => {
+  const notRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'gitleaks-norepo-'));
+  try {
+    // ham gitleaks burada exit 1 + "no leaks found in partial scan" verir; sarmalayici bunu "temiz" ya da "ihlal" saymaz
+    const raw = spawnSync(BIN, ['git', '--no-banner', '--exit-code', '1', notRepo], { encoding: 'utf8' });
+    assert.equal(raw.status, 1);
+    const r = wrapper('history', notRepo);
+    assert.equal(r.code, 3, r.out);
+    assert.match(r.out, /DOGRULANAMADI/);
+  } finally {
+    fs.rmSync(notRepo, { recursive: true, force: true });
+  }
+  assert.equal(wrapper('tree', path.join(repo, 'no-such-dir')).code, 3);
+  assert.equal(wrapper('all', repo, { GITLEAKS: '/nonexistent/gitleaks' }).code, 3);
+  assert.equal(wrapper('bogus').code, 3);
+});
+
+test('gitleaks dusuk entropili literal fallback\'i YAKALAMAZ; config-lint yakalar (iki kontrol birbirini tamamlar)', () => {
+  write('src/main/resources/config/order.yml', 'spring:\n  datasource:\n    password: ${SECRET_DB_PASSWORD:changeme}\n');
+  commitAll('fallback');
+  assert.equal(wrapper('all').code, 0);
+  const lint = spawnSync(process.execPath, [CONFIG_LINT, path.join(repo, 'src/main/resources/config/order.yml')], { encoding: 'utf8' });
+  assert.equal(lint.status, 1, lint.stderr);
+});
+```
+
+---
+
+### `scripts/fixtures/config-lint/application-local.yml`
+
+```yaml
+# config-lint fixture: local profil — literal sahte deger serbest, fallback yalniz gerekceli isaretle (satir 8 ihlal)
+spring:
+  datasource:
+    password: local-dev-only
+services:
+  sms:
+    api-key: ${SECRET_SMS_API_KEY:fake-local-key} # lint:allow-secret-fallback local sahte SMS saglayicisi
+    webhook-secret: ${SMS_WEBHOOK_SECRET:fake-local-webhook} # TODO sonra bakilacak
+```
+
+---
+
+### `scripts/fixtures/config-lint/prod.env.example`
+
+```bash
+# config-lint fixture: deploy env sablonu — satir 3 ihlal (literal parola)
+DB_HOST=
+DB_PASSWORD=changeme
+SECRET_ORDER_SIGNING_KEY_PATH=/run/secrets/order_signing_key
+INVENTORY_URL=http://inventory:8086
+```
+
+---
+
+### `scripts/fixtures/config-lint/service-bad.yml`
+
+```yaml
+# config-lint fixture: deploy config'i (local degil) — 3 ihlal beklenir (satir 5, 7, 9)
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
+    password: ${SECRET_DB_PASSWORD:changeme}
+security:
+  pepper: not-a-real-pepper
+services:
+  sms: { base-url: "${SMS_URL}", api-key: "${SECRET_SMS_API_KEY:}" }
+  timeout: ${SMS_TIMEOUT:2s}
+```
+
+---
+
+### `scripts/fixtures/config-lint/service-ok.yml`
+
+```yaml
+# config-lint fixture: dogru deploy config'i — ihlal yok
+service-jwt:
+  private-key-path: ${SECRET_ORDER_SIGNING_KEY_PATH}
+  token-ttl: ${JWT_TOKEN_TTL:15m}
+spring:
+  datasource:
+    password: ${SECRET_DB_PASSWORD}
+  ssl:
+    bundle:
+      pem:
+        server:
+          keystore:
+            private-key: /run/secrets/order_tls_key
+server:
+  ssl:
+    key-store-type: PKCS12
 ```
 
 ---
@@ -5455,7 +6737,7 @@ target/
 `blueprint/tests/*.java` şablonlarının, enforcer kuralının ve **generic outbox/inbox'ın** gerçekten derlenip çalıştığı en küçük Maven multi-module projesi. Referans dokümanın (Bölüm 3, 4, 7, 11.2–11.3, 16, 19.5–19.6, 23.3–23.4) somut, çalışan karşılığı.
 
 - Spring Boot **4.1.1** BOM, Java 21 (25 ile de uyumlu), ArchUnit 1.5.1, Maven 3.9.11.
-- Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `platform-messaging` (generic outbox/inbox: `OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`; local saga: `LocalSagaStore`, `SagaRecoveryWorker`, `SagaParticipant`, `db/platform/saga_coordinator.sql`), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + yapısal testler).
+- Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `platform-messaging` (generic outbox/inbox: `OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`; local saga: `LocalSagaStore`, `SagaRecoveryWorker`, `SagaParticipant`, `db/platform/saga_coordinator.sql`), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + yapısal testler). `broker-example` (seviye 3: gerçek RabbitMQ 4.3 topolojisi, `OutboxEventPublisher`, `OrderCancelledListener`, stream okuyucu; `BrokerBehaviourIT`).
 - Config: `application-local.yml`, `config/order.yml`, `deploy/prod.env.example` (drift testi için).
 
 #### Doğrulama sonucu (2026-09-29)
@@ -5464,6 +6746,7 @@ target/
 mvn -B -ntp test   → BUILD SUCCESS
 platform-messaging  OutboxBehaviourIT      13 test  (davranışsal, gerçek PostgreSQL 17.5 — gömülü, Docker gerekmez)
                     SagaBehaviourIT        19 test  (davranışsal, saga senaryoları 1–20; aynı gömülü PG)
+broker-example      BrokerBehaviourIT      12 test  (davranışsal, gerçek RabbitMQ 4.3.0 + gömülü PostgreSQL 18.1; senaryo a–l, 5 mutasyon)
 order-core          ArchitectureRulesTest   8 test  (katman, controller→repository, impl paketi, config/, core→core, döngü, @Valid, api→entity)
                     ConfigDriftTest         3 test  (key kümeleri, ${ENV} ↔ env şablonu, secret fallback)
                     ErrorCodeUniquenessTest 1 test  (global tekillik, blok, mesaj formatı)
@@ -5523,6 +6806,31 @@ Koordinatör `order` şemasında (`saga`, `saga_steps`, `order_item`), katılım
 
 **Koşturulmayan (dürüst sınır):** katılımcının gerçek HTTP/JWT katmanı (allowlist, `act` claim'i, 400/401/403 binding'leri — seviye 1 MVC ve seviye 3 runtime testleri projede yazılır), gerçek broker ile yeniden teslim/ack (seviye 3), staging provası (seviye 4). Bu iskelet outbox/inbox ve saga durum makinesinin PostgreSQL üzerindeki güvencelerini kanıtlar.
 
+##### Davranışsal (seviye 3: gerçek RabbitMQ 4.3.0 + gerçek PostgreSQL 18.1) — `BrokerBehaviourIT` (`broker-example`)
+
+Üretici `order` şeması (generic outbox, `OutboxPoller` EVENT lane'i → `OutboxEventPublisher`) → `bvt.domain.events` topic exchange → `bvt.notification.order-cancelled.queue` **quorum queue** (`x-delivery-limit=3`, `x-dead-letter-strategy=at-least-once`, `x-overflow=reject-publish`, DLX `bvt.dlx` → `…dlq`, **native gecikmeli retry** `x-delayed-retry-type=failed`, min 1000 / max 5000 ms) → `OrderCancelledListener` (manuel ack, prefetch 10, `InboxProcessor` ile inbox satırı + etki tek TX) `notification` şemasında. Aynı exchange'e `#` ile bağlı `bvt.domain.events.stream` replay için. Broker Docker'sız, lokal RabbitMQ 4.3.0 (Khepri); PostgreSQL gömülü 18.1 (`embedded-postgres-binaries-bom` 18.1.0). Poller zamanı deterministik `Clock`, tüketici ölçümleri duvar saati.
+
+| # | Senaryo | Sonuç |
+|---|---|---|
+| a | 20 outbox satırı tek TX → poll → 20 publisher confirm (callback sayacı), outbox boş, 20 etki + 20 inbox satırı, her olay tam bir kez | PASS |
+| b | Binding'i olmayan routing key: `mandatory` + returns → `basic.return` → `UnroutableEventException` → satır PENDING, `retry_count=1`, backoff 60 sn; broker yine ACK verdiği için returned kontrolü olmadan olay sessizce kaybolurdu | PASS |
+| c | İlk 2 teslimde geçici hata → `basic.reject requeue=true` → broker gecikmeli yeniden teslim: aralıklar ≥ 1000 ms ve ≥ 2000 ms (ölçülen 1010 / 2011 ms), `x-delivery-count` 1, 2; 3. teslim başarılı; tek etki | PASS |
+| d | Her teslimde hata → ilk + 3 yeniden teslim (`x-delivery-count` 0,1,2,3; gecikmeler 1+2+3 sn) → at-least-once DLQ (management API derinlik 1), ana kuyruk boş, etki/inbox yok | PASS |
+| e | Zehirli mesaj (JSON değil) → `basic.reject requeue=false` → anında DLQ, tek deneme | PASS |
+| f | Inbox satırı yazıldıktan sonra iş patlar → TX rollback (inbox satırı da), `reject requeue=true` → gecikmeli yeniden teslim → başarı; tam 1 etki + 1 inbox satırı (ack yalnız commit sonrası) | PASS |
+| g | Aynı olay (aynı `ce-id`) iki kez yayınlanır → APPLIED + DUPLICATE, 1 etki, 1 inbox satırı, kuyruk boş | PASS |
+| h | `rabbitmqctl stop_app` → poll exception sızdırmaz: PENDING, `retry_count=1`, `last_error_code=AmqpConnectException` (host/mesaj yok); `start_app` → backoff sonrası yayın, container kendini toparlar (recoveryInterval), tüketici uygular | PASS |
+| i | Stream: 5 olay → `x-stream-offset=first` ile 5'i sırayla (offset 0..4); ikinci okuyucu offset 0'dan aynısını alır (yıkıcı değil); quorum queue'daki 5 mesaj etkilenmez | PASS |
+| j | `consumer-timeout=5000` policy'si: ack'lenmeyen mesajı QQ 5 sn sonra geri alır, tüketiciye `basic.cancel` gönderir (kanal kapanmaz), Spring container consumer'ı yeniden başlatır, mesaj `redelivered=true` ile gelir; ölçülen aralık ≥ 5 sn | PASS |
+| k | Gecikmeli retry kuyruk argümanlarıyla etkin (management API `arguments`). Policy yolu sürüme bağlı: **4.3.0'da 400 "not recognised policy settings"**, **4.3.6'da (CI) kabul edilir** ve argümansız QQ'da reject sonrası ikinci teslim ≥ 900 ms gecikir | PASS |
+| l | Binding `order.order.*` ile gelen bilinmeyen tip (`order.order.created`) loglanır, ack'lenir; etki/inbox/DLQ yok | PASS |
+
+**Negatif doğrulama (mutasyon):** (1) publisher'da `CorrelationData.getReturned()` kontrolü kaldırıldı → b FAIL (`failed` 1 beklenirken 0: olay kayboldu); (2) ack `inbox.process` öncesine alındı → f ve c FAIL (commit başarısızken mesaj ack'lendi, kayıp; sonraki reject "unknown delivery tag" kanal hatası); (3) inbox dedup atlandı → g FAIL (`[APPLIED, APPLIED]`), a FAIL (inbox 0); (4a) container'da `defaultRequeueRejected=true` → d, e **değişmedi**: `AcknowledgeMode.MANUAL`'da container yalnız `AmqpRejectAndDontRequeueException(rejectManual)` için reject gönderir (Spring AMQP 4.1.1 `BlockingQueueConsumer.rollbackOnExceptionIfNecessary`), bayrak listener'ın kendi reject'lerini etkilemez — **eşdeğer mutasyon**; asıl koruma listener'ın açık `requeue=false`/`reject requeue=true` kararlarıdır; (4b) zehirli mesaj yolunda `requeue=true` → e FAIL (1 yerine 4 deneme); (4c) geçici hata yolunda `basic.nack requeue=true` → d FAIL (DLQ'ya hiç düşmez: sıcak döngü; 20 sn sınırında yakalandı), c FAIL (`x-delivery-count` artmadı, gecikme yok); (5) `x-delayed-retry-*` argümanları kaldırıldı → c FAIL (aralık 19 ms), k ERROR. Geri alınınca 12/12 yeşil.
+
+**Broker'da doğrulanan gerçekler (referans 12.3 için düzeltme notları):** RabbitMQ 4.3.0'da `delayed-retry-type/min/max` **policy anahtarı olarak kayıtlı değildir** (`rabbit_policies` validator listesinde yok; `rabbitmqctl set_policy` "not recognised policy settings" der) — kuyruk argümanı `x-delayed-retry-*` kullanılır; `rabbit_quorum_queue:get_delayed_retry_config/1` policy'yi de okur ama policy tanımlanamaz. AMQP 0-9-1'de **`basic.reject requeue=true`** `modify{delivery_failed=true}` olarak işlenir (sayaç artar, `failed` tipi gecikme uygulanır, `delivery-limit` dolunca DLQ); **`basic.nack requeue=true`** ise düz `return`dür (`delivery_failed=false`): sayaç artmaz, gecikme yok, limit hiç dolmaz → gecikmesiz sonsuz requeue. `requeue=false` (nack/reject) anında dead-letter. Gecikme lineerdir: `min(min·delivery_count, max)`. `consumer-timeout` policy anahtarı geçerlidir ve **consume anında** okunur (sonradan konan policy mevcut tüketiciyi etkilemez); süre dolunca QQ mesajı geri alır ve `basic.cancel` gönderir (kanal kapanmaz), Spring container consumer'ı yeniden başlatır.
+
+**Koşturulmayan (dürüst sınır):** `spring-rabbit-stream` (stream protokolü 5552) classpath'te olmadığından stream 0-9-1 `x-stream-offset` ile okundu; Spring Boot auto-config (`spring.rabbitmq.*` property'leri) yerine container/template elle kuruldu (aynı ayarlar); çoklu instance tüketici yarışı ve staging provası (seviye 4).
+
 #### Denemede öğrenilen dersler (şablonlara işlendi)
 
 1. **Enforcer `bannedDependencies`:** `com.acme:*-core` deseni `platform-core`'u da yakalar. Çözüm: `<includes><include>com.acme:platform-*</include></includes>` — ya da platform modüllerini `-core` ile bitirmemek.
@@ -5537,6 +6845,11 @@ Koordinatör `order` şemasında (`saga`, `saga_steps`, `order_item`), katılım
 9. **Recovery worker'ı istek TX'inin thread'inde çağırmak yanlış test verir:** `JdbcTemplate` thread'e bağlı bağlantıyı kullanır; claim istek TX'inin içinde kalır, `REQUIRES_NEW` prepare onu göremez → "recovery hiçbir şey yapmadı" gibi görünür. Yarış testlerinde worker ayrı thread'de koşar (üretimdeki gibi).
 10. **Yarış testinde iki dal da görülmeli:** worker'ı sabit anda başlatınca 20/20 hep aynı taraf kazandı (önce hep istek, sonra hep recovery). İki tarafa da değişen gecikme verilince dağılım ~10/10 oldu; test yalnız değişmezleri (invariant) doğrular, hangi tarafın kazandığını değil. Ayrıca `pastDeadline()` begin'den **sonra** çağrılmalı; önce çağrılınca adım hiç claim edilemedi (deadline saatle birlikte kaydı).
 
+11. **Mutasyon "bayrak çevir" her zaman davranış değiştirmez:** `defaultRequeueRejected` MANUAL ack'te etkisizdir (4a). Konfigürasyon bayrağını mutasyona uğratmak yetmez; listener'ın verdiği fiili karar (requeue flag'i) mutasyona uğratılır (4b/4c) — aksi halde "yakalandı" sanılan koruma aslında yoktur.
+12. **Management API istatistikleri gecikir (≈5 sn):** DLQ derinliği bir önceki testten bayat okunabilir; her test doğrulanmış sıfır derinlikten başlar ve önce listener gözlemi (deneme sayısı), sonra broker sayacı beklenir. Anlık sayım gerekince `queue.declare passive` (`RabbitAdmin.getQueueInfo`) kullanılır.
+13. **Broker semantiği dokümana değil koda bakılarak doğrulanır:** `basic.nack` ile `basic.reject`'in `requeue=true` davranışı 4.3.0'da farklıdır; bu fark yalnızca gerçek broker + kaynak (`beam_lib` debug_info'dan `rabbit_channel`/`rabbit_fifo`) ile görüldü ve test c/d'ye kanıt olarak işlendi.
+14. **Paylaşılan broker'da temizlik ve kaos:** benzersiz isim öneki (`bvt.`), `@AfterAll`'da topolojinin silinmesi, policy'nin `@AfterEach`'te kaldırılması; `stop_app/start_app` node'u ayakta bırakır ama çalışan diğer testlerin container'ları da düşer — kaos senaryosu tek başına koşturulur. Probe için açılan exchange'ler de silinir.
+
 Bu dersler "yeşil build = kural çalışıyor" varsayımının yanlış olabileceğini gösterdi; bu yüzden `proj-release-readiness-review` ve CI, mimari testlerin **test sayısını** da doğrular (0 test = başarısız) ve davranışsal testler kasıtlı regresyonla (mutasyon) en az bir kez sınanır; eşdeğer mutasyon (davranışı değiştirmeyen) test açığı sayılmaz ama yazılır.
 
 #### Çalıştırma
@@ -5544,8 +6857,3453 @@ Bu dersler "yeşil build = kural çalışıyor" varsayımının yanlış olabile
 ```bash
 cd blueprint/skeleton-example
 mvn -B -ntp test                     # yapısal + davranışsal; gömülü PG binary'si Maven Central'dan gelir (io.zonky.test)
+### broker-example icin lokal RabbitMQ 4.3+ (5672, management 15672 guest/guest) ve kaos senaryosu (h) icin rabbitmqctl gerekir:
+###   -Dbvt.rabbitmqctl=/path/to/rabbitmqctl -Dbvt.rabbitmq.node=rabbit@localhost -Dbvt.erlang.bin=/path/to/erlang/bin
+###   broker container'daysa (CI servis container'i): BVT_RABBITMQCTL="docker exec <container> rabbitmqctl" BVT_RABBITMQ_NODE=local
 ### root kullanıcıdaysan (initdb root'u reddeder):
 runuser -u <non-root-user> --preserve-environment -- mvn -B -ntp -Dmaven.repo.local=$HOME/.m2/repository test
+```
+
+---
+
+### `skeleton-example/broker-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>broker-example</artifactId>
+  <!-- Seviye 3 kanit (referans Bolum 19.6): generic outbox -> GERCEK RabbitMQ 4.3 (quorum queue, native gecikmeli
+       retry, DLQ, stream) -> inbox'li tuketici; PostgreSQL gomulu (18.x binary). Docker gerekmez. Servisler bu modulu
+       kopyalamaz: OutboxEventPublisher / listener sablonu platform-messaging'e tasinacak parcalari gosterir. -->
+  <dependencyManagement><dependencies>
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>18.1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-messaging</artifactId><version>${revision}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-amqp</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <!-- Jackson 3 (tools.jackson): Boot 4 BOM'unun yonettigi hat; payload/headers JSON'u icin -->
+    <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 5) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/consume/DeliveryObserver.java`
+
+```java
+package com.acme.broker.consume;
+
+import java.time.Instant;
+import java.util.UUID;
+
+/**
+ * Listener'in her teslim icin verdigi kararin gozlemi: uretimde metrik/log (consumer_outcome_total{outcome}), testte
+ * kanit (deneme sayisi, x-delivery-count, teslimler arasi sure). Listener kararini bu arayuze BAGLAMAZ; yalniz bildirir.
+ */
+@FunctionalInterface
+public interface DeliveryObserver {
+
+    enum Outcome { APPLIED, DUPLICATE, IGNORED_TYPE, TRANSIENT_FAILURE, POISON }
+
+    /** @param eventId zehirli mesajda cozulemeyebilir (null) */
+    record Attempt(UUID eventId, Outcome outcome, int deliveryCount, boolean redelivered, Instant at, String errorType) {}
+
+    void observe(Attempt attempt);
+
+    static DeliveryObserver none() { return a -> { }; }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/consume/IncomingEvent.java`
+
+```java
+package com.acme.broker.consume;
+
+import com.acme.platform.messaging.cloudevents.CloudEventHeaders;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageProperties;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Broker'dan gelen mesajin cozulmus hali. Cozme HATASI kalici hatadir (zehirli mesaj): yeniden teslim ayni sonucu verir,
+ * bu yuzden MalformedEventException DLQ'ya gider, retry'a degil. Bilinmeyen alanlar yok sayilir (Bolum 12.2).
+ *
+ * @param deliveryCount broker'in x-delivery-count'u (ilk teslimde header yok -> 0); gozlem/metrik icindir
+ */
+public record IncomingEvent(UUID id, String type, String source, JsonNode data, int deliveryCount, boolean redelivered,
+                            long deliveryTag) {
+
+    public static IncomingEvent decode(Message message, JsonMapper json) {
+        MessageProperties p = message.getMessageProperties();
+        Map<String, Object> headers = p.getHeaders();
+        UUID id = CloudEventHeaders.id(headers)
+                .or(() -> parseUuid(p.getMessageId()))
+                .orElseThrow(() -> new MalformedEventException("missing or invalid ce-id/messageId"));
+        String type = CloudEventHeaders.text(headers, CloudEventHeaders.TYPE)
+                .orElseThrow(() -> new MalformedEventException("missing ce-type"));
+        String source = CloudEventHeaders.text(headers, CloudEventHeaders.SOURCE).orElse("");
+        JsonNode data;
+        try {
+            data = json.readTree(new String(message.getBody(), StandardCharsets.UTF_8));
+        } catch (JacksonException e) {
+            throw new MalformedEventException("payload is not JSON");
+        }
+        if (data == null || !data.isObject()) throw new MalformedEventException("payload is not a JSON object");
+        Object count = headers.get("x-delivery-count");
+        int deliveryCount = count instanceof Number n ? n.intValue() : 0;
+        return new IncomingEvent(id, type, source, data, deliveryCount, Boolean.TRUE.equals(p.isRedelivered()),
+                p.getDeliveryTag());
+    }
+
+    private static java.util.Optional<UUID> parseUuid(String s) {
+        if (s == null) return java.util.Optional.empty();
+        try {
+            return java.util.Optional.of(UUID.fromString(s));
+        } catch (IllegalArgumentException e) {
+            return java.util.Optional.empty();
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/consume/ListenerContainers.java`
+
+```java
+package com.acme.broker.consume;
+
+import com.acme.broker.topology.BrokerTopology;
+import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
+
+/**
+ * Tuketici container'i (referans Bolum 12.3 Consumer). Boot'ta ayni ayarlar spring.rabbitmq.listener.simple.* ile
+ * container factory'ye verilir; burada seviye-3 test icin elle kurulur. Ayarlarin nedeni:
+ * - MANUAL: ack yalniz inbox TX commit'inden sonra (11.3). AUTO modda container listener donunce ack'ler; listener
+ *   commit'ten sonra donuyorsa o da gecerlidir ama "ack once" hatasi derleyici/okuyucu tarafindan gorulmez.
+ * - prefetch 10: Spring varsayilani 250 (bir instance kuyrugu bosaltir, digerleri bos kalir; yavas is birikir).
+ * - defaultRequeueRejected=false: listener'dan kacan siniflandirilmamis exception sonsuz requeue uretmesin (Spring
+ *   varsayilani true). MANUAL modda container yalniz AmqpRejectAndDontRequeueException(rejectManual) icin devreye girer.
+ * - recoveryInterval: broker dusunce yeniden baglanma araligi (uretim 5000 ms; test 500 ms).
+ */
+public final class ListenerContainers {
+
+    public static final int PREFETCH = 10;
+
+    private ListenerContainers() { }
+
+    public static SimpleMessageListenerContainer orderCancelled(ConnectionFactory cf, ChannelAwareMessageListener listener,
+                                                                long recoveryIntervalMs) {
+        return on(cf, BrokerTopology.ORDER_CANCELLED_QUEUE, listener, recoveryIntervalMs);
+    }
+
+    public static SimpleMessageListenerContainer on(ConnectionFactory cf, String queue, ChannelAwareMessageListener listener,
+                                                    long recoveryIntervalMs) {
+        SimpleMessageListenerContainer c = new SimpleMessageListenerContainer(cf);
+        c.setQueueNames(queue);
+        c.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+        c.setPrefetchCount(PREFETCH);
+        c.setDefaultRequeueRejected(false);
+        c.setConcurrentConsumers(1);
+        c.setRecoveryInterval(recoveryIntervalMs);
+        c.setMissingQueuesFatal(false);                 // broker gecici olarak dusukken container kendini kapatmasin
+        c.setMessageListener(listener);
+        return c;
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/consume/MalformedEventException.java`
+
+```java
+package com.acme.broker.consume;
+
+/** Zehirli mesaj: cozulemeyen govde/header. Yeniden teslim anlamsiz -> requeue=false ile dogrudan DLQ (Bolum 12.3). */
+public class MalformedEventException extends RuntimeException {
+    public MalformedEventException(String message) { super(message); }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/consume/OrderCancelledEffect.java`
+
+```java
+package com.acme.broker.consume;
+
+/**
+ * Handler'in is degisikligi: inbox TX'i ICINDE cagrilir (read-model UPSERT, domain yazimi, dis etki icin outbox satiri).
+ * Exception atarsa inbox satiri da geri alinir ve mesaj yeniden gelir (Bolum 11.3). Dis sisteme dogrudan gitmez.
+ */
+@FunctionalInterface
+public interface OrderCancelledEffect {
+    void apply(IncomingEvent event);
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/consume/OrderCancelledListener.java`
+
+```java
+package com.acme.broker.consume;
+
+import com.acme.platform.messaging.inbox.InboxProcessor;
+import com.rabbitmq.client.Channel;
+import java.io.IOException;
+import java.time.Clock;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * order.order.cancelled tuketicisi (referans Bolum 11.3, 12.3). Manuel ack; karar tablosu (RabbitMQ 4.3.0'da dogrulandi):
+ *
+ *   sonuc                 broker'a giden               broker davranisi
+ *   commit basarili   ->  basic.ack                    mesaj biter (ack YALNIZ commit'ten sonra)
+ *   duplicate         ->  basic.ack                    inbox satiri vardi, is yapilmadi
+ *   bilinmeyen tip    ->  basic.ack                    ileri uyumluluk: loglanir, yok sayilir (12.2)
+ *   gecici hata       ->  basic.reject requeue=true    delivery_failed=true: x-delivery-count++ ve QQ native gecikmeli
+ *                                                      retry (min*count); delivery-limit asilinca at-least-once DLQ
+ *   zehirli mesaj     ->  basic.reject requeue=false   aninda DLQ, deneme yok
+ *
+ * NEDEN basic.reject, basic.nack degil: 4.3.0'da basic.nack requeue=true "return" komutudur (delivery_failed=false):
+ * sayac artmaz, gecikme uygulanmaz, delivery-limit hic dolmaz -> gecikmesiz sonsuz requeue (12.3 "Kacin"). basic.reject
+ * requeue=true ise "modify{delivery_failed=true}" olarak islenir; gecikmeli retry ve limit yalniz bu yolda calisir.
+ *
+ * Container MANUAL modda oldugu icin defaultRequeueRejected listener'in KENDI verdigi reject'leri etkilemez; yalniz
+ * listener'dan kacan (siniflandirilmamis) exception'lar icin container'in yedek kuralidir ve false birakilir.
+ */
+public class OrderCancelledListener implements ChannelAwareMessageListener {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderCancelledListener.class);
+
+    public static final String HANDLER = "OrderCancelledNotificationHandler";   // inbox dedup kapsami
+    public static final String EVENT_TYPE = "order.order.cancelled";
+
+    private final InboxProcessor inbox;
+    private final OrderCancelledEffect effect;
+    private final JsonMapper json;
+    private final DeliveryObserver observer;
+    private final Clock clock;
+
+    public OrderCancelledListener(InboxProcessor inbox, OrderCancelledEffect effect, JsonMapper json,
+                                  DeliveryObserver observer, Clock clock) {
+        this.inbox = inbox;
+        this.effect = effect;
+        this.json = json;
+        this.observer = observer;
+        this.clock = clock;
+    }
+
+    @Override
+    public void onMessage(Message message, Channel channel) throws IOException {
+        long tag = message.getMessageProperties().getDeliveryTag();
+        IncomingEvent event;
+        try {
+            event = IncomingEvent.decode(message, json);
+        } catch (MalformedEventException e) {
+            log.error("Poison message rejected to DLQ: code=CONSUMER_POISON messageId={} reason={}",
+                    message.getMessageProperties().getMessageId(), e.getMessage());
+            channel.basicReject(tag, false);                                    // yeniden teslim anlamsiz
+            observe(null, DeliveryObserver.Outcome.POISON, 0, message.getMessageProperties().isRedelivered(), e);
+            return;
+        }
+        if (!EVENT_TYPE.equals(event.type())) {                                 // binding order.order.* baska tipleri de getirir
+            log.info("Ignoring unknown event type: type={} eventId={}", event.type(), event.id());
+            channel.basicAck(tag, false);
+            observe(event.id(), DeliveryObserver.Outcome.IGNORED_TYPE, event.deliveryCount(), event.redelivered(), null);
+            return;
+        }
+        InboxProcessor.Outcome outcome;
+        try {
+            outcome = inbox.process(HANDLER, event.id(), () -> effect.apply(event));   // inbox satiri + is, tek TX
+        } catch (MalformedEventException e) {                                   // payload bu handler icin gecersiz: TX geri alindi
+            log.error("Poison payload rejected to DLQ: code=CONSUMER_POISON eventId={} reason={}", event.id(), e.getMessage());
+            channel.basicReject(tag, false);
+            observe(event.id(), DeliveryObserver.Outcome.POISON, event.deliveryCount(), event.redelivered(), e);
+            return;
+        } catch (RuntimeException e) {                                          // DB/is hatasi: gecici
+            log.warn("Transient failure; broker will retry with delay: eventId={} deliveryCount={} exceptionType={}",
+                    event.id(), event.deliveryCount(), e.getClass().getSimpleName());
+            channel.basicReject(tag, true);                                     // delivery_failed=true -> gecikmeli retry
+            observe(event.id(), DeliveryObserver.Outcome.TRANSIENT_FAILURE, event.deliveryCount(), event.redelivered(), e);
+            return;
+        }
+        channel.basicAck(tag, false);                                           // commit'ten SONRA
+        observe(event.id(), outcome == InboxProcessor.Outcome.APPLIED
+                ? DeliveryObserver.Outcome.APPLIED : DeliveryObserver.Outcome.DUPLICATE,
+                event.deliveryCount(), event.redelivered(), null);
+    }
+
+    private void observe(UUID id, DeliveryObserver.Outcome outcome, int deliveryCount, Boolean redelivered, Exception e) {
+        observer.observe(new DeliveryObserver.Attempt(id, outcome, deliveryCount, Boolean.TRUE.equals(redelivered),
+                clock.instant(), e == null ? null : e.getClass().getSimpleName()));
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/publish/BrokerNackException.java`
+
+```java
+package com.acme.broker.publish;
+
+import java.util.UUID;
+
+/** Broker mesaji kalici olarak kabul etmedi (NACK). Gecici sayilir: poller backoff ile yeniden dener; SimpleName last_error_code olur. */
+public class BrokerNackException extends RuntimeException {
+    public BrokerNackException(UUID eventId, String reason) {
+        super("Broker NACK for event " + eventId + ": " + reason);
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/publish/CloudEventMessageFactory.java`
+
+```java
+package com.acme.broker.publish;
+
+import com.acme.platform.messaging.cloudevents.CloudEventHeaders;
+import com.acme.platform.messaging.outbox.OutboxEvent;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.core.MessageProperties;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * outbox_event satiri -> AMQP mesaji. Govde payload JSON'unun kendisidir (CloudEvents "data"), attribute'lar ce-* header'i;
+ * messageId = outbox id (tuketici inbox anahtari), delivery mode PERSISTENT (broker yeniden basladiginda kaybolmaz;
+ * quorum queue zaten diske yazar ama exchange'de/DLX yolunda kalici olmayan mesaj dusebilir).
+ */
+public final class CloudEventMessageFactory {
+
+    private final JsonMapper json;
+    private final String source;
+
+    /** @param source CloudEvents "source" (orn. "urn:acme:order"); servis basina sabittir. */
+    public CloudEventMessageFactory(JsonMapper json, String source) {
+        this.json = json;
+        this.source = source;
+    }
+
+    public Message toMessage(OutboxEvent e) {
+        MessageProperties p = new MessageProperties();
+        p.setMessageId(e.id().toString());
+        p.setContentType(MessageProperties.CONTENT_TYPE_JSON);
+        p.setContentEncoding(StandardCharsets.UTF_8.name());
+        p.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+        p.setTimestamp(java.util.Date.from(e.createdAt()));
+        CloudEventHeaders.of(e.id(), e.eventType(), source, e.aggregateId(), e.createdAt(), outboxHeaders(e.headers()))
+                .forEach(p::setHeader);
+        return new Message(e.payload().getBytes(StandardCharsets.UTF_8), p);
+    }
+
+    /** headers JSONB bozuksa (yazici hatasi) trace baglami olmadan yayinlanir; olay kaybolmaz. */
+    private Map<String, ?> outboxHeaders(String headersJson) {
+        if (headersJson == null || headersJson.isBlank()) return Map.of();
+        try {
+            return json.readValue(headersJson, Map.class);
+        } catch (JacksonException ex) {
+            return Map.of();
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/publish/ConfirmTimeoutException.java`
+
+```java
+package com.acme.broker.publish;
+
+import java.util.UUID;
+
+/** Broker confirm'i sinirli surede gelmedi; mesaj ulasmis OLABILIR. Yeniden yayin guvenlidir (tuketici inbox dedup). */
+public class ConfirmTimeoutException extends RuntimeException {
+    public ConfirmTimeoutException(UUID eventId) {
+        super("No publisher confirm for event " + eventId + " within timeout");
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/publish/OutboxEventPublisher.java`
+
+```java
+package com.acme.broker.publish;
+
+import com.acme.platform.messaging.outbox.OutboxEvent;
+import com.acme.platform.messaging.outbox.OutboxHandler;
+import java.time.Duration;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.ReturnedMessage;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+
+/**
+ * EVENT lane handler'i (referans Bolum 12.3 Producer, 23.4): outbox satirini topic exchange'e routing key = event_type ile
+ * yayinlar ve broker ACK'ini bekler. Uc basarisizlik da exception'dir, poller satiri PENDING + backoff'a ceker:
+ * - NACK: broker kalici yazamadi (disk/quorum sorunu);
+ * - RETURNED: mandatory + publisher returns ile "hicbir kuyruga yonlenmedi" (binding yok / tuketici henuz deploy edilmedi).
+ *   ACK yine gelir (broker mesaji aldi ama attı); returned kontrolu olmadan olay SESSIZCE kaybolur;
+ * - TIMEOUT: confirm sinirli sure beklenir (Bolum 12.3: orn. 5 sn); broker yanit vermiyorsa satir yeniden denenir.
+ *
+ * Tekrar yayin (kira dolumu, timeout sonrasi aslinda ulasmis mesaj) zararsizdir: tuketici inbox ile dedup yapar (11.3).
+ * Confirm callback'i (metrik/log) template uzerinde ayrica kayitli olabilir; bu sinif CorrelationData future'ini kullanir.
+ */
+public class OutboxEventPublisher implements OutboxHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(OutboxEventPublisher.class);
+
+    private final RabbitTemplate template;          // publisher-confirm-type=correlated, publisher-returns, mandatory
+    private final CloudEventMessageFactory messages;
+    private final String exchange;
+    private final Duration confirmTimeout;
+
+    public OutboxEventPublisher(RabbitTemplate template, CloudEventMessageFactory messages, String exchange,
+                                Duration confirmTimeout) {
+        this.template = template;
+        this.messages = messages;
+        this.exchange = exchange;
+        this.confirmTimeout = confirmTimeout;
+    }
+
+    @Override
+    public void handle(OutboxEvent event) throws Exception {
+        Message message = messages.toMessage(event);
+        CorrelationData correlation = new CorrelationData(event.id().toString());
+        template.send(exchange, event.eventType(), message, correlation);     // TX disinda; poller cagirir
+
+        CorrelationData.Confirm confirm;
+        try {
+            confirm = correlation.getFuture().get(confirmTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            throw new ConfirmTimeoutException(event.id());
+        } catch (ExecutionException e) {
+            throw new BrokerNackException(event.id(), String.valueOf(e.getCause()));
+        }
+        ReturnedMessage returned = correlation.getReturned();                   // return, ack'ten ONCE gelir
+        if (returned != null) {
+            log.warn("Event unroutable; will retry: eventId={} routingKey={} replyCode={}",
+                    event.id(), returned.getRoutingKey(), returned.getReplyCode());
+            throw new UnroutableEventException(event.id(), returned.getRoutingKey());
+        }
+        if (!confirm.ack()) throw new BrokerNackException(event.id(), confirm.reason());
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/publish/UnroutableEventException.java`
+
+```java
+package com.acme.broker.publish;
+
+import java.util.UUID;
+
+/**
+ * mandatory yayin hicbir kuyruga yonlenmedi (basic.return). Kalici DEGIL gecici sayilir: tuketici binding'i henuz
+ * deploy edilmemis olabilir ("once consumer deploy", Bolum 12.6); satir PENDING kalir ve binding gelince yayinlanir.
+ */
+public class UnroutableEventException extends RuntimeException {
+    public UnroutableEventException(UUID eventId, String routingKey) {
+        super("Event " + eventId + " unroutable with routing key " + routingKey);
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/stream/StreamReplayReader.java`
+
+```java
+package com.acme.broker.stream;
+
+import com.acme.platform.messaging.cloudevents.CloudEventHeaders;
+import com.rabbitmq.client.AMQP;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.DefaultConsumer;
+import com.rabbitmq.client.Envelope;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import org.springframework.amqp.rabbit.connection.Connection;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+
+/**
+ * Replay/analitik tuketicisi (referans Bolum 12.4): stream'i AMQP 0-9-1 uzerinden x-stream-offset ile okur. Okuma
+ * yikici degildir; ack yalniz istemci tarafinda kredi (prefetch) acar, mesaj stream'de kalir. Ayni offset'ten ikinci
+ * okuyucu ayni mesajlari alir. spring-rabbit-stream (RabbitMQ stream protokolu, 5552) ayni isi daha yuksek hizla yapar;
+ * classpath'te olmadigi icin burada 0-9-1 yolu kullanilmistir — iki yol da broker'in resmi destekledigi yollardir.
+ *
+ * Streams manuel ack + prefetch zorunlu kilar (prefetch'siz consume broker tarafindan reddedilir).
+ */
+public class StreamReplayReader {
+
+    /** Okunan bir kayit: stream offset'i broker'in verdigi mutlak konumdur (x-stream-offset header'i). */
+    public record Entry(long offset, String eventId, String type, String body) {}
+
+    private final ConnectionFactory connectionFactory;
+    private final String stream;
+    private final int prefetch;
+
+    public StreamReplayReader(ConnectionFactory connectionFactory, String stream, int prefetch) {
+        this.connectionFactory = connectionFactory;
+        this.stream = stream;
+        this.prefetch = prefetch;
+    }
+
+    /**
+     * @param offset "first" | "last" | "next" | Long (mutlak offset) | timestamp; broker sozlesmesi
+     * @param expected bu kadar kayit gelince durur (bounded okuma; sinirsiz akis icin container kullanilir)
+     */
+    public List<Entry> read(Object offset, int expected, Duration timeout) throws IOException, InterruptedException {
+        List<Entry> out = new ArrayList<>();
+        CountDownLatch done = new CountDownLatch(expected);
+        try (Connection conn = connectionFactory.createConnection(); Channel ch = conn.createChannel(false)) {
+            ch.basicQos(prefetch);
+            String tag = ch.basicConsume(stream, false, Map.of("x-stream-offset", offset), new DefaultConsumer(ch) {
+                @Override
+                public void handleDelivery(String consumerTag, Envelope env, AMQP.BasicProperties props, byte[] body)
+                        throws IOException {
+                    Map<String, Object> headers = props.getHeaders() == null ? Map.of() : props.getHeaders();
+                    Object off = headers.get("x-stream-offset");
+                    synchronized (out) {
+                        if (out.size() < expected) {
+                            out.add(new Entry(off instanceof Number n ? n.longValue() : -1L,
+                                    String.valueOf(headers.get(CloudEventHeaders.ID)),
+                                    String.valueOf(headers.get(CloudEventHeaders.TYPE)),
+                                    new String(body, java.nio.charset.StandardCharsets.UTF_8)));
+                        }
+                    }
+                    ch.basicAck(env.getDeliveryTag(), false);                    // kredi acar; stream'den silmez
+                    done.countDown();
+                }
+            });
+            done.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            ch.basicCancel(tag);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new IOException(e);
+        }
+        synchronized (out) { return List.copyOf(out); }
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/java/com/acme/broker/topology/BrokerTopology.java`
+
+```java
+package com.acme.broker.topology;
+
+import java.util.List;
+import java.util.Map;
+import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Declarable;
+import org.springframework.amqp.core.Declarables;
+import org.springframework.amqp.core.DirectExchange;
+import org.springframework.amqp.core.Exchange;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.core.TopicExchange;
+
+/**
+ * Tuketici tarafinin sahip oldugu topoloji (referans Bolum 12.1, 12.3, 12.4): domain event'leri topic exchange'e gider,
+ * her tuketici amac basina KENDI quorum queue'sunu, DLQ'sunu ve binding'ini bildirir ("once consumer deploy").
+ *
+ * RabbitMQ 4.3.0 uzerinde dogrulanmis kararlar:
+ * - Gecikmeli retry QQ'nun kendi ozelligi: x-delayed-retry-type=failed + x-delayed-retry-min/max KUYRUK ARGUMANI olarak
+ *   verilir. 4.3.0'da ayni anahtarlar policy olarak KABUL EDILMEZ ("delayed-retry-* are not recognised policy settings":
+ *   rabbit_policies'te validator kayitli degil) — bu yuzden policy degil argument. Gecikme lineer: min * delivery_count,
+ *   max ile sinirli.
+ * - "failed" tipi yalniz delivery_failed=true ile geri verilen mesaji geciktirir; AMQP 0-9-1'de bunu basic.reject
+ *   requeue=true uretir (basic.nack requeue=true DEGIL — o sayacsiz, gecikmesiz aninda requeue'dur). Listener'a bakiniz.
+ * - at-least-once dead-letter stratejisi overflow=reject-publish ister; DLX'e giden mesaj DLQ'ya kadar QQ'da tutulur.
+ * - delivery-limit=3: ilk teslim + 3 yeniden teslim; 4. basarisizlikta (x-delivery-count 3 > limit) DLQ.
+ * - Stream ayni exchange'e "#" ile baglanir: analitik/replay tuketicileri queue'yu etkilemeden bastan okur (12.4).
+ */
+public final class BrokerTopology {
+
+    /** Test/ornek isim oneki: paylasilan broker'da baska calismalarla cakismaz; uretimde "domain.events" vb. */
+    public static final String PREFIX = "bvt.";
+
+    public static final String DOMAIN_EVENTS_EXCHANGE = PREFIX + "domain.events";
+    public static final String DLX = PREFIX + "dlx";
+    public static final String ORDER_CANCELLED_QUEUE = PREFIX + "notification.order-cancelled.queue";
+    public static final String ORDER_CANCELLED_DLQ = PREFIX + "notification.order-cancelled.dlq";
+    public static final String ORDER_CANCELLED_BINDING_KEY = "order.order.*";
+    public static final String DOMAIN_EVENTS_STREAM = PREFIX + "domain.events.stream";
+
+    /** Baslangic ayarlari (Bolum 1.4): olcumle degisir. */
+    public static final int DELIVERY_LIMIT = 3;
+    public static final int DELAYED_RETRY_MIN_MS = 1000;
+    public static final int DELAYED_RETRY_MAX_MS = 5000;
+    public static final String STREAM_MAX_AGE = "1D";
+
+    private BrokerTopology() { }
+
+    public static TopicExchange domainEventsExchange() { return new TopicExchange(DOMAIN_EVENTS_EXCHANGE, true, false); }
+
+    public static DirectExchange deadLetterExchange() { return new DirectExchange(DLX, true, false); }
+
+    /** Quorum queue: delivery-limit + at-least-once DLX + native gecikmeli retry (hepsi kuyruk argumani). */
+    public static Queue orderCancelledQueue() {
+        return QueueBuilder.durable(ORDER_CANCELLED_QUEUE)
+                .quorum()
+                .deliveryLimit(DELIVERY_LIMIT)
+                .withArgument("x-dead-letter-strategy", "at-least-once")
+                .overflow(QueueBuilder.Overflow.rejectPublish)              // at-least-once DLX'in on kosulu
+                .deadLetterExchange(DLX)
+                .deadLetterRoutingKey(ORDER_CANCELLED_DLQ)                  // direct DLX -> DLQ adi
+                .withArgument("x-delayed-retry-type", "failed")
+                .withArgument("x-delayed-retry-min", DELAYED_RETRY_MIN_MS)
+                .withArgument("x-delayed-retry-max", DELAYED_RETRY_MAX_MS)
+                .build();
+    }
+
+    public static Queue orderCancelledDlq() { return QueueBuilder.durable(ORDER_CANCELLED_DLQ).quorum().build(); }
+
+    /** Stream: append-only, broker'da offset, retention max-age; TTL/oncelik/DLX yok (12.4). */
+    public static Queue domainEventsStream() {
+        return QueueBuilder.durable(DOMAIN_EVENTS_STREAM).stream().withArgument("x-max-age", STREAM_MAX_AGE).build();
+    }
+
+    public static Binding orderCancelledBinding() {
+        return BindingBuilder.bind(orderCancelledQueue()).to(domainEventsExchange()).with(ORDER_CANCELLED_BINDING_KEY);
+    }
+
+    public static Binding dlqBinding() {
+        return BindingBuilder.bind(orderCancelledDlq()).to(deadLetterExchange()).with(ORDER_CANCELLED_DLQ);
+    }
+
+    public static Binding streamBinding() {
+        return BindingBuilder.bind(domainEventsStream()).to(domainEventsExchange()).with("#");
+    }
+
+    /** Boot'ta bean olarak verilir (RabbitAdmin otomatik bildirir); burada declare(admin) ile elle. */
+    public static Declarables declarables() {
+        return new Declarables(List.of(domainEventsExchange(), deadLetterExchange(), orderCancelledQueue(),
+                orderCancelledDlq(), domainEventsStream(), orderCancelledBinding(), dlqBinding(), streamBinding()));
+    }
+
+    public static void declare(AmqpAdmin admin) {
+        for (Declarable d : declarables().getDeclarables()) {
+            if (d instanceof Exchange e) admin.declareExchange(e);
+            else if (d instanceof Queue q) admin.declareQueue(q);
+            else if (d instanceof Binding b) admin.declareBinding(b);
+        }
+    }
+
+    /** Silme sirasi: binding'ler kuyrukla gider; kuyruklar ve exchange'ler ayri silinir (paylasilan broker temizligi). */
+    public static void delete(AmqpAdmin admin) {
+        for (String q : List.of(ORDER_CANCELLED_QUEUE, ORDER_CANCELLED_DLQ, DOMAIN_EVENTS_STREAM)) admin.deleteQueue(q);
+        for (String x : List.of(DOMAIN_EVENTS_EXCHANGE, DLX)) admin.deleteExchange(x);
+    }
+
+    /** Broker'in kabul ettigi argumanlar; management API'de queue.arguments ile karsilastirmak icin. */
+    public static Map<String, Object> orderCancelledQueueArguments() { return orderCancelledQueue().getArguments(); }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/main/resources/db/broker/notification.sql`
+
+```
+-- Tuketici servisin (notification) kendi semasi: inbox (platform sablonundan) + is etkisi tablosu.
+-- Etki tablosunda event_id uzerinde UNIQUE YOKTUR: cift teslim korumasi inbox'in isidir; testte cift etki gorulebilsin.
+CREATE TABLE ${schema}.order_cancelled_effect (
+  event_id   UUID NOT NULL,
+  order_id   UUID NOT NULL,
+  reason     TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_order_cancelled_effect_event ON ${schema}.order_cancelled_effect (event_id);
+```
+
+---
+
+### `skeleton-example/broker-example/src/test/java/com/acme/broker/BrokerBehaviourIT.java`
+
+```java
+package com.acme.broker;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.acme.broker.consume.DeliveryObserver;
+import com.acme.broker.consume.DeliveryObserver.Attempt;
+import com.acme.broker.consume.DeliveryObserver.Outcome;
+import com.acme.broker.consume.ListenerContainers;
+import com.acme.broker.consume.OrderCancelledEffect;
+import com.acme.broker.consume.OrderCancelledListener;
+import com.acme.broker.publish.CloudEventMessageFactory;
+import com.acme.broker.publish.OutboxEventPublisher;
+import com.acme.broker.stream.StreamReplayReader;
+import com.acme.broker.support.ManagementApi;
+import com.acme.broker.support.RabbitCtl;
+import com.acme.broker.topology.BrokerTopology;
+import com.acme.platform.messaging.cloudevents.CloudEventHeaders;
+import com.acme.platform.messaging.inbox.InboxProcessor;
+import com.acme.platform.messaging.outbox.OutboxEvent;
+import com.acme.platform.messaging.outbox.OutboxPoller;
+import com.acme.platform.messaging.outbox.OutboxProperties;
+import com.acme.platform.messaging.outbox.OutboxRepository;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * SEVIYE 3 kanit (referans Bolum 19.6): gercek RabbitMQ 4.3 + gercek PostgreSQL (gomulu 18.x). Uretici ("order" semasi,
+ * outbox) -> topic exchange -> quorum queue -> tuketici ("notification" semasi, inbox + etki). Senaryolar a-j gorev
+ * tanimindaki harflerle; k-l ek kanit. Zaman: poller icin deterministik MutableClock (backoff beklenmez), tuketici icin
+ * sistem saati (broker gecikmeleri duvar saatiyle olculur).
+ *
+ * Broker ve rabbitmqctl yoksa test ACIK mesajla basarisiz olur; sessiz atlama yoktur (0 test = basarisiz kurali).
+ */
+class BrokerBehaviourIT {
+
+    static final String PRODUCER_SCHEMA = "order";
+    static final String CONSUMER_SCHEMA = "notification";
+    static final String SOURCE = "urn:acme:order";
+    static final String CONSUMER_TIMEOUT_POLICY = "bvt-consumer-timeout";
+    static final Duration BOUND = Duration.ofSeconds(20);
+
+    static EmbeddedPostgres pg;
+    static DataSource ds;
+    static NamedParameterJdbcTemplate jdbc;
+    static JdbcTemplate plain;
+    static TransactionTemplate tx;
+    static CachingConnectionFactory cf;
+    static RabbitAdmin admin;
+    static RabbitTemplate template;
+    static ManagementApi mgmt;
+    static JsonMapper json = JsonMapper.builder().build();
+    static final AtomicInteger confirmAcks = new AtomicInteger();
+    static final AtomicInteger confirmNacks = new AtomicInteger();
+
+    OutboxRepository outbox;
+    InboxProcessor inbox;
+    MutableClock clock;
+    OutboxEventPublisher publisher;
+    final List<Attempt> attempts = new CopyOnWriteArrayList<>();
+    SimpleMessageListenerContainer container;
+
+    /** Deterministik poller zamani: backoff (60 sn) gercek beklemeden gecilir. */
+    static final class MutableClock extends Clock {
+        volatile Instant now = Instant.parse("2026-09-29T10:00:00Z");
+        @Override public ZoneOffset getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(java.time.ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
+        void advance(Duration d) { now = now.plus(d); }
+    }
+
+    // ---------- kurulum ----------
+
+    @BeforeAll
+    static void start() throws Exception {
+        pg = EmbeddedPostgres.builder().start();
+        ds = pg.getPostgresDatabase();
+        jdbc = new NamedParameterJdbcTemplate(ds);
+        plain = jdbc.getJdbcTemplate();
+        tx = new TransactionTemplate(new JdbcTransactionManager(ds));
+        String platformDdl = resource("/db/platform/outbox_inbox.sql");
+        String consumerDdl = resource("/db/broker/notification.sql");
+        for (String schema : List.of(PRODUCER_SCHEMA, CONSUMER_SCHEMA)) {
+            plain.execute("CREATE SCHEMA \"" + schema + "\"");
+            runScript(platformDdl.replace("${schema}", "\"" + schema + "\""));
+        }
+        runScript(consumerDdl.replace("${schema}", "\"" + CONSUMER_SCHEMA + "\""));
+
+        cf = new CachingConnectionFactory("127.0.0.1", 5672);
+        cf.setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);   // 12.3 Producer
+        cf.setPublisherReturns(true);
+        try {
+            cf.createConnection().close();
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("RabbitMQ not reachable at 127.0.0.1:5672; this level-3 IT needs a real broker", e);
+        }
+        template = new RabbitTemplate(cf);
+        template.setMandatory(true);
+        template.setConfirmCallback((cd, ack, cause) -> (ack ? confirmAcks : confirmNacks).incrementAndGet());
+        template.setReturnsCallback(r -> { });                                     // CorrelationData.returned zaten dolar
+        admin = new RabbitAdmin(cf);
+        BrokerTopology.delete(admin);                                                // onceki kosudan kalinti
+        BrokerTopology.declare(admin);
+        mgmt = new ManagementApi("http://127.0.0.1:15672", "guest", "guest", "/");
+        assertThat(mgmt.alive()).as("management API").isTrue();
+    }
+
+    @AfterAll
+    static void stop() throws IOException {
+        try {
+            if (admin != null) { admin.deleteQueue(BrokerTopology.ORDER_CANCELLED_QUEUE); BrokerTopology.delete(admin); }
+        } finally {
+            if (cf != null) cf.destroy();
+            if (pg != null) pg.close();
+        }
+    }
+
+    @BeforeEach
+    void reset() throws Exception {
+        plain.execute("TRUNCATE \"order\".outbox_event, \"order\".inbox_event, \"notification\".outbox_event, "
+                + "\"notification\".inbox_event, \"notification\".order_cancelled_effect");
+        admin.purgeQueue(BrokerTopology.ORDER_CANCELLED_QUEUE);
+        admin.purgeQueue(BrokerTopology.ORDER_CANCELLED_DLQ);
+        // management istatistigi 5 sn'ye kadar gecikir: her test dogrulanmis SIFIR derinlikten baslar (bayat sayim yok)
+        assertThat(await(Duration.ofSeconds(15), () -> mgmtDepth(BrokerTopology.ORDER_CANCELLED_QUEUE) == 0
+                && mgmtDepth(BrokerTopology.ORDER_CANCELLED_DLQ) == 0)).as("queues empty at start").isTrue();
+        admin.deleteQueue(BrokerTopology.DOMAIN_EVENTS_STREAM);                      // stream purge edilemez: yeniden kur
+        admin.declareQueue(BrokerTopology.domainEventsStream());
+        admin.declareBinding(BrokerTopology.streamBinding());
+        attempts.clear();
+        confirmAcks.set(0);
+        confirmNacks.set(0);
+        clock = new MutableClock();
+        outbox = new OutboxRepository(jdbc, PRODUCER_SCHEMA);
+        inbox = new InboxProcessor(jdbc, tx, CONSUMER_SCHEMA);
+        publisher = new OutboxEventPublisher(template, new CloudEventMessageFactory(json, SOURCE),
+                BrokerTopology.DOMAIN_EVENTS_EXCHANGE, Duration.ofSeconds(5));
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        if (container != null) { container.stop(); container = null; }
+        mgmt.deletePolicy(CONSUMER_TIMEOUT_POLICY);
+    }
+
+    // ---------- yardimcilar ----------
+
+    static String resource(String path) throws IOException {
+        return new String(BrokerBehaviourIT.class.getResourceAsStream(path).readAllBytes(), StandardCharsets.UTF_8);
+    }
+
+    static void runScript(String ddl) throws Exception {
+        try (var conn = ds.getConnection()) {
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(ddl.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    OutboxEvent cancelledEvent(UUID orderId, Instant createdAt) {
+        return new OutboxEvent(UUID.randomUUID(), "EVENT", "order", orderId, OrderCancelledListener.EVENT_TYPE,
+                "{\"orderId\":\"" + orderId + "\",\"reason\":\"customer_request\"}",
+                "{\"traceparent\":\"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01\"}",
+                "PENDING", 0, OutboxEvent.DeadPolicy.DEAD_ON_PERMANENT, 0, createdAt, null, null, null, createdAt);
+    }
+
+    OutboxEvent cancelledEvent() { return cancelledEvent(UUID.randomUUID(), clock.instant()); }
+
+    void appendInTx(OutboxEvent... events) { tx.executeWithoutResult(s -> { for (OutboxEvent e : events) outbox.append(e); }); }
+
+    OutboxPoller poller() { return new OutboxPoller(outbox, Map.of("EVENT", publisher), OutboxProperties.defaults(), clock); }
+
+    /** Gercek is etkisi: tuketici semasina satir (inbox TX'i icinde). */
+    final OrderCancelledEffect realEffect = e -> jdbc.update("""
+            INSERT INTO "notification".order_cancelled_effect (event_id, order_id, reason, applied_at)
+            VALUES (:e, :o, :r, :t)""",
+            Map.of("e", e.id(), "o", UUID.fromString(e.data().get("orderId").asString()),
+                    "r", e.data().get("reason").asString(), "t", java.sql.Timestamp.from(Instant.now())));
+
+    void startConsumer(OrderCancelledEffect effect) {
+        OrderCancelledListener listener = new OrderCancelledListener(inbox, effect, json, attempts::add, Clock.systemUTC());
+        container = ListenerContainers.orderCancelled(cf, listener, 500);
+        container.start();
+    }
+
+    int effects() { return plain.queryForObject("SELECT count(*) FROM \"notification\".order_cancelled_effect", Integer.class); }
+
+    int effectsOf(UUID eventId) {
+        return jdbc.queryForObject("SELECT count(*) FROM \"notification\".order_cancelled_effect WHERE event_id = :e",
+                Map.of("e", eventId), Integer.class);
+    }
+
+    int inboxRows() { return plain.queryForObject("SELECT count(*) FROM \"notification\".inbox_event", Integer.class); }
+
+    int outboxRows() { return plain.queryForObject("SELECT count(*) FROM \"order\".outbox_event", Integer.class); }
+
+    /** Bounded polling: kosul saglanana kadar en fazla BOUND bekler; saglanmazsa false (assert cagirana ait). */
+    static boolean await(Duration max, BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + max.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) return true;
+            Thread.sleep(50);
+        }
+        return condition.getAsBoolean();
+    }
+
+    Message rawMessage(UUID id, String type, String body) {
+        MessageProperties p = new MessageProperties();
+        p.setMessageId(id.toString());
+        p.setContentType(MessageProperties.CONTENT_TYPE_JSON);
+        p.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+        CloudEventHeaders.of(id, type, SOURCE, null, Instant.now(), Map.of()).forEach(p::setHeader);
+        return new Message(body.getBytes(StandardCharsets.UTF_8), p);
+    }
+
+    long gapMs(Attempt a, Attempt b) { return Duration.between(a.at(), b.at()).toMillis(); }
+
+    // ---------- senaryolar ----------
+
+    @Test // a: outbox -> broker -> tuketici uctan uca; 20 satir tam bir kez; confirm 20; outbox bos
+    void a_outboxToConsumerEndToEndExactlyOnce() throws Exception {
+        startConsumer(realEffect);
+        OutboxEvent[] events = new OutboxEvent[20];
+        for (int i = 0; i < 20; i++) events[i] = cancelledEvent(UUID.randomUUID(), clock.instant().minusMillis(100 - i));  // gecmiste, sirali
+        appendInTx(events);
+
+        OutboxPoller.PollResult r = poller().poll("EVENT");
+        assertThat(r.applied()).isEqualTo(20);
+        assertThat(r.failed()).isZero();
+        assertThat(confirmAcks.get()).isEqualTo(20);                                   // publisher confirm callback
+        assertThat(confirmNacks.get()).isZero();
+        assertThat(outboxRows()).isZero();
+
+        assertThat(await(BOUND, () -> effects() == 20)).as("20 effects within bound").isTrue();
+        assertThat(inboxRows()).isEqualTo(20);
+        for (OutboxEvent e : events) assertThat(effectsOf(e.id())).isEqualTo(1);
+        assertThat(attempts).hasSize(20).allMatch(a -> a.outcome() == Outcome.APPLIED);
+        // trace baglami tasindi (ce-* eslemesi platform-messaging'de tek yerde)
+        assertThat(admin.getQueueInfo(BrokerTopology.ORDER_CANCELLED_QUEUE).getMessageCount()).isZero();
+    }
+
+    @Test // b: binding'i olmayan routing key -> basic.return -> handler exception -> satir PENDING, retry_count 1
+    void b_unroutableEventStaysPendingWithRetry() throws Exception {
+        admin.removeBinding(BrokerTopology.streamBinding());                          // "#" stream her seyi yakalar
+        try {
+            UUID orderId = UUID.randomUUID();
+            OutboxEvent e = new OutboxEvent(UUID.randomUUID(), "EVENT", "order", orderId, "order.payment.failed",
+                    "{\"orderId\":\"" + orderId + "\"}", "{}", "PENDING", 0, OutboxEvent.DeadPolicy.DEAD_ON_PERMANENT, 0,
+                    clock.instant(), null, null, null, clock.instant());
+            appendInTx(e);
+
+            OutboxPoller.PollResult r = poller().poll("EVENT");
+            assertThat(r.failed()).isEqualTo(1);
+            assertThat(r.applied()).isZero();
+            OutboxEvent row = outbox.findAll().get(0);
+            assertThat(row.status()).isEqualTo("PENDING");
+            assertThat(row.retryCount()).isEqualTo(1);
+            assertThat(row.lastErrorCode()).isEqualTo("UnroutableEventException");
+            assertThat(row.nextRetryAt()).isEqualTo(clock.instant().plusSeconds(60));
+            assertThat(confirmAcks.get()).as("broker yine ACK verir; kayip returned kontrolu ile yakalanir").isEqualTo(1);
+        } finally {
+            admin.declareBinding(BrokerTopology.streamBinding());
+        }
+    }
+
+    @Test // c: native gecikmeli retry: ilk 2 teslimde gecici hata; yeniden teslimler >= min gecikmeli, 3. basarili, tek etki
+    void c_transientFailureIsRetriedByBrokerWithDelay() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        startConsumer(e -> {
+            if (calls.incrementAndGet() <= 2) throw new IllegalStateException("simulated transient failure");
+            realEffect.apply(e);
+        });
+        OutboxEvent e = cancelledEvent();
+        appendInTx(e);
+        assertThat(poller().poll("EVENT").applied()).isEqualTo(1);
+
+        assertThat(await(BOUND, () -> attempts.stream().anyMatch(a -> a.outcome() == Outcome.APPLIED))).isTrue();
+        assertThat(attempts).hasSize(3);
+        assertThat(attempts.get(0).outcome()).isEqualTo(Outcome.TRANSIENT_FAILURE);
+        assertThat(attempts.get(0).deliveryCount()).isZero();
+        assertThat(attempts.get(0).redelivered()).isFalse();
+        assertThat(attempts.get(1).outcome()).isEqualTo(Outcome.TRANSIENT_FAILURE);
+        assertThat(attempts.get(1).deliveryCount()).isEqualTo(1);                       // x-delivery-count
+        assertThat(attempts.get(1).redelivered()).isTrue();
+        assertThat(attempts.get(2).outcome()).isEqualTo(Outcome.APPLIED);
+        assertThat(attempts.get(2).deliveryCount()).isEqualTo(2);
+        // gecikme lineer: min * delivery_count (1000, 2000 ms); tolerans %10 (zamanlayici/aginin payi)
+        assertThat(gapMs(attempts.get(0), attempts.get(1))).isGreaterThanOrEqualTo(900);
+        assertThat(gapMs(attempts.get(1), attempts.get(2))).isGreaterThanOrEqualTo(1800);
+        assertThat(effectsOf(e.id())).isEqualTo(1);
+        assertThat(inboxRows()).isEqualTo(1);
+        assertThat(attempts.get(0).errorType()).isEqualTo("IllegalStateException");
+    }
+
+    @Test // d: her teslimde hata -> delivery-limit (3) sonra at-least-once DLQ; ana kuyruk bos; etki yok
+    void d_deliveryLimitSendsMessageToDlq() throws Exception {
+        startConsumer(e -> { throw new IllegalStateException("always failing"); });
+        OutboxEvent e = cancelledEvent();
+        appendInTx(e);
+        assertThat(poller().poll("EVENT").applied()).isEqualTo(1);
+
+        await(BOUND, () -> attempts.size() >= 1 + BrokerTopology.DELIVERY_LIMIT);
+        assertThat(await(BOUND, () -> mgmtDepth(BrokerTopology.ORDER_CANCELLED_DLQ) == 1))
+                .as("DLQ depth 1 (attempts seen: " + attempts.size() + ")").isTrue();
+        assertThat(mgmtDepth(BrokerTopology.ORDER_CANCELLED_QUEUE)).isZero();
+        assertThat(admin.getQueueInfo(BrokerTopology.ORDER_CANCELLED_QUEUE).getMessageCount()).isZero();
+        assertThat(attempts).as("ilk + 3 yeniden teslim; fazlasi sicak requeue dongusudur").hasSize(1 + BrokerTopology.DELIVERY_LIMIT);
+        assertThat(attempts).extracting(Attempt::deliveryCount).containsExactly(0, 1, 2, 3);
+        assertThat(attempts).allMatch(a -> a.outcome() == Outcome.TRANSIENT_FAILURE);
+        assertThat(effects()).isZero();
+        assertThat(inboxRows()).isZero();
+    }
+
+    @Test // e: zehirli mesaj (JSON degil) -> requeue=false -> aninda DLQ; tek deneme
+    void e_poisonMessageGoesToDlqImmediately() throws Exception {
+        startConsumer(realEffect);
+        template.send(BrokerTopology.DOMAIN_EVENTS_EXCHANGE, OrderCancelledListener.EVENT_TYPE,
+                rawMessage(UUID.randomUUID(), OrderCancelledListener.EVENT_TYPE, "this is not json"));
+
+        assertThat(await(BOUND, () -> attempts.size() == 1)).isTrue();
+        assertThat(await(BOUND, () -> mgmtDepth(BrokerTopology.ORDER_CANCELLED_DLQ) == 1)).as("DLQ depth 1").isTrue();
+        assertThat(attempts).as("deneme yok: DLQ'ya giderken yeniden teslim olmadi").hasSize(1);
+        assertThat(attempts.get(0).outcome()).isEqualTo(Outcome.POISON);
+        assertThat(attempts.get(0).errorType()).isEqualTo("MalformedEventException");
+        assertThat(mgmtDepth(BrokerTopology.ORDER_CANCELLED_QUEUE)).isZero();
+        assertThat(effects()).isZero();
+        assertThat(inboxRows()).isZero();
+    }
+
+    @Test // f: ack commit'ten sonra: inbox satiri yazildiktan sonra is patlar -> hicbir sey commit olmaz; yeniden teslim basarili
+    void f_ackOnlyAfterCommit() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        startConsumer(e -> {
+            realEffect.apply(e);                                                           // etki yazildi (henuz commit yok)
+            if (calls.incrementAndGet() == 1) throw new IllegalStateException("crash after inbox insert");
+        });
+        OutboxEvent e = cancelledEvent();
+        appendInTx(e);
+        assertThat(poller().poll("EVENT").applied()).isEqualTo(1);
+
+        assertThat(await(BOUND, () -> attempts.stream().anyMatch(a -> a.outcome() == Outcome.APPLIED))).isTrue();
+        assertThat(attempts).extracting(Attempt::outcome).containsExactly(Outcome.TRANSIENT_FAILURE, Outcome.APPLIED);
+        assertThat(attempts.get(1).redelivered()).isTrue();
+        assertThat(gapMs(attempts.get(0), attempts.get(1))).isGreaterThanOrEqualTo(900);  // gecikmeli retry
+        assertThat(effectsOf(e.id())).isEqualTo(1);                                       // ilk denemenin etkisi geri alindi
+        assertThat(inboxRows()).isEqualTo(1);
+    }
+
+    @Test // g: ayni olay (ayni ce-id) iki kez yayinlanir -> tuketici bir kez uygular (inbox dedup), ikisi de ack
+    void g_duplicateDeliveryIsAppliedOnce() throws Exception {
+        startConsumer(realEffect);
+        OutboxEvent e = cancelledEvent();
+        publisher.handle(e);
+        publisher.handle(e);                                                                // kira dolumu / timeout sonrasi tekrar yayin
+
+        assertThat(await(BOUND, () -> attempts.size() == 2)).isTrue();
+        assertThat(attempts).extracting(Attempt::outcome).containsExactly(Outcome.APPLIED, Outcome.DUPLICATE);
+        assertThat(effectsOf(e.id())).isEqualTo(1);
+        assertThat(inboxRows()).isEqualTo(1);
+        assertThat(admin.getQueueInfo(BrokerTopology.ORDER_CANCELLED_QUEUE).getMessageCount()).isZero();
+    }
+
+    @Test // h: broker dusuk (stop_app): poller exception sizdirmaz, satir PENDING + retry + hata kodu; start_app sonrasi yayin ve tuketim
+    void h_brokerDownThenRecovers() throws Exception {
+        RabbitCtl ctl = new RabbitCtl();
+        assertThat(ctl.available()).as("rabbitmqctl bulunamadi: " + ctl.describe()).isTrue();
+        startConsumer(realEffect);
+        OutboxEvent e = cancelledEvent();
+        appendInTx(e);
+        try {
+            ctl.stopApp();
+            OutboxPoller.PollResult r = poller().poll("EVENT");                          // exception yok
+            assertThat(r.failed()).isEqualTo(1);
+            OutboxEvent row = outbox.findAll().get(0);
+            assertThat(row.status()).isEqualTo("PENDING");
+            assertThat(row.retryCount()).isGreaterThanOrEqualTo(1);
+            // kod, mesaj/host degil. Durdurma aninda baglanti kurulamiyorsa AmqpConnectException, kurulu baglanti
+            // kapanirken AmqpIOException gelir (CI: docker exec rabbitmqctl ile gozlendi); ikisi de gecici broker hatasidir.
+            assertThat(row.lastErrorCode()).isIn("AmqpConnectException", "AmqpIOException");
+        } finally {
+            ctl.startApp();
+        }
+        assertThat(await(Duration.ofSeconds(60), () -> mgmt.alive())).as("broker back").isTrue();
+        assertThat(await(Duration.ofSeconds(30), () -> connectable())).as("AMQP back").isTrue();
+
+        clock.advance(Duration.ofSeconds(61));                                              // backoff doldu
+        assertThat(await(BOUND, () -> {
+            clock.advance(Duration.ofSeconds(61));
+            return poller().poll("EVENT").applied() == 1;
+        })).as("republished after recovery").isTrue();
+        assertThat(outboxRows()).isZero();
+        assertThat(await(BOUND, () -> effectsOf(e.id()) == 1)).as("consumer recovered and applied").isTrue();
+    }
+
+    @Test // i: stream replay: 5 olay; "first"ten okuyan 5'ini sirayla alir; ikinci okuyucu offset 0'dan aynisini alir
+    void i_streamReplayFromFirstOffset() throws Exception {
+        OutboxEvent[] events = new OutboxEvent[5];
+        for (int i = 0; i < 5; i++) events[i] = cancelledEvent(UUID.randomUUID(), clock.instant().minusMillis(100 - i));
+        appendInTx(events);
+        assertThat(poller().poll("EVENT").applied()).isEqualTo(5);
+        List<String> published = java.util.Arrays.stream(events).map(ev -> ev.id().toString()).toList();
+
+        StreamReplayReader reader = new StreamReplayReader(cf, BrokerTopology.DOMAIN_EVENTS_STREAM, 50);
+        List<StreamReplayReader.Entry> first = reader.read("first", 5, Duration.ofSeconds(10));
+        assertThat(first).extracting(StreamReplayReader.Entry::eventId).containsExactlyElementsOf(published);
+        assertThat(first).extracting(StreamReplayReader.Entry::offset).containsExactly(0L, 1L, 2L, 3L, 4L);
+        assertThat(first).allMatch(en -> en.type().equals(OrderCancelledListener.EVENT_TYPE));
+
+        List<StreamReplayReader.Entry> replay = reader.read(0L, 5, Duration.ofSeconds(10));   // yikici degil
+        assertThat(replay).extracting(StreamReplayReader.Entry::eventId).containsExactlyElementsOf(published);
+        // quorum queue tuketicisinden bagimsiz: kuyrukta 5 mesaj hala bekliyor (consumer baslatilmadi)
+        assertThat(admin.getQueueInfo(BrokerTopology.ORDER_CANCELLED_QUEUE).getMessageCount()).isEqualTo(5);
+    }
+
+    @Test // j: consumer-timeout policy (5 sn): ack'lenmeyen mesaj broker tarafindan geri alinir ve yeniden teslim edilir
+    void j_consumerTimeoutReleasesUnackedMessage() throws Exception {
+        int put = mgmt.putPolicy(CONSUMER_TIMEOUT_POLICY, "^" + BrokerTopology.ORDER_CANCELLED_QUEUE.replace(".", "\\.") + "$",
+                Map.of("consumer-timeout", 5000), "quorum_queues");
+        assertThat(put).isIn(201, 204);
+        List<Instant> deliveries = new CopyOnWriteArrayList<>();
+        List<Boolean> redelivered = new CopyOnWriteArrayList<>();
+        CountDownLatch acked = new CountDownLatch(1);
+        ChannelAwareMessageListener holding = (message, channel) -> {
+            deliveries.add(Instant.now());
+            redelivered.add(Boolean.TRUE.equals(message.getMessageProperties().isRedelivered()));
+            if (deliveries.size() == 1) {
+                new CountDownLatch(1).await(6, TimeUnit.SECONDS);                        // ack'siz tutar (yavas tuketici)
+                return;                                                                  // ack yok; broker zaten geri aldi
+            }
+            channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+            acked.countDown();
+        };
+        container = ListenerContainers.on(cf, BrokerTopology.ORDER_CANCELLED_QUEUE, holding, 500);
+        container.start();                                                                 // policy consume aninda okunur
+        template.send(BrokerTopology.DOMAIN_EVENTS_EXCHANGE, OrderCancelledListener.EVENT_TYPE,
+                rawMessage(UUID.randomUUID(), OrderCancelledListener.EVENT_TYPE, "{\"orderId\":\"x\"}"));
+
+        assertThat(acked.await(BOUND.toSeconds(), TimeUnit.SECONDS)).as("redelivered after consumer timeout").isTrue();
+        assertThat(deliveries).hasSize(2);
+        assertThat(redelivered).containsExactly(false, true);
+        long gap = Duration.between(deliveries.get(0), deliveries.get(1)).toMillis();
+        assertThat(gap).isGreaterThanOrEqualTo(4500);                                       // >= timeout (tolerans %10)
+        assertThat(await(BOUND, () -> mgmtDepth(BrokerTopology.ORDER_CANCELLED_QUEUE) == 0)).isTrue();
+    }
+
+    @Test // k: gecikmeli retry KUYRUK ARGUMANI ile her 4.3.x'te etkin; policy yolu SURUME BAGLI (4.3.0 reddeder, 4.3.6 kabul eder)
+    void k_delayedRetryIsEffectiveViaQueueArgumentsPolicyDependsOnVersion() throws Exception {
+        JsonNode q = mgmt.queue(BrokerTopology.ORDER_CANCELLED_QUEUE);
+        JsonNode args = q.get("arguments");
+        assertThat(args.get("x-queue-type").asString()).isEqualTo("quorum");
+        assertThat(args.get("x-delayed-retry-type").asString()).isEqualTo("failed");
+        assertThat(args.get("x-delayed-retry-min").asInt()).isEqualTo(BrokerTopology.DELAYED_RETRY_MIN_MS);
+        assertThat(args.get("x-delayed-retry-max").asInt()).isEqualTo(BrokerTopology.DELAYED_RETRY_MAX_MS);
+        assertThat(args.get("x-delivery-limit").asInt()).isEqualTo(BrokerTopology.DELIVERY_LIMIT);
+        assertThat(args.get("x-dead-letter-strategy").asString()).isEqualTo("at-least-once");
+        assertThat(args.get("x-overflow").asString()).isEqualTo("reject-publish");
+
+        String version = mgmt.brokerVersion();
+        String probeQueue = "bvt.policy-probe.queue";
+        String policy = "bvt-delayed-retry-probe";
+        var resp = mgmt.putPolicyRaw(policy, "^" + probeQueue.replace(".", "\\.") + "$",
+                Map.of("delayed-retry-type", "failed", "delayed-retry-min", 1000, "delayed-retry-max", 5000), "quorum_queues");
+        try {
+            if ("4.3.0".equals(version)) {
+                // 4.3.0: validator kayitli degil -> 400 "not recognised policy settings" (yerel broker'da gozlendi)
+                assertThat(resp.statusCode()).as("policy route on " + version + ": " + resp.body()).isEqualTo(400);
+                assertThat(resp.body()).contains("not recognised policy settings");
+                return;
+            }
+            // Sonraki 4.3.x (CI: 4.3.6): policy kabul edilir. 201/204 yetmez; ARGUMANSIZ bir QQ'da policy'nin gecikmeyi
+            // gercekten uyguladigi olculur (reject requeue=true -> ikinci teslim >= 900 ms sonra).
+            assertThat(resp.statusCode()).as("policy route on " + version + ": " + resp.body()).isIn(201, 204);
+            assertThat(measureRedeliveryGapMs(probeQueue)).as("policy-only delayed retry on " + version).isGreaterThanOrEqualTo(900);
+        } finally {
+            mgmt.deletePolicy(policy);
+        }
+    }
+
+    /** Argumansiz quorum queue: 1 mesaj, ilk teslimde basicReject(requeue=true), ikinci teslime kadar gecen sure. */
+    private long measureRedeliveryGapMs(String queue) throws Exception {
+        try (var conn = cf.createConnection(); var ch = conn.createChannel(false)) {
+            ch.queueDelete(queue);
+            ch.queueDeclare(queue, true, false, false, Map.of("x-queue-type", "quorum"));
+            try {
+                // policy uygulanana kadar bekle (effective_policy_definition)
+                assertThat(await(Duration.ofSeconds(15), () -> {
+                    try {
+                        JsonNode def = mgmt.queue(queue).get("effective_policy_definition");
+                        return def != null && def.has("delayed-retry-type");
+                    } catch (Exception ex) { return false; }
+                })).as("policy applied to " + queue).isTrue();
+                ch.basicQos(1);
+                List<Instant> seen = new CopyOnWriteArrayList<>();
+                CountDownLatch two = new CountDownLatch(2);
+                ch.basicConsume(queue, false, (tag, d) -> {
+                    seen.add(Instant.now());
+                    two.countDown();
+                    if (seen.size() == 1) ch.basicReject(d.getEnvelope().getDeliveryTag(), true);
+                    else ch.basicAck(d.getEnvelope().getDeliveryTag(), false);
+                }, tag -> { });
+                ch.basicPublish("", queue, null, "probe".getBytes(StandardCharsets.UTF_8));
+                assertThat(two.await(20, TimeUnit.SECONDS)).as("second delivery").isTrue();
+                return Duration.between(seen.get(0), seen.get(1)).toMillis();
+            } finally {
+                ch.queueDelete(queue);
+            }
+        }
+    }
+
+    @Test // l: bilinmeyen tip (binding order.order.* ile gelen order.order.created) yok sayilir ve ack'lenir (12.2)
+    void l_unknownEventTypeIsIgnoredAndAcked() throws Exception {
+        startConsumer(realEffect);
+        UUID id = UUID.randomUUID();
+        template.send(BrokerTopology.DOMAIN_EVENTS_EXCHANGE, "order.order.created",
+                rawMessage(id, "order.order.created", "{\"orderId\":\"" + UUID.randomUUID() + "\"}"));
+        assertThat(await(BOUND, () -> attempts.size() == 1)).isTrue();
+        assertThat(attempts.get(0).outcome()).isEqualTo(Outcome.IGNORED_TYPE);
+        assertThat(attempts.get(0).eventId()).isEqualTo(id);
+        assertThat(await(BOUND, () -> admin.getQueueInfo(BrokerTopology.ORDER_CANCELLED_QUEUE).getMessageCount() == 0)).isTrue();
+        assertThat(effects()).isZero();
+        assertThat(inboxRows()).isZero();
+        assertThat(mgmtDepth(BrokerTopology.ORDER_CANCELLED_DLQ)).isZero();
+    }
+
+    int mgmtDepth(String queue) {
+        try {
+            return mgmt.depth(queue);
+        } catch (IOException | InterruptedException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    boolean connectable() {
+        try {
+            cf.resetConnection();
+            cf.createConnection().close();
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/test/java/com/acme/broker/support/ManagementApi.java`
+
+```java
+package com.acme.broker.support;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Base64;
+import java.util.Map;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * RabbitMQ management HTTP API (test kaniti): kuyruk derinligi, kuyruk bilgisi, policy yonetimi. Uretimde policy'ler
+ * deploy/IaC ile verilir; testte ayni API ile kurulur/kaldirilir. Istatistik alanlari (messages) 5 sn'ye kadar gecikebilir;
+ * cagiran bounded polling yapar.
+ */
+public final class ManagementApi {
+
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
+    private final JsonMapper json = JsonMapper.builder().build();
+    private final String base;
+    private final String auth;
+    private final String vhost;
+
+    public ManagementApi(String base, String user, String password, String vhost) {
+        this.base = base;
+        this.auth = "Basic " + Base64.getEncoder().encodeToString((user + ":" + password).getBytes(StandardCharsets.UTF_8));
+        this.vhost = URLEncoder.encode(vhost, StandardCharsets.UTF_8);
+    }
+
+    public JsonNode queue(String name) throws IOException, InterruptedException {
+        HttpResponse<String> r = send(HttpRequest.newBuilder(URI.create(base + "/api/queues/" + vhost + "/" + enc(name)))
+                .header("Authorization", auth).GET());
+        if (r.statusCode() != 200) throw new IOException("GET queue " + name + " -> " + r.statusCode() + " " + r.body());
+        return json.readTree(r.body());
+    }
+
+    /** "messages" toplam (ready + unacked); alan henuz yoksa (yeni kuyruk) 0. */
+    public int depth(String name) throws IOException, InterruptedException {
+        JsonNode q = queue(name);
+        return q.has("messages") ? q.get("messages").asInt() : 0;
+    }
+
+    public int putPolicy(String name, String pattern, Map<String, Object> definition, String applyTo)
+            throws IOException, InterruptedException {
+        String body = json.writeValueAsString(Map.of("pattern", pattern, "definition", definition, "apply-to", applyTo));
+        HttpResponse<String> r = send(HttpRequest.newBuilder(URI.create(base + "/api/policies/" + vhost + "/" + enc(name)))
+                .header("Authorization", auth).header("content-type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(body)));
+        return r.statusCode();
+    }
+
+    /** Hata govdesini de dondurur (400 nedeni kanittir). */
+    public HttpResponse<String> putPolicyRaw(String name, String pattern, Map<String, Object> definition, String applyTo)
+            throws IOException, InterruptedException {
+        String body = json.writeValueAsString(Map.of("pattern", pattern, "definition", definition, "apply-to", applyTo));
+        return send(HttpRequest.newBuilder(URI.create(base + "/api/policies/" + vhost + "/" + enc(name)))
+                .header("Authorization", auth).header("content-type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(body)));
+    }
+
+    public int deletePolicy(String name) throws IOException, InterruptedException {
+        return send(HttpRequest.newBuilder(URI.create(base + "/api/policies/" + vhost + "/" + enc(name)))
+                .header("Authorization", auth).DELETE()).statusCode();
+    }
+
+    /** Broker surumu (/api/overview rabbitmq_version), orn. "4.3.6". Surume bagli davranis testlerinde kullanilir. */
+    public String brokerVersion() throws IOException, InterruptedException {
+        HttpResponse<String> r = send(HttpRequest.newBuilder(URI.create(base + "/api/overview")).header("Authorization", auth).GET());
+        if (r.statusCode() != 200) throw new IOException("GET overview -> " + r.statusCode());
+        return json.readTree(r.body()).get("rabbitmq_version").asString();
+    }
+
+    public boolean alive() {
+        try {
+            return send(HttpRequest.newBuilder(URI.create(base + "/api/overview")).header("Authorization", auth).GET())
+                    .statusCode() == 200;
+        } catch (IOException | InterruptedException e) {
+            return false;
+        }
+    }
+
+    private HttpResponse<String> send(HttpRequest.Builder b) throws IOException, InterruptedException {
+        return http.send(b.timeout(Duration.ofSeconds(5)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String enc(String s) { return URLEncoder.encode(s, StandardCharsets.UTF_8); }
+}
+```
+
+---
+
+### `skeleton-example/broker-example/src/test/java/com/acme/broker/support/RabbitCtl.java`
+
+```java
+package com.acme.broker.support;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Kaos testi icin rabbitmqctl stop_app / start_app (node kalir, broker uygulamasi durur). Komut ve node adi sistem
+ * ozelligi/ortam degiskeniyle verilir; bulunamazsa test acik bir mesajla BASARISIZ olur (sessiz atlama yok).
+ *   -Dbvt.rabbitmqctl=/path/to/rabbitmqctl  -Dbvt.rabbitmq.node=rabbit@localhost  -Dbvt.erlang.bin=/opt/otp27/bin
+ * Komut bosluk icerebilir (container icindeki broker icin): BVT_RABBITMQCTL="docker exec <container> rabbitmqctl";
+ * ilk kelime '/' icermiyorsa PATH'te aranir. BVT_RABBITMQ_NODE=local ise "-n" verilmez (container icinde yerel node).
+ */
+public final class RabbitCtl {
+
+    private final List<String> rabbitmqctl;
+    private final String node;
+    private final String erlangBin;
+
+    public RabbitCtl() {
+        this.rabbitmqctl = List.of(prop("bvt.rabbitmqctl", "BVT_RABBITMQCTL", "/home/pgtest/rmq/rabbitmq_server-4.3.0/sbin/rabbitmqctl").trim().split("\\s+"));
+        this.node = prop("bvt.rabbitmq.node", "BVT_RABBITMQ_NODE", "rabbit@localhost");
+        this.erlangBin = prop("bvt.erlang.bin", "BVT_ERLANG_BIN", "/opt/otp27/bin");
+    }
+
+    public boolean available() {
+        String exe = rabbitmqctl.get(0);
+        if (exe.contains("/")) return new File(exe).canExecute();
+        for (String dir : (erlangBin + File.pathSeparator + System.getenv().getOrDefault("PATH", "/usr/bin:/bin")).split(File.pathSeparator)) {
+            if (!dir.isBlank() && new File(dir, exe).canExecute()) return true;
+        }
+        return false;
+    }
+
+    public String describe() { return String.join(" ", rabbitmqctl) + (localNode() ? "" : " -n " + node); }
+
+    private boolean localNode() { return "local".equalsIgnoreCase(node); }
+
+    public void stopApp() throws IOException, InterruptedException { run("stop_app"); }
+
+    public void startApp() throws IOException, InterruptedException { run("start_app"); }
+
+    private void run(String command) throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(rabbitmqctl);
+        if (!localNode()) { cmd.add("-n"); cmd.add(node); }
+        cmd.add(command);
+        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+        pb.environment().put("PATH", erlangBin + File.pathSeparator + System.getenv().getOrDefault("PATH", "/usr/bin:/bin"));
+        pb.environment().putIfAbsent("HOME", System.getProperty("user.home"));
+        Process p = pb.start();
+        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        if (!p.waitFor(60, TimeUnit.SECONDS)) { p.destroyForcibly(); throw new IOException("rabbitmqctl " + command + " timed out"); }
+        if (p.exitValue() != 0) throw new IOException("rabbitmqctl " + command + " failed (" + p.exitValue() + "): " + out);
+    }
+
+    private static String prop(String sys, String env, String def) {
+        String v = System.getProperty(sys);
+        if (v == null || v.isBlank()) v = System.getenv(env);
+        return v == null || v.isBlank() ? def : v;
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>contract-example</artifactId>
+  <!-- Istemci contract kaniti (referans Bolum 16 "Istemci contract", 20 "API sozlesmesi", 18.4): OpenAPI koddan
+       URETILIR (springdoc), repoda tutulan baseline ile openapi-diff karsilastirilir; kirici degisiklik PR gate'ini
+       kirar. Baseline bilincli guncellenir (komut: OpenApiContractGateTest javadoc'u). -->
+  <properties>
+    <!-- springdoc 3.x Boot 4 hattidir (3.0.2'nin parent'i Boot 4.0.3); Boot 4.1.1 ile calistigi bu modulun
+         testleriyle dogrulanir. 3.1.x'in parent'i Boot 4.1.0'dir ve ayni testler onunla da yesildir
+         (-Dspringdoc.version=3.1.1); Boot 4.1 hattinda yukseltme adayi. Boot 3.x icin 2.8.x, hatlar karistirilmaz.
+         openapi-diff 2.1.7 de denendi: 3.1 belgede tip korlugu ayni (OpenApiContract javadoc'u). -->
+    <springdoc.version>3.0.2</springdoc.version>
+    <openapi-diff.version>2.1.2</openapi-diff.version>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <!-- "-api" varyanti: yalniz /v3/api-docs; swagger-ui prod yuzeyine hic girmez -->
+    <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-api</artifactId><version>${springdoc.version}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc-test</artifactId><scope>test</scope></dependency>
+    <!-- Kirici degisiklik tespiti yalniz test/CI zamaninda; uygulama runtime'ina girmez -->
+    <dependency><groupId>org.openapitools.openapidiff</groupId><artifactId>openapi-diff-core</artifactId><version>${openapi-diff.version}</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 5) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/contract-example/src/main/java/com/acme/contract/ContractExampleApp.java`
+
+```java
+package com.acme.contract;
+
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.info.Info;
+import java.time.Clock;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+
+// Spec basligi/surumu istemci paketinin adini ve surumunu belirler; springdoc'un "OpenAPI definition / v0"
+// varsayilani birlestirilmis <proje>-api.yaml'da servisleri ayirt edilemez kilar (referans Bolum 20).
+@OpenAPIDefinition(info = @Info(title = "contract-example", version = "v1"))
+@SpringBootApplication
+public class ContractExampleApp {
+    public static void main(String[] args) { SpringApplication.run(ContractExampleApp.class, args); }
+
+    /** Saat enjekte edilir: createdAt testlerde sabit, yanit ornekleri deterministik. */
+    @Bean
+    Clock clock() { return Clock.systemUTC(); }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/main/java/com/acme/contract/api/CreateOrderRequest.java`
+
+```java
+package com.acme.contract.api;
+
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+import java.util.UUID;
+
+/**
+ * Istek DTO'su. Zorunluluk bean validation ile ifade edilir; springdoc ayni anotasyonlardan OpenAPI "required"
+ * listesini uretir, yani sozlesme ile dogrulama tek kaynaktan gelir (elle yazilan spec kayar).
+ * Yeni alan eklenecekse OPSIYONEL eklenir: zorunlu yeni alan eski istemciyi kirar (openapi-diff INCOMPATIBLE).
+ */
+public record CreateOrderRequest(
+        @NotNull UUID customerId,
+        @NotBlank @Size(max = 64) String sku,
+        @NotNull @Min(1) @Max(1000) Integer quantity,
+        @Size(max = 500) String note) {}
+```
+
+---
+
+### `skeleton-example/contract-example/src/main/java/com/acme/contract/api/OrderController.java`
+
+```java
+package com.acme.contract.api;
+
+import jakarta.validation.Valid;
+import java.net.URI;
+import java.time.Clock;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+
+/**
+ * Sozlesme ornegi icin kucuk controller: kalicilik bu modulun konusu degil (bellek ici map). Onemli olan, OpenAPI'nin
+ * bu imzalardan uretilmesi: metod adi operationId olur (getOrder / createOrder) ve istemci kodu bu adlarla uretilir;
+ * metod adini degistirmek de istemci tarafinda API kirilmasidir.
+ */
+@RestController
+@RequestMapping(path = "/v1/orders", produces = MediaType.APPLICATION_JSON_VALUE)
+public class OrderController {
+
+    private final Map<UUID, OrderResponse> orders = new ConcurrentHashMap<>();
+    private final Clock clock;
+
+    public OrderController(Clock clock) { this.clock = clock; }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<OrderResponse> getOrder(@PathVariable("id") UUID id) {
+        OrderResponse order = orders.get(id);
+        if (order == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        // Kisisel veri donen uc: ara cache'lerde tutulmaz (referans 6.7)
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore().cachePrivate()).body(order);
+    }
+
+    // @ResponseStatus yalniz dokumantasyon icindir (springdoc 201'i buradan okur); gercek status ResponseEntity'den
+    // gelir. Olmazsa spec "200" der, runtime 201 doner: uretilen istemci yanlis kodu bekler.
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public ResponseEntity<OrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest req) {
+        OrderResponse created = new OrderResponse(UUID.randomUUID(), req.customerId(), req.sku(), req.quantity(),
+                OrderStatus.PENDING, clock.instant(), req.note());
+        orders.put(created.id(), created);
+        return ResponseEntity.created(URI.create("/v1/orders/" + created.id()))
+                .cacheControl(CacheControl.noStore().cachePrivate()).body(created);
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/main/java/com/acme/contract/api/OrderResponse.java`
+
+```java
+package com.acme.contract.api;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.media.Schema.RequiredMode;
+import java.time.Instant;
+import java.util.UUID;
+
+/**
+ * Yanit DTO'su. Her zaman dolu alanlar REQUIRED isaretlenir: uretilen istemci (dart-dio, typescript-fetch) bunlari
+ * null olamaz tipe cevirir. Bir yanit alanini kaldirmak ya da yeniden adlandirmak istemcinin okudugu alani yok eder;
+ * bu yuzden kiricidir ve yeni versiyon (/v2) ister (referans Bolum 20 API versiyonlama).
+ */
+public record OrderResponse(
+        @Schema(requiredMode = RequiredMode.REQUIRED) UUID id,
+        @Schema(requiredMode = RequiredMode.REQUIRED) UUID customerId,
+        @Schema(requiredMode = RequiredMode.REQUIRED) String sku,
+        @Schema(requiredMode = RequiredMode.REQUIRED) int quantity,
+        @Schema(requiredMode = RequiredMode.REQUIRED) OrderStatus status,
+        @Schema(requiredMode = RequiredMode.REQUIRED) Instant createdAt,
+        String note) {}
+```
+
+---
+
+### `skeleton-example/contract-example/src/main/java/com/acme/contract/api/OrderStatus.java`
+
+```java
+package com.acme.contract.api;
+
+/** Yanitta enum: yeni deger eklemek istemci icin kiricidir (referans 18.4: tuketici once). openapi-diff bunu yakalar. */
+public enum OrderStatus { PENDING, CONFIRMED, CANCELLED }
+```
+
+---
+
+### `skeleton-example/contract-example/src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: contract-example
+# Prod varsayilani: api-docs KAPALI (referans 15.1). Spec CI'da testte ozellikle acilarak uretilir; prod yuzeyi
+# genisletilmez. Testler springdoc.api-docs.enabled=true ile acar (OpenApiSpecSupport).
+springdoc:
+  api-docs:
+    enabled: false
+  # Anahtar sirasi sabit: commit'lenen baseline'in git diff'i yalniz gercek degisikligi gosterir
+  writer-with-order-by-keys: true
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/java/com/acme/contract/ApiDocsDisabledByDefaultTest.java`
+
+```java
+package com.acme.contract;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+
+/**
+ * Referans 15.1: prod'da api-docs kapali. Varsayilan konfigurasyonla (ozellik acilmadan) /v3/api-docs yoktur;
+ * spec yalniz CI/test'te ozellik acikca verilerek uretilir.
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+class ApiDocsDisabledByDefaultTest {
+
+    @Autowired MockMvc mvc;
+
+    @Test
+    void apiDocsEndpointIsNotExposedWithDefaultConfiguration() throws Exception {
+        mvc.perform(get("/v3/api-docs")).andExpect(status().isNotFound());
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/java/com/acme/contract/OpenApiContract.java`
+
+```java
+package com.acme.contract;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.openapitools.openapidiff.core.OpenApiCompare;
+import org.openapitools.openapidiff.core.model.ChangedOpenApi;
+import org.openapitools.openapidiff.core.output.MarkdownRender;
+import org.springframework.test.web.servlet.MockMvc;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.SerializationFeature;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
+
+/**
+ * PR gate'inin kendisi (CI'da kosan kisim): spec'i UYGULAMADAN uretir, baseline ile openapi-diff karsilastirir.
+ * Spec elle yazilmaz; baseline yalniz bilincli bir komutla guncellenir (OpenApiContractGateTest javadoc'u).
+ *
+ * <p>Gate, springdoc'un OpenAPI 3.0 ciktisini karsilastirir; istemciye yayinlanan belge 3.1'dir (target/openapi.json).
+ * Neden: openapi-diff (2.1.2 ve 2.1.7 denendi) 3.1 belgede sema tipini okumuyor (3.1'de tip "types" kumesinde,
+ * arac getType()'a bakiyor): string -> integer degisikligi 3.1'de "degisiklik yok" cikar, 3.0'da kiricidir.
+ * Bu sinir OpenApiDocumentTest'te sabitlenir; arac duzelirse o test kirilir ve gate 3.1'e alinabilir.
+ */
+final class OpenApiContract {
+
+    /** Gate ve diff testlerinin spec uretim ayari (annotation'da kullanilabilmesi icin derleme zamani sabiti). */
+    static final String GATE_SPEC_VERSION = "springdoc.api-docs.version=openapi_3_0";
+    static final String API_DOCS_ENABLED = "springdoc.api-docs.enabled=true";
+
+    /** Modul kokune gore (surefire calisma dizini = modul dizini). Classpath kopyasi degil: guncelleme buraya yazar. */
+    static final Path BASELINE = Path.of("src/test/resources/openapi-baseline.json");
+    static final Path GENERATED = Path.of("target/openapi.json");
+    static final String UPDATE_FLAG = "contract.updateBaseline";
+
+    static final JsonMapper JSON = JsonMapper.builder().enable(SerializationFeature.INDENT_OUTPUT).build();
+
+    private OpenApiContract() {}
+
+    /** Uygulamanin gercek /v3/api-docs ciktisi (springdoc), deterministik girintiyle. */
+    static String generate(MockMvc mvc) throws Exception {
+        String raw = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return JSON.writeValueAsString(JSON.readTree(raw)) + "\n";
+    }
+
+    static ObjectNode tree(String spec) { return (ObjectNode) JSON.readTree(spec); }
+
+    static String write(JsonNode node) { return JSON.writeValueAsString(node) + "\n"; }
+
+    static ChangedOpenApi diff(String baseline, String current) { return OpenApiCompare.fromContents(baseline, current); }
+
+    static String markdown(ChangedOpenApi diff) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+            new MarkdownRender().render(diff, writer);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Gate karari: kirici (INCOMPATIBLE) fark varsa AssertionError; mesaj PR yorumuna konacak markdown ozetidir.
+     * Uyumlu fark (opsiyonel alan ekleme) gecer: eski istemci bilmedigi alani yok sayar (referans 18.4).
+     */
+    static ChangedOpenApi assertBackwardCompatible(String baseline, String current) {
+        ChangedOpenApi diff = diff(baseline, current);
+        if (!diff.isCompatible()) {
+            throw new AssertionError("OpenAPI kirici degisiklik (baseline -> mevcut). Yeni versiyon (/v2) acin ya da "
+                    + "degisikligi geri alin; bilincli ise baseline'i guncelleyin (-D" + UPDATE_FLAG + "=true).\n"
+                    + markdown(diff));
+        }
+        return diff;
+    }
+
+    static String read(Path path) {
+        try {
+            return Files.readString(path, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    static void save(Path path, String content) {
+        try {
+            Files.createDirectories(path.toAbsolutePath().getParent());
+            Files.writeString(path, content, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/java/com/acme/contract/OpenApiContractGateTest.java`
+
+```java
+package com.acme.contract;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.nio.file.Files;
+import org.junit.jupiter.api.Test;
+import org.openapitools.openapidiff.core.model.ChangedOpenApi;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import tools.jackson.databind.node.ObjectNode;
+
+/**
+ * Senaryo 3: PR gate'i. CI bu testi her PR'da kosar; uretilen spec baseline'a gore KIRICI ise build kirilir ve hata
+ * mesaji openapi-diff markdown ozetini tasir (PR yorumuna konur). Uyumlu fark (opsiyonel alan) gecer.
+ *
+ * <p>Baseline'i BILINCLI guncelleme komutu (kirici degisiklik onaylandiysa: yeni versiyon/uyumluluk matrisi, referans
+ * 18.4; ya da uyumlu degisiklikten sonra baseline'i tazelemek icin), repo kokunden:
+ *
+ * <pre>
+ * mvn -f blueprint/skeleton-example/pom.xml -pl contract-example -am test \
+ *     -Dtest=OpenApiContractGateTest -Dsurefire.failIfNoSpecifiedTests=false -Dcontract.updateBaseline=true
+ * git add blueprint/skeleton-example/contract-example/src/test/resources/openapi-baseline.json
+ * </pre>
+ *
+ * Guncelleme modu yalniz dosyayi yazar; gate kontrolu atlanmaz, cunku yazilan baseline mevcut spec'in kendisidir
+ * (fark sifir). CI bu bayragi asla vermez; baseline degisikligi PR diff'inde gorunur ve review'a girer.
+ * Baseline springdoc'un OpenAPI 3.0 ciktisidir (neden: OpenApiContract javadoc'u); istemciye 3.1 belge yayinlanir.
+ */
+@SpringBootTest(properties = {OpenApiContract.API_DOCS_ENABLED, OpenApiContract.GATE_SPEC_VERSION})
+@AutoConfigureMockMvc
+class OpenApiContractGateTest {
+
+    @Autowired MockMvc mvc;
+
+    @Test
+    void generatedSpecIsBackwardCompatibleWithCommittedBaseline() throws Exception {
+        String current = OpenApiContract.generate(mvc);
+        if (Boolean.getBoolean(OpenApiContract.UPDATE_FLAG)) {
+            OpenApiContract.save(OpenApiContract.BASELINE, current);
+            System.out.println("[contract-gate] baseline guncellendi: " + OpenApiContract.BASELINE.toAbsolutePath());
+        }
+        assertThat(OpenApiContract.BASELINE).as("baseline commit'lenmis olmali").exists();
+        String baseline = OpenApiContract.read(OpenApiContract.BASELINE);
+        // 3.1 baseline'da openapi-diff tip degisikliklerini gormez; gate sessizce korlesmesin
+        assertThat(OpenApiContract.tree(baseline).get("openapi").asString()).startsWith("3.0.");
+
+        ChangedOpenApi diff = OpenApiContract.assertBackwardCompatible(baseline, current);
+
+        String summary = OpenApiContract.markdown(diff);
+        OpenApiContract.save(OpenApiContract.GENERATED.resolveSibling("contract-diff.md"), summary);
+        System.out.println("[contract-gate] sonuc=" + (diff.isUnchanged() ? "DEGISIKLIK YOK" : "UYUMLU FARK")
+                + "\n" + summary);
+    }
+
+    /** Gate'in kendisinin kirici farkta gercekten kirildigini kanitlar (gate hep yesil donen bir no-op olmasin). */
+    @Test
+    void gateFailsWithMarkdownSummaryWhenAResponseFieldDisappears() throws Exception {
+        String baseline = OpenApiContract.read(OpenApiContract.BASELINE);
+        ObjectNode broken = OpenApiContract.tree(OpenApiContract.generate(mvc));
+        SpecVariants.removeResponseProperty(broken, "OrderResponse", "sku");
+
+        assertThatThrownBy(() -> OpenApiContract.assertBackwardCompatible(baseline, OpenApiContract.write(broken)))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("OpenAPI kirici degisiklik")
+                .hasMessageContaining("/v1/orders");
+        assertThat(Files.isRegularFile(OpenApiContract.BASELINE)).isTrue();
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/java/com/acme/contract/OpenApiDiffTest.java`
+
+```java
+package com.acme.contract;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.function.Consumer;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.openapitools.openapidiff.core.model.ChangedOpenApi;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import tools.jackson.databind.node.ObjectNode;
+
+/**
+ * Senaryo 2: openapi-diff (openapi-diff-core 2.1.2) siniflandirmasinin referans 18.4 sozlesmesiyle ortustugu.
+ * Mevcut (uretilen) spec baseline ile uyumlu; mevcut spec'ten turetilen varyantlarda kirici/uyumlu karar dogru.
+ * Her varyantin markdown ozeti target/contract-diff/*.md'ye ve stdout'a yazilir (kanit).
+ */
+@SpringBootTest(properties = {OpenApiContract.API_DOCS_ENABLED, OpenApiContract.GATE_SPEC_VERSION})
+@AutoConfigureMockMvc
+class OpenApiDiffTest {
+
+    @Autowired MockMvc mvc;
+    String current;
+
+    @BeforeEach
+    void generateCurrentSpec() throws Exception { current = OpenApiContract.generate(mvc); }
+
+    @Test
+    void currentSpecIsCompatibleWithCommittedBaseline() {
+        ChangedOpenApi diff = OpenApiContract.diff(OpenApiContract.read(OpenApiContract.BASELINE), current);
+        report("baseline-vs-current", diff);
+        assertThat(diff.isCompatible()).isTrue();
+    }
+
+    @Test
+    void removingAResponsePropertyIsBreaking() {
+        ChangedOpenApi diff = variant("remove-response-property",
+                spec -> SpecVariants.removeResponseProperty(spec, "OrderResponse", "sku"));
+        assertThat(diff.isIncompatible()).isTrue();
+        assertThat(diff.getChangedOperations()).hasSize(2); // GET ve POST ayni DTO'yu doner
+    }
+
+    @Test
+    void renamingARequiredRequestPropertyIsBreaking() {
+        ChangedOpenApi diff = variant("rename-request-property",
+                spec -> SpecVariants.renameProperty(spec, "CreateOrderRequest", "sku", "productCode"));
+        assertThat(diff.isIncompatible()).isTrue();
+    }
+
+    /**
+     * ARAC SINIRI (bilincli belgelenir): OPSIYONEL bir istek alaninin adini degistirmek openapi-diff'e gore UYUMLUDUR
+     * (istekten alan kaldirmak "sunucu artik okumuyor" sayilir). Oysa eski istemci "note" gondermeye devam eder ve
+     * veri sessizce kaybolur. Bu yuzden gate tek basina yetmez: yeniden adlandirma review'da yakalanir ya da eski ad
+     * bir surum boyunca alias olarak kabul edilir.
+     */
+    @Test
+    void renamingAnOptionalRequestPropertyIsNotFlaggedByTheTool() {
+        ChangedOpenApi diff = variant("rename-optional-request-property",
+                spec -> SpecVariants.renameProperty(spec, "CreateOrderRequest", "note", "comment"));
+        assertThat(diff.isCompatible()).isTrue();
+        assertThat(diff.isUnchanged()).isFalse();
+    }
+
+    @Test
+    void addingAnOptionalResponsePropertyIsCompatible() {
+        ChangedOpenApi diff = variant("add-optional-response-property",
+                spec -> SpecVariants.addOptionalProperty(spec, "OrderResponse", "variantOnlyEstimatedDelivery", "string"));
+        assertThat(diff.isCompatible()).isTrue();
+        assertThat(diff.isUnchanged()).isFalse(); // fark gorulur ama kirici degil
+    }
+
+    @Test
+    void makingAnOptionalRequestFieldRequiredIsBreaking() {
+        ChangedOpenApi diff = variant("make-request-field-required",
+                spec -> SpecVariants.makeRequired(spec, "CreateOrderRequest", "note"));
+        assertThat(diff.isIncompatible()).isTrue();
+    }
+
+    @Test
+    void addingARequiredRequestPropertyIsBreaking() {
+        ChangedOpenApi diff = variant("add-required-request-property",
+                spec -> SpecVariants.addRequiredProperty(spec, "CreateOrderRequest", "variantOnlyChannel", "string"));
+        assertThat(diff.isIncompatible()).isTrue();
+    }
+
+    /** Referans 18.4 "enum degeri ekleme: tuketici once": yanitta yeni enum degeri eski istemci icin kiricidir. */
+    @Test
+    void addingAnEnumValueToAResponseIsBreaking() {
+        ChangedOpenApi diff = variant("add-response-enum-value",
+                spec -> SpecVariants.addEnumValue(spec, "OrderResponse", "status", "SHIPPED"));
+        assertThat(diff.isIncompatible()).isTrue();
+    }
+
+    /** Gate'in 3.0 ciktisini karsilastirmasinin nedeni: ayni degisiklik 3.1 belgede gorunmez (OpenApiDocumentTest). */
+    @Test
+    void changingARequestPropertyTypeIsBreaking() {
+        ChangedOpenApi diff = variant("change-request-property-type",
+                spec -> ((ObjectNode) SpecVariants.properties(spec, "CreateOrderRequest").get("sku")).put("type", "integer"));
+        assertThat(diff.isIncompatible()).isTrue();
+    }
+
+    /**
+     * ARAC SINIRI: operationId istemci kodundaki metod adidir (getOrder -> findOrder istemcide derleme hatasi), ama
+     * openapi-diff bunu yalniz "degisti" olarak gorur, kirici saymaz. Controller metod adini degistirmek review konusudur
+     * (ya da operationId @Operation ile sabitlenir).
+     */
+    @Test
+    void renamingAnOperationIdIsNotFlaggedAsBreakingByTheTool() {
+        ChangedOpenApi diff = variant("rename-operation-id", spec -> ((ObjectNode) spec.get("paths")
+                .get("/v1/orders/{id}").get("get")).put("operationId", "findOrder"));
+        assertThat(diff.isUnchanged()).isFalse();
+        assertThat(diff.isCompatible()).isTrue();
+    }
+
+    private ChangedOpenApi variant(String name, Consumer<ObjectNode> change) {
+        ObjectNode spec = OpenApiContract.tree(current);
+        change.accept(spec);
+        ChangedOpenApi diff = OpenApiContract.diff(current, OpenApiContract.write(spec));
+        report(name, diff);
+        return diff;
+    }
+
+    private static void report(String name, ChangedOpenApi diff) {
+        String markdown = OpenApiContract.markdown(diff);
+        OpenApiContract.save(OpenApiContract.GENERATED.resolveSibling("contract-diff").resolve(name + ".md"), markdown);
+        System.out.println("[openapi-diff] " + name + " -> " + diff.isChanged() + "\n" + markdown);
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/java/com/acme/contract/OpenApiDocumentTest.java`
+
+```java
+package com.acme.contract;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.Operation;
+import io.swagger.v3.oas.models.SpecVersion;
+import io.swagger.v3.oas.models.media.Schema;
+import io.swagger.v3.parser.OpenAPIV3Parser;
+import io.swagger.v3.parser.core.models.ParseOptions;
+import io.swagger.v3.parser.core.models.SwaggerParseResult;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.HashSet;
+import java.util.Set;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.openapitools.openapidiff.core.model.ChangedOpenApi;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
+
+/**
+ * Senaryo 1 (seviye 1, MockMvc): springdoc'un urettigi /v3/api-docs gecerli bir OpenAPI 3.1 belgesidir, iki
+ * operasyonu ve DTO semalarini (required listeleri dahil) icerir; CI artefakti olarak target/openapi.json yazilir.
+ * Ayrica spec'in runtime ile tutarli oldugu (alan adlari, 201) kanitlanir: yalan soyleyen spec'ten uretilen istemci
+ * derlenir ama calismaz.
+ */
+@SpringBootTest(properties = OpenApiContract.API_DOCS_ENABLED)
+@AutoConfigureMockMvc
+@Import(OpenApiDocumentTest.FixedClock.class)
+class OpenApiDocumentTest {
+
+    @TestConfiguration
+    static class FixedClock {
+        @Bean @Primary
+        Clock fixedClock() { return Clock.fixed(Instant.parse("2026-09-29T10:00:00Z"), ZoneOffset.UTC); }
+    }
+
+    @Autowired MockMvc mvc;
+
+    @Test
+    void apiDocsIsAValidOpenApi31DocumentWithBothOperationsAndDtoSchemas() throws Exception {
+        String spec = OpenApiContract.generate(mvc);
+        OpenApiContract.save(OpenApiContract.GENERATED, spec);
+
+        ParseOptions options = new ParseOptions();
+        options.setResolve(true);
+        SwaggerParseResult parsed = new OpenAPIV3Parser().readContents(spec, null, options);
+        assertThat(parsed.getMessages()).as("parser mesajlari (gecersiz spec)").isEmpty();
+        OpenAPI api = parsed.getOpenAPI();
+        assertThat(api.getOpenapi()).isEqualTo("3.1.0");
+        assertThat(api.getSpecVersion()).isEqualTo(SpecVersion.V31);
+        assertThat(api.getInfo().getTitle()).isEqualTo("contract-example");
+        assertThat(api.getInfo().getVersion()).isEqualTo("v1");
+
+        Operation getOrder = api.getPaths().get("/v1/orders/{id}").getGet();
+        assertThat(getOrder.getOperationId()).isEqualTo("getOrder");
+        assertThat(getOrder.getParameters()).singleElement().satisfies(p -> {
+            assertThat(p.getName()).isEqualTo("id");
+            assertThat(p.getIn()).isEqualTo("path");
+            assertThat(p.getRequired()).isTrue();
+            assertThat(p.getSchema().getFormat()).isEqualTo("uuid");
+        });
+        assertThat(getOrder.getResponses().get("200").getContent().get("application/json").getSchema().get$ref())
+                .isEqualTo("#/components/schemas/OrderResponse");
+
+        Operation createOrder = api.getPaths().get("/v1/orders").getPost();
+        assertThat(createOrder.getOperationId()).isEqualTo("createOrder");
+        assertThat(createOrder.getRequestBody().getRequired()).isTrue();
+        assertThat(createOrder.getRequestBody().getContent().get("application/json").getSchema().get$ref())
+                .isEqualTo("#/components/schemas/CreateOrderRequest");
+        assertThat(createOrder.getResponses()).containsOnlyKeys("201");
+        assertThat(createOrder.getResponses().get("201").getContent().get("application/json").getSchema().get$ref())
+                .isEqualTo("#/components/schemas/OrderResponse");
+
+        Schema<?> request = api.getComponents().getSchemas().get("CreateOrderRequest");
+        assertThat(request.getProperties()).containsKeys("customerId", "sku", "quantity", "note");
+        assertThat(request.getRequired()).containsExactlyInAnyOrder("customerId", "sku", "quantity");
+        assertThat(request.getProperties().get("sku").getMaxLength()).isEqualTo(64);
+        assertThat(request.getProperties().get("quantity").getMinimum()).isEqualByComparingTo("1");
+
+        Schema<?> response = api.getComponents().getSchemas().get("OrderResponse");
+        assertThat(response.getProperties())
+                .containsKeys("id", "customerId", "sku", "quantity", "status", "createdAt", "note");
+        assertThat(response.getRequired())
+                .containsExactlyInAnyOrder("id", "customerId", "sku", "quantity", "status", "createdAt");
+        assertThat(response.getProperties().get("status").getEnum())
+                .containsExactly("PENDING", "CONFIRMED", "CANCELLED");
+        assertThat(response.getProperties().get("createdAt").getFormat()).isEqualTo("date-time");
+    }
+
+    /**
+     * ARAC SINIRI SABITLEMESI: yayinlanan 3.1 belgede istek alaninin tipini string -> integer yapmak openapi-diff'e
+     * gore "degisiklik yok"tur. Gate bu yuzden 3.0 ciktisini karsilastirir (OpenApiContract javadoc'u). Bu test
+     * kirilirsa arac 3.1 tiplerini okumaya baslamistir: gate 3.1'e alinabilir, bu test silinir.
+     */
+    @Test
+    void openApiDiffIsBlindToTypeChangesInOpenApi31Documents() throws Exception {
+        String published = OpenApiContract.generate(mvc);
+        ObjectNode changed = OpenApiContract.tree(published);
+        ((ObjectNode) SpecVariants.properties(changed, "CreateOrderRequest").get("sku")).put("type", "integer");
+
+        ChangedOpenApi diff = OpenApiContract.diff(published, OpenApiContract.write(changed));
+        assertThat(diff.isUnchanged()).as("3.1'de tip degisikligi gorunmuyor").isTrue();
+    }
+
+    @Test
+    void runtimeResponsesMatchTheDocumentedContract() throws Exception {
+        String spec = OpenApiContract.generate(mvc);
+        Set<String> documented = new HashSet<>();
+        OpenApiContract.tree(spec).get("components").get("schemas").get("OrderResponse").get("properties")
+                .propertyNames().forEach(documented::add);
+
+        var created = mvc.perform(post("/v1/orders").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"customerId":"0b8f5c1e-1111-4a5e-9c1a-000000000001","sku":"SKU-7","quantity":3,"note":"kapida"}"""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Cache-Control", "no-store, private"))
+                .andReturn().getResponse();
+        JsonNode body = OpenApiContract.JSON.readTree(created.getContentAsString(StandardCharsets.UTF_8));
+        Set<String> actual = new HashSet<>(body.propertyNames());
+        assertThat(actual).isEqualTo(documented);
+        assertThat(body.get("createdAt").asString()).isEqualTo("2026-09-29T10:00:00Z");
+        assertThat(created.getHeader("Location")).isEqualTo("/v1/orders/" + body.get("id").asString());
+
+        mvc.perform(get(created.getHeader("Location"))).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store, private"));
+        // Spec'te required olan alan eksikse istek servise ulasmadan 400 (sozlesme = dogrulama)
+        mvc.perform(post("/v1/orders").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"customerId\":\"0b8f5c1e-1111-4a5e-9c1a-000000000001\",\"quantity\":3}"))
+                .andExpect(status().isBadRequest());
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/java/com/acme/contract/SpecVariants.java`
+
+```java
+package com.acme.contract;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
+
+/**
+ * Mevcut spec'ten programatik varyant turetir (kod degistirmeden "su DTO degisikligi olsaydi" sorusu). Her metod
+ * yalniz components.schemas altindaki tek bir semayi degistirir; DTO her iki operasyonda da $ref ile kullanildigindan
+ * fark ilgili tum uclarda gorunur.
+ */
+final class SpecVariants {
+
+    private SpecVariants() {}
+
+    static ObjectNode schema(ObjectNode spec, String name) {
+        JsonNode node = spec.get("components").get("schemas").get(name);
+        if (!(node instanceof ObjectNode schema)) throw new IllegalArgumentException("sema yok: " + name);
+        return schema;
+    }
+
+    static ObjectNode properties(ObjectNode spec, String schemaName) {
+        return (ObjectNode) schema(spec, schemaName).get("properties");
+    }
+
+    static void removeResponseProperty(ObjectNode spec, String schemaName, String property) {
+        requirePresent(spec, schemaName, property);
+        properties(spec, schemaName).remove(property);
+        removeFromRequired(schema(spec, schemaName), property);
+    }
+
+    /** Yeniden adlandirma = eski adi kaldir + yeni adi ayni tanim ve ayni zorunlulukla ekle. */
+    static void renameProperty(ObjectNode spec, String schemaName, String from, String to) {
+        requirePresent(spec, schemaName, from);
+        ObjectNode schema = schema(spec, schemaName);
+        JsonNode definition = properties(spec, schemaName).remove(from);
+        properties(spec, schemaName).set(to, definition);
+        if (removeFromRequired(schema, from)) required(schema).add(to);
+    }
+
+    static void addOptionalProperty(ObjectNode spec, String schemaName, String property, String type) {
+        // Var olan alanin ustune yazmak sessizce "degisiklik yok" varyanti uretir; test yanlis sebeple gecer/kalir
+        if (properties(spec, schemaName).has(property))
+            throw new IllegalArgumentException(schemaName + "." + property + " zaten var; varyant anlamsiz olur");
+        properties(spec, schemaName).putObject(property).put("type", type);
+    }
+
+    static void addRequiredProperty(ObjectNode spec, String schemaName, String property, String type) {
+        addOptionalProperty(spec, schemaName, property, type);
+        required(schema(spec, schemaName)).add(property);
+    }
+
+    static void makeRequired(ObjectNode spec, String schemaName, String property) {
+        requirePresent(spec, schemaName, property);
+        ArrayNode required = required(schema(spec, schemaName));
+        for (JsonNode existing : required)
+            if (property.equals(existing.asString()))
+                throw new IllegalArgumentException(schemaName + "." + property + " zaten zorunlu; varyant anlamsiz olur");
+        required.add(property);
+    }
+
+    static void addEnumValue(ObjectNode spec, String schemaName, String property, String value) {
+        ((ArrayNode) properties(spec, schemaName).get(property).get("enum")).add(value);
+    }
+
+    private static void requirePresent(ObjectNode spec, String schemaName, String property) {
+        if (!properties(spec, schemaName).has(property))
+            throw new IllegalArgumentException(schemaName + "." + property + " yok; varyant anlamsiz olur");
+    }
+
+    private static ArrayNode required(ObjectNode schema) {
+        return schema.has("required") ? (ArrayNode) schema.get("required") : schema.putArray("required");
+    }
+
+    private static boolean removeFromRequired(ObjectNode schema, String property) {
+        if (!schema.has("required")) return false;
+        ArrayNode required = (ArrayNode) schema.get("required");
+        for (int i = 0; i < required.size(); i++) {
+            if (property.equals(required.get(i).asString())) {
+                required.remove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+}
+```
+
+---
+
+### `skeleton-example/contract-example/src/test/resources/openapi-baseline.json`
+
+```json
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "contract-example",
+    "version" : "v1"
+  },
+  "servers" : [ {
+    "url" : "http://localhost",
+    "description" : "Generated server url"
+  } ],
+  "paths" : {
+    "/v1/orders" : {
+      "post" : {
+        "operationId" : "createOrder",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateOrderRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/OrderResponse"
+                }
+              }
+            },
+            "description" : "Created"
+          }
+        },
+        "tags" : [ "order-controller" ]
+      }
+    },
+    "/v1/orders/{id}" : {
+      "get" : {
+        "operationId" : "getOrder",
+        "parameters" : [ {
+          "in" : "path",
+          "name" : "id",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/OrderResponse"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "order-controller" ]
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "CreateOrderRequest" : {
+        "type" : "object",
+        "properties" : {
+          "customerId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "note" : {
+            "maxLength" : 500,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "quantity" : {
+            "maximum" : 1000,
+            "minimum" : 1,
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "sku" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "required" : [ "customerId", "quantity", "sku" ]
+      },
+      "OrderResponse" : {
+        "type" : "object",
+        "properties" : {
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "customerId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "note" : {
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "PENDING", "CONFIRMED", "CANCELLED" ]
+          }
+        },
+        "required" : [ "createdAt", "customerId", "id", "quantity", "sku", "status" ]
+      }
+    }
+  }
+}
+```
+
+---
+
+### `skeleton-example/db-security-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>db-security-example</artifactId>
+  <!-- Veri katmani guvenligi (referans Bolum 10.1, 10.2, 10.3, 10.5, 10.6): migration rolu / uygulama rolu ayrimi,
+       default privilege, rol bazli zaman asimlari, RLS + SET LOCAL, append-only audit, UUIDv7, Flyway baseline
+       proseduru ve PgBouncer transaction mode. Iddialar gercek PostgreSQL 18 ve gercek pgbouncer surecinde test edilir. -->
+  <dependencyManagement><dependencies>
+    <!-- Gomulu PostgreSQL 18: uuidv7() ve RLS testleri icin gercek surum (Docker gerekmez) -->
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>18.1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <!-- Flyway programatik olarak migration rolu ile kosar (spring.flyway.user/password'un kod karsiligi) -->
+    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>
+    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-database-postgresql</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz: sessiz "yesil" durumu yakalar (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/java/com/acme/dbsecurity/AccountScope.java`
+
+```java
+package com.acme.dbsecurity;
+
+import java.util.UUID;
+import java.util.function.Function;
+import javax.sql.DataSource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * RLS baglami (referans Bolum 10.1): hesap kimligi TX icinde SET LOCAL ile verilir ve TX bitince silinir.
+ * set_config(name, value, is_local=true) SET LOCAL'in parametre baglanabilir esdegeridir (SET LOCAL literal ister).
+ *
+ * NEDEN duz SET degil: SET oturuma yazar; PgBouncer transaction mode'da oturum bir sonraki istegin server
+ * baglantisi olabilir ve baska hesabin baglami sizar (DbRoleSecurityIT bunu gosterir). Uygulama katmanindaki
+ * ownership kontrolu (Bolum 9.7) kalkmaz; RLS onu tamamlar.
+ */
+public final class AccountScope {
+
+    static final String SETTING = "app.account_id";
+
+    private final TransactionTemplate tx;
+    private final JdbcTemplate jdbc;
+
+    public AccountScope(DataSource dataSource) {
+        this.tx = new TransactionTemplate(new JdbcTransactionManager(dataSource));
+        this.jdbc = new JdbcTemplate(dataSource);
+    }
+
+    /** Isi, verilen hesabin RLS baglamiyla tek bir TX icinde kosar. */
+    public <T> T inAccount(UUID accountId, Function<JdbcTemplate, T> work) {
+        return tx.execute(status -> {
+            jdbc.queryForObject("SELECT set_config(?, ?, true)", String.class, SETTING, accountId.toString());
+            return work.apply(jdbc);
+        });
+    }
+}
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/java/com/acme/dbsecurity/SchemaMigrator.java`
+
+```java
+package com.acme.dbsecurity;
+
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.configuration.FluentConfiguration;
+import org.flywaydb.core.api.output.BaselineResult;
+import org.flywaydb.core.api.output.MigrateResult;
+
+/**
+ * Flyway'i MIGRATION rolu ile programatik kosar (referans Bolum 10.2). Spring Boot'ta karsiligi
+ * spring.flyway.user/password (uygulama datasource'undan ayri), schemas, clean-disabled=true.
+ *
+ * baseline-on-migrate BILEREK ACILMAZ: bu bayrak, migration'i bos olmayan ama Flyway yonetiminde olmayan bir
+ * semaya (yanlis DB, yanlis sema) uygulamayi onleyen kontrolu kaldirir. Mevcut bir semayi yonetime alma
+ * ayri ve tek seferlik bir islemdir: {@link #baselineOnce(String)}.
+ */
+public final class SchemaMigrator {
+
+    private final FluentConfiguration config;
+
+    public SchemaMigrator(String jdbcUrl, String migrateUser, String migratePassword, String schema, String... locations) {
+        this.config = Flyway.configure()
+                .dataSource(jdbcUrl, migrateUser, migratePassword)
+                .schemas(schema)
+                .locations(locations)
+                .cleanDisabled(true)          // uretimde clean asla; test profili bile acmaz
+                .baselineOnMigrate(false);    // varsayilan zaten false; niyet acikca yazilir
+    }
+
+    /** Bekleyen migration'lari uygular; bos olmayan yonetilmeyen semada FlywayException firlatir. */
+    public MigrateResult migrate() {
+        return config.load().migrate();
+    }
+
+    /**
+     * Tek seferlik, belgelenmis prosedur: mevcut semadaki durumun hangi V surumune denk geldigi elle belirlenir,
+     * history tablosu o surumle acilir; sonraki migrate() yalniz daha buyuk surumleri uygular.
+     * Config'te surekli acik bir bayrak degil, operator kararidir.
+     */
+    public BaselineResult baselineOnce(String baselineVersion) {
+        return Flyway.configure()
+                .configuration(config)
+                .baselineVersion(baselineVersion)
+                .baselineDescription("mevcut sema Flyway yonetimine alindi")
+                .load()
+                .baseline();
+    }
+}
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/java/com/acme/dbsecurity/ServiceRoleBootstrap.java`
+
+```java
+package com.acme.dbsecurity;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.Map;
+import java.util.regex.Pattern;
+import javax.sql.DataSource;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+
+/**
+ * Altyapi migration'i (referans Bolum 10.1): servis basina iki rol (migration + uygulama), sema sahipligi,
+ * default privilege ve rol bazli zaman asimlari. Superuser/DBA baglantisiyla BIR KEZ kosar; Flyway'in disindadir
+ * cunku Flyway migration rolu ile calisir ve kendi rolunu yaratamaz. SQL kaynagi: db/infra/service_roles.sql.
+ */
+public final class ServiceRoleBootstrap {
+
+    /** PostgreSQL kimligi olarak guvenle gomulebilecek adlar; tirnaksiz kullanildigi icin sikidir. */
+    private static final Pattern IDENTIFIER = Pattern.compile("[a-z_][a-z0-9_]{0,62}");
+
+    private ServiceRoleBootstrap() { }
+
+    /**
+     * Rol ve zaman asimi parametreleri. Varsayilanlar referans Bolum 10.1'deki baslangic degerleridir
+     * (10s / 3s / 60s / migration lock 10s); testler daha kisa surelerle ayni script'i kosar.
+     */
+    public record Spec(String schema, String migrateRole, String migratePassword, String appRole, String appPassword,
+                       Duration statementTimeout, Duration lockTimeout, Duration idleInTransactionTimeout,
+                       Duration migrateLockTimeout) {
+
+        public Spec {
+            for (String id : new String[] {schema, migrateRole, appRole}) {
+                if (id == null || !IDENTIFIER.matcher(id).matches()) {
+                    throw new IllegalArgumentException("gecersiz kimlik: " + id);
+                }
+            }
+            if (migrateRole.equals(appRole)) throw new IllegalArgumentException("migration ve uygulama rolu ayni olamaz");
+        }
+
+        /** Konvansiyon: sema "order" icin roller svc_order_migrate ve svc_order. */
+        public static Spec defaults(String schema, String migratePassword, String appPassword) {
+            return new Spec(schema, "svc_" + schema + "_migrate", migratePassword, "svc_" + schema, appPassword,
+                    Duration.ofSeconds(10), Duration.ofSeconds(3), Duration.ofSeconds(60), Duration.ofSeconds(10));
+        }
+
+        public Spec withTimeouts(Duration statement, Duration lock, Duration idleInTransaction, Duration migrateLock) {
+            return new Spec(schema, migrateRole, migratePassword, appRole, appPassword, statement, lock,
+                    idleInTransaction, migrateLock);
+        }
+    }
+
+    /** Script'i superuser baglantisiyla kosar. Idempotent DEGILDIR: rol zaten varsa hata verir (drift gizlenmez). */
+    public static void apply(DataSource superuser, Spec spec) {
+        String sql = render(spec);
+        try (var conn = superuser.getConnection()) {
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(sql.getBytes(StandardCharsets.UTF_8)));
+        } catch (SQLException e) {
+            throw new IllegalStateException("rol bootstrap basarisiz", e);
+        }
+    }
+
+    /** Placeholder'lari doldurur; sifreler tek tirnak icinde oldugu icin ' -> '' ile kacirilir. */
+    static String render(Spec spec) {
+        String template;
+        try (var in = ServiceRoleBootstrap.class.getResourceAsStream("/db/infra/service_roles.sql")) {
+            if (in == null) throw new IllegalStateException("db/infra/service_roles.sql bulunamadi");
+            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        Map<String, String> values = Map.of(
+                "schema", spec.schema(),
+                "migrate_role", spec.migrateRole(),
+                "migrate_password", spec.migratePassword().replace("'", "''"),
+                "app_role", spec.appRole(),
+                "app_password", spec.appPassword().replace("'", "''"),
+                "statement_timeout", millis(spec.statementTimeout()),
+                "lock_timeout", millis(spec.lockTimeout()),
+                "idle_in_transaction_timeout", millis(spec.idleInTransactionTimeout()),
+                "migrate_lock_timeout", millis(spec.migrateLockTimeout()));
+        String sql = template;
+        for (var e : values.entrySet()) sql = sql.replace("${" + e.getKey() + "}", e.getValue());
+        if (sql.contains("${")) throw new IllegalStateException("doldurulmamis placeholder kaldi");
+        return sql;
+    }
+
+    /** PostgreSQL sure literali: '2000ms' her surumde belirsizlik olmadan okunur. */
+    private static String millis(Duration d) { return d.toMillis() + "ms"; }
+}
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/resources/db/infra/service_roles.sql`
+
+```
+-- Altyapi migration'i: superuser/DBA rolunde, servis basina BIR KEZ kosar (referans Bolum 10.1).
+-- Flyway'in disindadir: Flyway migration rolu ile kosar ve kendi rolunu/semasini yaratamaz.
+-- Dolar-suslu placeholder'lar ServiceRoleBootstrap tarafindan doldurulur; kimlikler orada dogrulanir.
+
+-- NEDEN iki rol: sema sahibi ve DDL yetkisi yalniz migration rolunde kalir. Ele gecirilen uygulama sureci
+-- tablo dusuremez, trigger/REVOKE kaldiramaz, audit tablosunu degistiremez.
+CREATE ROLE ${migrate_role} LOGIN PASSWORD '${migrate_password}';
+CREATE ROLE ${app_role} LOGIN PASSWORD '${app_password}';
+CREATE SCHEMA "${schema}" AUTHORIZATION ${migrate_role};
+
+-- public semasi kimseye acik degil: yanlislikla public'e tablo yazilmasin, uygulama rolu oradan okuyamasin.
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA "${schema}" TO ${app_role};
+
+-- Migration rolunun ILERIDE yaratacagi her tablo/sequence'te uygulama rolunun yetkisi otomatik gelsin:
+-- her migration'a GRANT yazmak unutulur, default privilege unutulmaz. DDL yetkisi verilmez.
+ALTER DEFAULT PRIVILEGES FOR ROLE ${migrate_role} IN SCHEMA "${schema}"
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${app_role};
+ALTER DEFAULT PRIVILEGES FOR ROLE ${migrate_role} IN SCHEMA "${schema}"
+    GRANT USAGE, SELECT ON SEQUENCES TO ${app_role};
+
+-- Rol bazli zaman asimlari: global postgresql.conf yerine role baglanir; migration rolunde statement_timeout
+-- YOK (backfill uzun surebilir), yalniz lock_timeout (DDL kilidi beklerken uretimi kilitlemesin).
+ALTER ROLE ${app_role} SET statement_timeout = '${statement_timeout}';
+ALTER ROLE ${app_role} SET lock_timeout = '${lock_timeout}';
+ALTER ROLE ${app_role} SET idle_in_transaction_session_timeout = '${idle_in_transaction_timeout}';
+ALTER ROLE ${migrate_role} SET lock_timeout = '${migrate_lock_timeout}';
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/resources/db/migration/V1__order_item.sql`
+
+```
+-- Siparis kalemi: hesap sahipligi icin RLS ikinci savunma hatti (referans Bolum 10.1, 10.3).
+-- Sema "order" altyapi migration'inda svc_order_migrate sahipliginde yaratildi; burada CREATE SCHEMA yok.
+-- Sahibi: order servisi. account_id baska servisin kimligi: FK yok, duz UUID.
+CREATE TABLE "order".order_item (
+    id          UUID        PRIMARY KEY DEFAULT uuidv7(),   -- PG18 UUIDv7: zaman sirali, B-tree sayfa bolunmesi yok
+    account_id  UUID        NOT NULL,
+    resource    TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Hesabin listesi, yeni->eski, deterministik tie-breaker (v7 ile id sirasi created_at ile uyusur).
+CREATE INDEX idx_order_item_account_created ON "order".order_item (account_id, created_at DESC, id DESC);
+
+ALTER TABLE "order".order_item ENABLE ROW LEVEL SECURITY;
+-- Baglam TX icinde SET LOCAL ile verilir (AccountScope). Set edilmemisse current_setting(..., true) NULL veya
+-- '' doner; NULLIF ile NULL'a cekilir -> hicbir satir gorunmez (policy'siz/baglamsiz = kapali).
+-- WITH CHECK yazilmadigi icin USING ifadesi INSERT/UPDATE'te de uygulanir: baska hesaba satir yazilamaz.
+CREATE POLICY order_item_account_isolation ON "order".order_item
+    USING (account_id = NULLIF(current_setting('app.account_id', true), '')::uuid);
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/resources/db/migration/V2__audit_log.sql`
+
+```
+-- Append-only audit (referans Bolum 10.1, 10.6): uygulama rolu yalniz ekler. Yasal kayit: cascade/retention DELETE yok.
+CREATE TABLE "order".audit_log (
+    id          UUID        PRIMARY KEY DEFAULT uuidv7(),
+    actor       TEXT        NOT NULL,
+    action      TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Append-only + fiziksel sira korelasyonu: BRIN cok kucuktur ve zaman araligi sorgularina yeter.
+CREATE INDEX idx_audit_log_created ON "order".audit_log USING BRIN (created_at);
+
+-- Birinci hat (yetki): default privilege UPDATE/DELETE verdi, audit icin geri alinir. Uygulama rolu 42501 alir.
+REVOKE UPDATE, DELETE ON "order".audit_log FROM svc_order;
+
+-- Ikinci hat (trigger): tablo sahibi (migration rolu) bile satiri degistiremesin; RLS/GRANT'ten bagimsiz calisir.
+CREATE FUNCTION "order".audit_log_reject_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_log is append-only: % rejected', TG_OP;
+END
+$$;
+CREATE TRIGGER trg_audit_log_append_only
+    BEFORE UPDATE OR DELETE ON "order".audit_log
+    FOR EACH ROW EXECUTE FUNCTION "order".audit_log_reject_change();
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/resources/db/migration/V3__order_number.sql`
+
+```
+-- Insan okur siparis numarasi: sequence tabanli. Default privilege'in SEQUENCES kismini kanitlar:
+-- USAGE olmadan DEFAULT nextval(...) uygulama rolunde 42501 verir.
+CREATE SEQUENCE "order".order_number_seq;
+CREATE TABLE "order".order_number (
+    number      BIGINT      PRIMARY KEY DEFAULT nextval('"order".order_number_seq'),
+    order_id    UUID        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+---
+
+### `skeleton-example/db-security-example/src/main/resources/db/migration/afterMigrate.sql`
+
+```
+-- Flyway SQL callback: her basarili migrate() sonunda (bekleyen migration olmasa bile) migration rolu ile kosar.
+-- NEDEN: flyway_schema_history, migration rolunun "order" semasinda yarattigi bir tablodur; ALTER DEFAULT PRIVILEGES
+-- ona da uygulama rolu icin SELECT/INSERT/UPDATE/DELETE verir. Ele gecirilen uygulama sureci history satirini
+-- silerse sonraki deploy migration'i yeniden uygular ya da validate'te patlar. Default privilege tablo bazinda
+-- istisna tanimaz; bu yuzden yetki her migrate sonunda geri alinir (idempotent, elle yapilan drift'i de onarir).
+-- Tablo adi ve sema Flyway'in yerlesik placeholder'lari ile gelir: flyway.table ayari degisse de dogru tabloyu hedefler.
+REVOKE ALL ON "${flyway:defaultSchema}"."${flyway:table}" FROM svc_order;
+```
+
+---
+
+### `skeleton-example/db-security-example/src/test/java/com/acme/dbsecurity/DbRoleSecurityIT.java`
+
+```java
+package com.acme.dbsecurity;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
+import org.flywaydb.core.api.FlywayException;
+import org.flywaydb.core.api.output.MigrateResult;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.postgresql.ds.PGSimpleDataSource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
+
+/**
+ * DAVRANISSAL dogrulama (referans Bolum 10.1, 10.2, 10.3, 10.5, 10.6; kanit seviyesi 2 ve 3): rol ayrimi, default
+ * privilege, rol bazli zaman asimlari, RLS + SET LOCAL, append-only audit, UUIDv7, Flyway baseline proseduru ve
+ * PgBouncer transaction mode - gercek PostgreSQL 18 (gomulu) ve gercek pgbouncer sureci uzerinde.
+ * Metot yorumlarindaki #n gorev senaryo numarasidir.
+ *
+ * Zaman: buradaki sureler uygulama mantigi degil, sunucu tarafi ayarlardir (statement/lock/idle timeout); bu yuzden
+ * enjekte edilen Clock yerine gercek zamanli, sinirli beklemeler kullanilir (awaitInfra).
+ */
+class DbRoleSecurityIT {
+
+    static final String SCHEMA = "order";
+    static final String DB = "postgres";
+    static final String MIGRATE_PW = "migrate-s3cret";
+    static final String APP_PW = "app-s3cret";
+    static final UUID ACCOUNT_A = UUID.fromString("00000000-0000-7000-8000-00000000000a");
+    static final UUID ACCOUNT_B = UUID.fromString("00000000-0000-7000-8000-00000000000b");
+    static final String COUNT_ITEMS = "SELECT count(*) FROM \"order\".order_item";
+
+    static EmbeddedPostgres pg;
+    static ServiceRoleBootstrap.Spec spec;
+    static String jdbcUrl;
+    static DataSource superDs;
+    static DataSource migrateDs;
+    static DataSource appDs;
+    static JdbcTemplate su;
+    static JdbcTemplate migrate;
+    static JdbcTemplate app;
+
+    @BeforeAll
+    static void startDbAndBootstrapRoles() throws Exception {
+        pg = EmbeddedPostgres.builder().start();
+        superDs = pg.getPostgresDatabase();
+        su = new JdbcTemplate(superDs);
+        int version = su.queryForObject("SHOW server_version_num", Integer.class);
+        assertThat(version).as("uuidv7() ve testlerin hedefi PostgreSQL 18").isGreaterThanOrEqualTo(180000);
+        jdbcUrl = "jdbc:postgresql://127.0.0.1:" + pg.getPort() + "/" + DB;
+
+        // Altyapi migration'i (superuser, bir kez). Test icin kisa zaman asimlari; script ayni.
+        spec = ServiceRoleBootstrap.Spec.defaults(SCHEMA, MIGRATE_PW, APP_PW)
+                .withTimeouts(Duration.ofSeconds(2), Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(10));
+        ServiceRoleBootstrap.apply(superDs, spec);
+        requirePasswordAuthOverTcp();
+
+        // Flyway migration rolu ile (uygulama datasource'undan ayri kimlik)
+        MigrateResult result = new SchemaMigrator(jdbcUrl, spec.migrateRole(), MIGRATE_PW, SCHEMA, "classpath:db/migration").migrate();
+        assertThat(result.migrationsExecuted).isEqualTo(3);
+
+        migrateDs = dataSource(spec.migrateRole(), MIGRATE_PW);
+        appDs = dataSource(spec.appRole(), APP_PW);
+        migrate = new JdbcTemplate(migrateDs);
+        app = new JdbcTemplate(appDs);
+    }
+
+    @AfterAll
+    static void stopDb() throws IOException { if (pg != null) pg.close(); }
+
+    @BeforeEach
+    void clean() {
+        // superuser TRUNCATE: satir trigger'lari calismaz; testler arasi temiz tablo
+        su.execute("TRUNCATE \"order\".order_item, \"order\".audit_log, \"order\".order_number");
+    }
+
+    // ---------- kurulum yardimcilari ----------
+
+    /**
+     * Zonky initdb'yi -A trust ile kosar: sifre hic kontrol edilmez, rol ayrimi kanitlanmis olmaz. Uretimdeki gibi:
+     * superuser haric TCP'de SCRAM. pg_hba yeniden yazilir ve pg_reload_conf ile yuklenir (asenkron SIGHUP).
+     */
+    static void requirePasswordAuthOverTcp() throws Exception {
+        Path hba = Path.of(su.queryForObject("SHOW hba_file", String.class));
+        Files.writeString(hba, """
+                local   all   all                      trust
+                host    all   postgres  127.0.0.1/32   trust
+                host    all   postgres  ::1/128        trust
+                host    all   all       127.0.0.1/32   scram-sha-256
+                host    all   all       ::1/128        scram-sha-256
+                """);
+        su.queryForObject("SELECT pg_reload_conf()", Boolean.class);
+        awaitInfra(Duration.ofSeconds(5), () -> "28P01".equals(sqlState(
+                () -> dataSource(spec.appRole(), "yanlis-sifre").getConnection().close())));
+    }
+
+    static DataSource dataSource(String user, String password) {
+        PGSimpleDataSource ds = new PGSimpleDataSource();     // havuzsuz: sonlandirilan baglanti testleri net kalsin
+        ds.setUrl(jdbcUrl);
+        ds.setUser(user);
+        ds.setPassword(password);
+        return ds;
+    }
+
+    interface SqlAction { void run() throws Exception; }
+
+    /** Basarili ise null, aksi halde zincirdeki ilk SQLException'in SQLState'i. */
+    static String sqlState(SqlAction action) {
+        try {
+            action.run();
+            return null;
+        } catch (Throwable t) {
+            return rootSql(t).getSQLState();
+        }
+    }
+
+    static SQLException rootSql(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) if (c instanceof SQLException se) return se;
+        throw new AssertionError("SQLException beklendi", t);
+    }
+
+    /** Gercek zamanli altyapi icin sinirli bekleme; kosul saglanmazsa test basarisiz (sessiz gecis yok). */
+    static void awaitInfra(Duration max, BooleanSupplier condition) throws InterruptedException {
+        Instant deadline = Instant.now().plus(max);
+        while (!condition.getAsBoolean()) {
+            if (Instant.now().isAfter(deadline)) throw new AssertionError("kosul " + max + " icinde saglanmadi");
+            Thread.sleep(50);
+        }
+    }
+
+    static UUID insertAsOwner(UUID account, String resource) {
+        return UUID.fromString(migrate.queryForObject(
+                "INSERT INTO \"order\".order_item (account_id, resource) VALUES (?, ?) RETURNING id::text",
+                String.class, account, resource));
+    }
+
+    static void setLocalAccount(Connection conn, UUID account) throws SQLException {
+        try (var ps = conn.prepareStatement("SELECT set_config('app.account_id', ?, true)")) {
+            ps.setString(1, account.toString());
+            ps.executeQuery();
+        }
+    }
+
+    static int count(Connection conn) throws SQLException {
+        try (var st = conn.createStatement(); var rs = st.executeQuery(COUNT_ITEMS)) {
+            rs.next();
+            return rs.getInt(1);
+        }
+    }
+
+    static int count(JdbcTemplate jdbc) { return jdbc.queryForObject(COUNT_ITEMS, Integer.class); }
+
+    // ---------- senaryolar ----------
+
+    @Test // kurulum kaniti: sifre gercekten kontrol ediliyor (trust degil), dogru sifre ile giris var
+    void passwordAuthIsEnforcedOverTcp() {
+        assertThat(sqlState(() -> dataSource(spec.appRole(), "yanlis").getConnection().close())).isEqualTo("28P01");
+        assertThat(sqlState(() -> dataSource(spec.migrateRole(), "yanlis").getConnection().close())).isEqualTo("28P01");
+        assertThat(app.queryForObject("SELECT current_user", String.class)).isEqualTo(spec.appRole());
+    }
+
+    @Test // #1: uygulama rolu kendi satirlarinda DML yapar; sequence'te USAGE default privilege ile gelir
+    void appRoleDmlWorksOnOwnRowsAndSequences() {
+        AccountScope scope = new AccountScope(appDs);
+        UUID id = UUID.fromString(scope.inAccount(ACCOUNT_A, j -> j.queryForObject(
+                "INSERT INTO \"order\".order_item (account_id, resource) VALUES (?, ?) RETURNING id::text",
+                String.class, ACCOUNT_A, "r1")));
+        String resource = scope.inAccount(ACCOUNT_A, j -> j.queryForObject(
+                "SELECT resource FROM \"order\".order_item WHERE id = ?", String.class, id));
+        assertThat(resource).isEqualTo("r1");
+        Integer updated = scope.inAccount(ACCOUNT_A, j -> j.update(
+                "UPDATE \"order\".order_item SET resource = 'r2' WHERE id = ?", id));
+        assertThat(updated).isEqualTo(1);
+        Integer deleted = scope.inAccount(ACCOUNT_A, j -> j.update(
+                "DELETE FROM \"order\".order_item WHERE id = ?", id));
+        assertThat(deleted).isEqualTo(1);
+
+        assertThat(app.queryForObject("SELECT nextval('\"order\".order_number_seq')", Long.class)).isPositive();
+        app.update("INSERT INTO \"order\".order_number (order_id) VALUES (?)", UUID.randomUUID());
+        assertThat(app.queryForObject("SELECT count(*) FROM \"order\".order_number", Integer.class)).isEqualTo(1);
+    }
+
+    @Test // #2: uygulama rolu DDL yapamaz; RLS/trigger/policy'yi kaldiramaz (42501)
+    void appRoleCannotRunDdl() {
+        assertThat(sqlState(() -> app.execute("CREATE TABLE \"order\".rogue (id INT)"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("CREATE TABLE public.rogue (id INT)"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("ALTER TABLE \"order\".order_item ADD COLUMN rogue INT"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("ALTER TABLE \"order\".order_item DISABLE ROW LEVEL SECURITY"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("DROP POLICY order_item_account_isolation ON \"order\".order_item"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("DROP TRIGGER trg_audit_log_append_only ON \"order\".audit_log"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("DROP TABLE \"order\".order_item"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.execute("TRUNCATE \"order\".order_item"))).isEqualTo("42501");
+        // GRANT sahibi olmayan rolde hata degil WARNING ("no privileges were granted") verir; kanit: etkisi yok
+        app.execute("GRANT ALL ON \"order\".order_item TO PUBLIC");
+        assertThat(su.queryForObject("SELECT count(*) FROM information_schema.role_table_grants "
+                + "WHERE table_schema = 'order' AND table_name = 'order_item' AND grantee = 'PUBLIC'", Integer.class)).isZero();
+    }
+
+    @Test // #2b: public semasinda USAGE yok; tablo bazli GRANT verilse bile sema kapisi kapali (REVOKE ... FROM PUBLIC)
+    void appRoleCannotUsePublicSchemaEvenWithTableGrant() {
+        // PG15+ public'te CREATE'i zaten kapatir; USAGE ise varsayilan olarak PUBLIC'e aciktir. Bu test REVOKE'u kanitlar.
+        su.execute("CREATE TABLE public.shared_probe (id INT)");
+        try {
+            su.execute("GRANT SELECT ON public.shared_probe TO " + spec.appRole());
+            assertThat(sqlState(() -> app.queryForObject("SELECT count(*) FROM public.shared_probe", Integer.class)))
+                    .isEqualTo("42501");
+            assertThat(su.queryForObject("SELECT has_schema_privilege(?, 'public', 'USAGE')", Boolean.class,
+                    spec.appRole())).isFalse();
+        } finally {
+            su.execute("DROP TABLE public.shared_probe");
+        }
+    }
+
+    @Test // #2c: flyway_schema_history migration rolunun tablosu; default privilege'in verdigi DML afterMigrate ile geri alinir
+    void appRoleCannotTamperWithFlywayHistory() {
+        String history = "\"order\".flyway_schema_history";
+        assertThat(sqlState(() -> app.queryForObject("SELECT count(*) FROM " + history, Integer.class))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("UPDATE " + history + " SET success = false"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("DELETE FROM " + history + " WHERE version = '3'"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("INSERT INTO " + history + " (installed_rank, version, description, type, "
+                + "script, installed_by, execution_time, success) VALUES (99, '99', 'x', 'SQL', 'x', 'x', 0, true)")))
+                .isEqualTo("42501");
+        assertThat(appGrantsOn("flyway_schema_history")).isEmpty();
+        assertThat(appGrantsOn("order_item")).containsExactlyInAnyOrder("SELECT", "INSERT", "UPDATE", "DELETE");
+
+        // Elle yapilan drift: bir sonraki migrate() (bekleyen migration olmasa bile) yetkiyi yine geri alir
+        su.execute("GRANT ALL ON " + history + " TO " + spec.appRole());
+        assertThat(appGrantsOn("flyway_schema_history")).isNotEmpty();
+        MigrateResult again = new SchemaMigrator(jdbcUrl, spec.migrateRole(), MIGRATE_PW, SCHEMA, "classpath:db/migration").migrate();
+        assertThat(again.migrationsExecuted).isZero();
+        assertThat(appGrantsOn("flyway_schema_history")).isEmpty();
+        assertThat(su.queryForList("SELECT version FROM " + history + " ORDER BY installed_rank", String.class))
+                .as("callback history'ye satir yazmaz").containsExactly("1", "2", "3");
+    }
+
+    static List<String> appGrantsOn(String table) {
+        return su.queryForList("SELECT privilege_type FROM information_schema.role_table_grants WHERE table_schema = 'order' "
+                + "AND table_name = ? AND grantee = ?", String.class, table, spec.appRole());
+    }
+
+    @Test // #3: audit_log append-only: uygulama INSERT eder, UPDATE/DELETE 42501; tablo sahibi bile trigger'a takilir
+    void auditLogIsAppendOnly() {
+        app.update("INSERT INTO \"order\".audit_log (actor, action) VALUES ('svc', 'ORDER_CREATED')");
+        assertThat(sqlState(() -> app.update("UPDATE \"order\".audit_log SET action = 'x'"))).isEqualTo("42501");
+        assertThat(sqlState(() -> app.update("DELETE FROM \"order\".audit_log"))).isEqualTo("42501");
+
+        // ikinci hat: migration rolu tablo sahibi ve yetkili, ama trigger reddeder
+        assertThatThrownBy(() -> migrate.update("UPDATE \"order\".audit_log SET action = 'x'"))
+                .satisfies(t -> {
+                    assertThat(rootSql(t).getSQLState()).isEqualTo("P0001");
+                    assertThat(rootSql(t).getMessage()).contains("append-only: UPDATE rejected");
+                });
+        assertThat(sqlState(() -> migrate.update("DELETE FROM \"order\".audit_log"))).isEqualTo("P0001");
+        assertThat(su.queryForObject("SELECT count(*) FROM \"order\".audit_log", Integer.class)).isEqualTo(1);
+    }
+
+    @Test // #4: statement_timeout rol ayari: kacak sorgu ~2 sn'de 57014 ile iptal; migration rolunde timeout yok
+    void statementTimeoutCancelsRunawayQuery() {
+        assertThat(app.queryForObject("SHOW statement_timeout", String.class)).isEqualTo("2s");
+        long t0 = System.nanoTime();
+        assertThat(sqlState(() -> app.execute("SELECT pg_sleep(4)"))).isEqualTo("57014");
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - t0);
+        assertThat(elapsed).isBetween(Duration.ofMillis(1500), Duration.ofMillis(3500));
+        assertThat(migrate.queryForObject("SHOW statement_timeout", String.class)).isEqualTo("0");
+        assertThat(migrate.queryForObject("SHOW lock_timeout", String.class)).isEqualTo("10s");
+    }
+
+    @Test // #5: lock_timeout: baska TX'in kilitledigi satirda UPDATE ~1 sn'de 55P03 (kuyruk birikmez)
+    void lockTimeoutFailsFastOnLockedRow() throws Exception {
+        UUID id = insertAsOwner(ACCOUNT_A, "locked");
+        try (Connection holder = migrateDs.getConnection()) {
+            holder.setAutoCommit(false);
+            try (var ps = holder.prepareStatement("SELECT id FROM \"order\".order_item WHERE id = ? FOR UPDATE")) {
+                ps.setObject(1, id);
+                ps.executeQuery();
+            }
+            try (Connection appConn = appDs.getConnection()) {
+                appConn.setAutoCommit(false);
+                setLocalAccount(appConn, ACCOUNT_A);
+                long t0 = System.nanoTime();
+                String state = sqlState(() -> {
+                    try (var ps = appConn.prepareStatement("UPDATE \"order\".order_item SET resource = 'x' WHERE id = ?")) {
+                        ps.setObject(1, id);
+                        ps.setQueryTimeout(5);   // lock_timeout yoksa sonsuza kadar bekler: test asmasin, 57014 ile FAIL etsin
+                        ps.executeUpdate();
+                    }
+                });
+                Duration elapsed = Duration.ofNanos(System.nanoTime() - t0);
+                assertThat(state).as("lock_timeout rol ayari 55P03 vermeli (57014 = surucu iptali, ayar yok)").isEqualTo("55P03");
+                assertThat(elapsed).isBetween(Duration.ofMillis(800), Duration.ofMillis(2500));
+                appConn.rollback();
+            }
+            holder.rollback();
+        }
+    }
+
+    @Test // #6: idle_in_transaction_session_timeout: acik unutulan TX ~2 sn sonra sunucu tarafindan sonlandirilir
+    void idleInTransactionSessionIsTerminated() throws Exception {
+        Connection conn = appDs.getConnection();
+        try {
+            conn.setAutoCommit(false);
+            int pid;
+            try (var st = conn.createStatement(); var rs = st.executeQuery("SELECT pg_backend_pid()")) {
+                rs.next();
+                pid = rs.getInt(1);
+            }
+            long t0 = System.nanoTime();
+            // Uygulama baglantisina dokunulmaz (her ifade sayaci sifirlar); backend'in kaybolmasi disaridan izlenir.
+            awaitInfra(Duration.ofSeconds(8), () -> su.queryForObject(
+                    "SELECT count(*) FROM pg_stat_activity WHERE pid = ?", Integer.class, pid) == 0);
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - t0);
+            assertThat(elapsed).as("2 sn'den once sonlanmamali").isGreaterThanOrEqualTo(Duration.ofMillis(1500));
+
+            String state = sqlState(() -> { try (var st = conn.createStatement()) { st.execute("SELECT 1"); } });
+            assertThat(state).isIn("25P03", "57P01", "08006", "08003");
+        } finally {
+            try { conn.close(); } catch (SQLException alreadyDead) { /* sunucu kapatti */ }
+        }
+    }
+
+    @Test // #7: RLS hesaplari ayirir; baglam SET LOCAL ile; duz SET oturuma sizar; uygulama rolu BYPASSRLS degil
+    void rowLevelSecurityIsolatesAccountsAndPlainSetLeaks() throws Exception {
+        insertAsOwner(ACCOUNT_A, "a1");
+        insertAsOwner(ACCOUNT_A, "a2");
+        insertAsOwner(ACCOUNT_B, "b1");
+        assertThat(count(migrate)).as("tablo sahibi (migration/backfill) RLS'i atlar").isEqualTo(3);
+
+        AccountScope scope = new AccountScope(appDs);
+        Integer seenByA = scope.inAccount(ACCOUNT_A, j -> count(j));
+        Integer seenByB = scope.inAccount(ACCOUNT_B, j -> count(j));
+        assertThat(seenByA).isEqualTo(2);
+        assertThat(seenByB).isEqualTo(1);
+        assertThat(count(app)).as("baglamsiz = kapali").isZero();
+        // Havuz simulasyonu (tek baglanti tekrar tekrar verilir): AccountScope'un baglami TX ile bitmeli, oturumda kalmamali.
+        // Havuzsuz DataSource'ta SET ile SET LOCAL ayirt edilemez; bu kontrol M5 mutasyonunu (is_local=false) yakalar.
+        SingleConnectionDataSource reused = new SingleConnectionDataSource(jdbcUrl, spec.appRole(), APP_PW, true);
+        try {
+            Integer inScope = new AccountScope(reused).inAccount(ACCOUNT_A, j -> count(j));
+            assertThat(inScope).isEqualTo(2);
+            assertThat(count(new JdbcTemplate(reused))).as("havuzdan geri gelen baglantida baglam kalmadi").isZero();
+        } finally {
+            reused.destroy();
+        }
+        // USING ifadesi WITH CHECK olarak da uygulanir: A baglaminda B'ye satir yazilamaz
+        assertThat(sqlState(() -> scope.inAccount(ACCOUNT_A, j -> j.update(
+                "INSERT INTO \"order\".order_item (account_id, resource) VALUES (?, 'x')", ACCOUNT_B)))).isEqualTo("42501");
+
+        try (Connection conn = appDs.getConnection()) {
+            conn.setAutoCommit(false);
+            // Dogru: SET LOCAL TX ile biter; ayni baglantidaki sonraki TX hicbir sey gormez
+            setLocalAccount(conn, ACCOUNT_A);
+            assertThat(count(conn)).isEqualTo(2);
+            conn.commit();
+            assertThat(count(conn)).isZero();
+            // TX bitince deger NULL degil '' olur: policy'deki NULLIF bu yuzden var
+            try (var st = conn.createStatement(); var rs = st.executeQuery("SELECT current_setting('app.account_id', true)")) {
+                rs.next();
+                assertThat(rs.getString(1)).isEmpty();
+            }
+            conn.commit();
+
+            // SIZINTI: duz SET oturuma yazar; commit sonrasi ayni baglantidaki her sonraki TX A'yi gorur.
+            // Havuzda bu baglanti baska istege gider -> baska hesabin verisi. Bu yuzden SET LOCAL zorunlu.
+            try (var st = conn.createStatement()) { st.execute("SET app.account_id = '" + ACCOUNT_A + "'"); }
+            conn.commit();
+            assertThat(count(conn)).isEqualTo(2);
+            conn.commit();
+            assertThat(count(conn)).as("sizinti: sonraki TX de goruyor").isEqualTo(2);
+            conn.commit();
+            try (var st = conn.createStatement()) { st.execute("RESET app.account_id"); }
+            conn.commit();
+            assertThat(count(conn)).isZero();
+            conn.commit();
+        }
+
+        Map<String, Object> flags = su.queryForMap(
+                "SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = ?", spec.appRole());
+        assertThat(flags).containsEntry("rolbypassrls", false).containsEntry("rolsuper", false);
+    }
+
+    @Test // #8: uuidv7(): surum 7; ayni oturumda 100 uretim kesin artan (uuid_extract_timestamp azalmaz, metin sirasi artar)
+    void uuidv7IdsAreVersion7AndMonotonicWithinSession() throws Exception {
+        List<String> ids = new ArrayList<>();
+        try (Connection conn = appDs.getConnection(); var st = conn.createStatement()) {
+            for (int i = 0; i < 100; i++) {
+                try (var rs = st.executeQuery("SELECT uuidv7()::text")) {
+                    rs.next();
+                    ids.add(rs.getString(1));
+                }
+            }
+        }
+        long previousMs = Long.MIN_VALUE;
+        for (int i = 0; i < ids.size(); i++) {
+            Map<String, Object> row = su.queryForMap("SELECT uuid_extract_version(?::uuid) AS v, "
+                    + "(extract(epoch FROM uuid_extract_timestamp(?::uuid)) * 1000)::bigint AS ts_ms", ids.get(i), ids.get(i));
+            assertThat(((Number) row.get("v")).intValue()).isEqualTo(7);
+            long ms = ((Number) row.get("ts_ms")).longValue();
+            assertThat(ms).as("v7 zaman damgasi azalmaz").isGreaterThanOrEqualTo(previousMs);
+            assertThat(Math.abs(ms - System.currentTimeMillis())).as("gercek saat").isLessThan(60_000);
+            if (i > 0) assertThat(ids.get(i).compareTo(ids.get(i - 1))).as("id %d > id %d", i, i - 1).isPositive();
+            previousMs = ms;
+        }
+        // Tablo default'u ile: id sirasi = ekleme sirasi = created_at sirasi (keyset created_at DESC, id DESC uyumu)
+        List<UUID> inserted = new ArrayList<>();
+        for (int i = 0; i < 20; i++) inserted.add(insertAsOwner(ACCOUNT_A, "r" + i));
+        List<String> byId = migrate.queryForList("SELECT id::text FROM \"order\".order_item ORDER BY id", String.class);
+        List<String> byTime = migrate.queryForList("SELECT id::text FROM \"order\".order_item ORDER BY created_at, id", String.class);
+        assertThat(byId).containsExactlyElementsOf(inserted.stream().map(UUID::toString).toList());
+        assertThat(byTime).isEqualTo(byId);
+    }
+
+    @Test // #9: Flyway guvenlik agi: bos olmayan yonetilmeyen sema baseline-on-migrate=false ile reddedilir; tek seferlik baseline sonra gecer
+    void flywayRefusesNonEmptyUnmanagedSchemaUntilExplicitBaseline() {
+        su.execute("CREATE SCHEMA legacy AUTHORIZATION " + spec.migrateRole());
+        migrate.execute("CREATE TABLE legacy.legacy_thing (id INT PRIMARY KEY)");   // "mevcut" sistem: V1'e denk
+        SchemaMigrator legacy = new SchemaMigrator(jdbcUrl, spec.migrateRole(), MIGRATE_PW, "legacy", "classpath:db/legacy-migration");
+
+        assertThatThrownBy(legacy::migrate)
+                .isInstanceOf(FlywayException.class)
+                .hasMessageContaining("non-empty")
+                .hasMessageContaining("baseline");
+        assertThat(historyTableExists()).isFalse();
+        assertThat(noteColumnExists()).isFalse();
+
+        legacy.baselineOnce("1");
+        MigrateResult result = legacy.migrate();
+        assertThat(result.migrationsExecuted).as("yalniz V2 uygulanir; V1 baseline altinda").isEqualTo(1);
+        assertThat(noteColumnExists()).isTrue();
+        List<Map<String, Object>> history = su.queryForList(
+                "SELECT version, type, success FROM legacy.flyway_schema_history ORDER BY installed_rank");
+        assertThat(history).extracting(r -> r.get("version") + ":" + r.get("type") + ":" + r.get("success"))
+                .containsExactly("1:BASELINE:true", "2:SQL:true");
+    }
+
+    static boolean historyTableExists() {
+        return su.queryForObject("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'legacy' "
+                + "AND table_name = 'flyway_schema_history'", Integer.class) == 1;
+    }
+
+    static boolean noteColumnExists() {
+        return su.queryForObject("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'legacy' "
+                + "AND table_name = 'legacy_thing' AND column_name = 'note'", Integer.class) == 1;
+    }
+
+    // ---------- PgBouncer (seviye 3: JDBC -> pgbouncer sureci -> PostgreSQL) ----------
+
+    @Test // #10a: transaction mode + max_prepared_statements=200: sunucu tarafi prepared statement'lar iki istemcide 60 TX boyunca sorunsuz
+    void pgBouncerTracksServerSidePreparedStatementsInTransactionMode() throws Exception {
+        try (PgBouncerProcess pgb = PgBouncerProcess.start(pg.getPort(), DB, spec.appRole(), APP_PW,
+                new PgBouncerProcess.Config(200, 5))) {
+            List<String> anomalies = runAlternatingPreparedTransactions(pgb, 30);
+            assertThat(anomalies).as("pgbouncer log:\n" + pgb.log()).isEmpty();
+        }
+    }
+
+    @Test // #10b: max_prepared_statements=0 (1.24.1 oncesinde VARSAYILAN; buradaki pgbouncer 1.22): ayni yuk bozulur
+    void pgBouncerWithoutPreparedStatementTrackingBreaksNamedStatements() throws Exception {
+        try (PgBouncerProcess pgb = PgBouncerProcess.start(pg.getPort(), DB, spec.appRole(), APP_PW,
+                new PgBouncerProcess.Config(0, 5))) {
+            List<String> anomalies = runAlternatingPreparedTransactions(pgb, 30);
+            // Gozlem (1.22.0): once 42P05 "S_1 already exists", sonra 26000 ve 08P01 bind uyusmazligi; ayrinti aciklamada
+            assertThat(anomalies).as("izleme kapaliyken hata beklenir; log:\n" + pgb.log()).isNotEmpty();
+            assertThat(anomalies.getFirst()).as("max_prepared_statements=0 gozlemi: %s", anomalies)
+                    .containsAnyOf("42P05", "26000", "TAG-MISMATCH");
+        }
+    }
+
+    @Test // #10c: PgBouncer arkasinda SET LOCAL sonraki TX'e sizmaz; duz SET ise BASKA ISTEMCIYE sizar (tek server baglantisi)
+    void pgBouncerSetLocalIsTransactionScopedButPlainSetLeaksAcrossClients() throws Exception {
+        insertAsOwner(ACCOUNT_A, "a1");
+        insertAsOwner(ACCOUNT_A, "a2");
+        try (PgBouncerProcess pgb = PgBouncerProcess.start(pg.getPort(), DB, spec.appRole(), APP_PW,
+                new PgBouncerProcess.Config(200, 1));
+             Connection c1 = DriverManager.getConnection(pgb.jdbcUrl(DB), spec.appRole(), APP_PW);
+             Connection c2 = DriverManager.getConnection(pgb.jdbcUrl(DB), spec.appRole(), APP_PW)) {
+            c1.setAutoCommit(false);
+            setLocalAccount(c1, ACCOUNT_A);
+            assertThat(count(c1)).isEqualTo(2);
+            c1.commit();
+            assertThat(count(c1)).as("SET LOCAL sonraki TX'e sizmadi").isZero();
+            c1.commit();
+            assertThat(count(c2)).as("diger istemci de temiz").isZero();
+
+            // Duz SET: c1'in oturum ayari pgbouncer'in tek server baglantisina yazilir; c2 ayni server baglantisini alir.
+            try (var st = c1.createStatement()) { st.execute("SET app.account_id = '" + ACCOUNT_A + "'"); }
+            c1.commit();
+            assertThat(count(c2)).as("baska istemci A'nin verisini gordu (transaction mode + SET)").isEqualTo(2);
+        }
+    }
+
+    /**
+     * Iki istemci, FARKLI SQL, ayni surucu statement adi (S_1). pgbouncer prepared statement'lari izlemezse:
+     * "already exists" (42P05), "does not exist" (26000) veya en tehlikelisi: baska istemcinin plani ile sessizce
+     * yanlis sonuc (TAG-MISMATCH). Basarili durumda liste bos doner.
+     */
+    static List<String> runAlternatingPreparedTransactions(PgBouncerProcess pgb, int rounds) throws SQLException {
+        String url = pgb.jdbcUrl(DB) + "?prepareThreshold=1";     // ilk calistirmadan itibaren sunucu tarafi prepared
+        List<String> anomalies = new ArrayList<>();
+        try (Connection a = DriverManager.getConnection(url, spec.appRole(), APP_PW);
+             Connection b = DriverManager.getConnection(url, spec.appRole(), APP_PW)) {
+            a.setAutoCommit(false);
+            b.setAutoCommit(false);
+            for (int round = 0; round < rounds; round++) {
+                preparedTx(a, "A", round, anomalies);
+                preparedTx(b, "B", round, anomalies);
+            }
+        }
+        return anomalies;
+    }
+
+    static void preparedTx(Connection conn, String tag, int round, List<String> anomalies) {
+        String sql = "SELECT '" + tag + "' AS tag, count(*) FROM \"order\".order_item WHERE account_id = ?";
+        try {
+            try (var ps = conn.prepareStatement(sql)) {
+                ps.setObject(1, ACCOUNT_A);
+                try (var rs = ps.executeQuery()) {
+                    rs.next();
+                    if (!tag.equals(rs.getString(1))) {
+                        anomalies.add("round " + round + " " + tag + " TAG-MISMATCH got " + rs.getString(1));
+                    }
+                }
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            anomalies.add("round " + round + " " + tag + " " + e.getSQLState() + " " + e.getMessage());
+            try { conn.rollback(); } catch (SQLException ignored) { /* baglanti zaten bozuk olabilir */ }
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/db-security-example/src/test/java/com/acme/dbsecurity/PgBouncerProcess.java`
+
+```java
+package com.acme.dbsecurity;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Test yardimcisi: gercek pgbouncer surecini (varsayilan /usr/sbin/pgbouncer, -Dpgbouncer.bin ile degistirilir)
+ * uretilmis bir ini ile on planda baslatir ve durdurur. Seviye 3 kanit: JDBC -> pgbouncer -> PostgreSQL, uc surec.
+ */
+final class PgBouncerProcess implements AutoCloseable {
+
+    /** Ini'ye giren, testin degistirdigi ayarlar; geri kalani sabit. */
+    record Config(int maxPreparedStatements, int defaultPoolSize) { }
+
+    private final Process process;
+    private final Path dir;
+    final int port;
+
+    private PgBouncerProcess(Process process, Path dir, int port) {
+        this.process = process;
+        this.dir = dir;
+        this.port = port;
+    }
+
+    static PgBouncerProcess start(int pgPort, String dbName, String user, String password, Config cfg) throws IOException {
+        Path bin = Path.of(System.getProperty("pgbouncer.bin", "/usr/sbin/pgbouncer"));
+        if (!Files.isExecutable(bin)) throw new IllegalStateException("pgbouncer binary yok: " + bin);
+        Path dir = Files.createTempDirectory("pgbouncer-it");
+        int port = freePort();
+        // auth_type=plain: userlist'teki duz sifre ile istemci dogrulanir; sunucuya ayni sifreyle SCRAM yapilir.
+        Files.writeString(dir.resolve("userlist.txt"), "\"" + user + "\" \"" + password + "\"\n", StandardCharsets.UTF_8);
+        String ini = """
+                [databases]
+                %s = host=127.0.0.1 port=%d dbname=%s
+                [pgbouncer]
+                listen_addr = 127.0.0.1
+                listen_port = %d
+                unix_socket_dir = %s
+                auth_type = plain
+                auth_file = %s
+                pool_mode = transaction
+                max_prepared_statements = %d
+                min_pool_size = 0
+                default_pool_size = %d
+                ignore_startup_parameters = extra_float_digits
+                logfile = %s
+                pidfile = %s
+                """.formatted(dbName, pgPort, dbName, port, dir, dir.resolve("userlist.txt"), cfg.maxPreparedStatements(),
+                cfg.defaultPoolSize(), dir.resolve("pgbouncer.log"), dir.resolve("pgbouncer.pid"));
+        Path iniFile = dir.resolve("pgbouncer.ini");
+        Files.writeString(iniFile, ini, StandardCharsets.UTF_8);
+        Path out = dir.resolve("stdout-stderr.log");
+        Process p = new ProcessBuilder(bin.toString(), iniFile.toString()).redirectErrorStream(true)
+                .redirectOutput(out.toFile()).start();
+        // Gercek zamanli altyapi: port acilana kadar sinirli bekleme (uygulama mantigi degil, surec baslangici)
+        Instant deadline = Instant.now().plus(Duration.ofSeconds(10));
+        while (Instant.now().isBefore(deadline)) {
+            if (!p.isAlive()) {
+                throw new IllegalStateException("pgbouncer basladiktan hemen sonra cikti (exit " + p.exitValue() + "):\n"
+                        + Files.readString(out));
+            }
+            try (Socket s = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                return new PgBouncerProcess(p, dir, port);
+            } catch (IOException notYet) {
+                try { Thread.sleep(50); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            }
+        }
+        p.destroyForcibly();
+        throw new IllegalStateException("pgbouncer 10 sn icinde port acmadi:\n" + Files.readString(out));
+    }
+
+    String jdbcUrl(String dbName) { return "jdbc:postgresql://127.0.0.1:" + port + "/" + dbName; }
+
+    String log() throws IOException {
+        Path log = dir.resolve("pgbouncer.log");
+        return Files.exists(log) ? Files.readString(log) : Files.readString(dir.resolve("stdout-stderr.log"));
+    }
+
+    private static int freePort() throws IOException {
+        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) { return s.getLocalPort(); }
+    }
+
+    @Override
+    public void close() {
+        process.destroy();
+        try {
+            if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+        }
+        deleteDir();
+    }
+
+    /** ini, log ve duz metin sifreli userlist.txt /tmp'de birikmesin. */
+    private void deleteDir() {
+        try (var paths = Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try { Files.deleteIfExists(path); } catch (IOException e) { throw new UncheckedIOException(e); }
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/db-security-example/src/test/resources/db/legacy-migration/V1__legacy_init.sql`
+
+```
+-- Test senaryosu 9: "mevcut" semanin elle yaratilmis haline denk gelen migration. Baseline=1 ile hic kosmaz;
+-- kossaydi tablo zaten var oldugu icin patlardi (42P07); bu da baseline'in dogru surumle alindigini kanitlar.
+CREATE TABLE legacy.legacy_thing (id INT PRIMARY KEY);
+```
+
+---
+
+### `skeleton-example/db-security-example/src/test/resources/db/legacy-migration/V2__legacy_add_note.sql`
+
+```
+-- Baseline sonrasi uygulanmasi beklenen tek migration.
+ALTER TABLE legacy.legacy_thing ADD COLUMN note TEXT;
 ```
 
 ---
@@ -5558,6 +10316,1042 @@ DB_HOST=
 DB_PORT=5432
 DB_NAME=app
 INVENTORY_URL=http://inventory:8086
+```
+
+---
+
+### `skeleton-example/modulith-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>modulith-example</artifactId>
+  <description>Sekil A (Bolum 1.1): tek Spring Boot uygulamasinda Spring Modulith modulleri; moduller arasi olay = event publication registry (in-process outbox)</description>
+
+  <properties>
+    <spring-modulith.version>2.1.1</spring-modulith.version>
+    <embedded-postgres.version>2.1.0</embedded-postgres.version>
+    <!-- Testler PostgreSQL 18 uzerinde kosar (uretim hedefiyle ayni ana surum) -->
+    <embedded-postgres-binaries.version>18.1.0</embedded-postgres-binaries.version>
+  </properties>
+
+  <dependencyManagement><dependencies>
+    <dependency><groupId>org.springframework.modulith</groupId><artifactId>spring-modulith-bom</artifactId><version>${spring-modulith.version}</version><type>pom</type><scope>import</scope></dependency>
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>${embedded-postgres-binaries.version}</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <dependency><groupId>org.springframework.modulith</groupId><artifactId>spring-modulith-starter-core</artifactId>
+      <!-- spring-modulith-apt (derleme zamani annotation processor; yalniz Documenter icin javadoc.json uretir)
+           cikti yerini Maven'in CALISMA DIZININE gore secer: modul disindan (-f / reaktor kokunden) kosan build
+           ./build yaratmaya calisir, yazma izni yoksa DERLEME KIRILIR; pom.xml olmayan cwd'de "build/" (Gradle)
+           klasoru uretir. Olculdu (2.1.1). Belgeleme javadoc'suz da uretilir; islemci disarida. -->
+      <exclusions><exclusion><groupId>org.springframework.modulith</groupId><artifactId>spring-modulith-apt</artifactId></exclusion></exclusions>
+    </dependency>
+    <!-- event_publication tablosu: olay kaydi, yayinlayan is islemiyle AYNI transaction'da yazilir -->
+    <dependency><groupId>org.springframework.modulith</groupId><artifactId>spring-modulith-starter-jdbc</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
+
+    <dependency><groupId>org.springframework.modulith</groupId><artifactId>spring-modulith-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>${embedded-postgres.version}</version><scope>test</scope></dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+        <!-- 0 test = basarisiz: sessizce atlanan kanit kanit degildir -->
+        <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+    </plugins>
+  </build>
+</project>
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/ModulithApp.java`
+
+```java
+package com.acme.modulith;
+
+import java.time.Clock;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableAsync;
+
+/**
+ * Sekil A (Bolum 1.1): tek deploy birimi, icinde Spring Modulith modulleri.
+ * Bu paketin dogrudan alt paketleri (order, inventory) birer uygulama moduludur; bir modulun
+ * {@code internal} alt paketi baska modulden gorulemez ({@code ApplicationModules.verify()} kirar).
+ */
+@SpringBootApplication
+// @ApplicationModuleListener @Async tasir: bu olmadan dinleyici yayinlayan thread'de, commit sonrasi
+// senkron calisir ve yavas bir modul siparis cevabini geciktirir.
+@EnableAsync
+public class ModulithApp {
+
+    public static void main(String[] args) {
+        SpringApplication.run(ModulithApp.class, args);
+    }
+
+    // Zaman her yerde enjekte edilen Clock'tan okunur: event registry de (publication_date, completion_date,
+    // "su kadar eski" yeniden gonderim) ayni Clock bean'ini kullanir, bu yuzden testte deterministiktir.
+    @Bean
+    Clock clock() {
+        return Clock.systemUTC();
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/inventory/InventoryService.java`
+
+```java
+package com.acme.modulith.inventory;
+
+import java.util.OptionalInt;
+import java.util.UUID;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.acme.modulith.inventory.internal.StockRepository;
+
+/** Inventory modulunun disa acik yuzu: stok tanimlama ve okuma. Rezervasyon yalniz olayla olur. */
+@Service
+public class InventoryService {
+
+    private final StockRepository stock;
+
+    public InventoryService(StockRepository stock) {
+        this.stock = stock;
+    }
+
+    @Transactional
+    public void provision(String sku, int available) {
+        stock.upsertStock(sku, available);
+    }
+
+    public OptionalInt availableStock(String sku) {
+        return stock.available(sku);
+    }
+
+    public int reservationCount(UUID orderId) {
+        return stock.reservationCount(orderId);
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/inventory/internal/OrderPlacedListener.java`
+
+```java
+package com.acme.modulith.inventory.internal;
+
+import java.time.Clock;
+
+import org.springframework.modulith.events.ApplicationModuleListener;
+import org.springframework.stereotype.Component;
+
+import com.acme.modulith.order.OrderPlaced;
+
+/**
+ * OrderPlaced -> stok rezervasyonu.
+ *
+ * <p>{@code @ApplicationModuleListener} = @Async + @Transactional(REQUIRES_NEW) + @TransactionalEventListener
+ * (AFTER_COMMIT). Registry teslimati "tamamlandi" olarak dinleyicinin transaction'i commit OLDUKTAN SONRA,
+ * ayri bir yazimla isaretler. Arada surec olurse etki kalici ama kayit tamamlanmamis olur ve olay
+ * yeniden teslim edilir (restart'ta ya da resubmit ile). Yani teslim en-az-bir-kez'dir: dinleyici
+ * idempotent OLMAK ZORUNDA (Bolum 11.3 ile ayni kural, in-process olsa bile).
+ */
+@Component
+class OrderPlacedListener {
+
+    private final StockRepository stock;
+    private final Clock clock;
+
+    OrderPlacedListener(StockRepository stock, Clock clock) {
+        this.stock = stock;
+        this.clock = clock;
+    }
+
+    @ApplicationModuleListener
+    public void on(OrderPlaced event) {
+        // Dedup kaydi etkiyle AYNI transaction'da: ya ikisi birlikte commit olur ya hicbiri.
+        if (!stock.recordReservationOnce(event.orderId(), event.sku(), event.quantity(), clock.instant())) {
+            return; // bu siparis zaten rezerve edildi (tekrar teslim)
+        }
+        if (!stock.decrement(event.sku(), event.quantity())) {
+            // Istisna transaction'i (dedup satiri dahil) geri alir ve publication tamamlanmamis kalir;
+            // stok tanimlaninca resubmit ayni olayi yeniden teslim eder.
+            throw new StockNotProvisionedException(event.sku());
+        }
+    }
+
+    static final class StockNotProvisionedException extends RuntimeException {
+        StockNotProvisionedException(String sku) {
+            super("stock not provisioned for sku " + sku);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/inventory/internal/StockRepository.java`
+
+```java
+package com.acme.modulith.inventory.internal;
+
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.OptionalInt;
+import java.util.UUID;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+/**
+ * Inventory'nin ic deposu (inventory semasi). Modul disindan erisim yasak: order bu sinifa
+ * dokunursa ApplicationModules.verify() "non-exposed type" ihlali verir.
+ */
+@Repository
+public class StockRepository {
+
+    private final JdbcClient jdbc;
+
+    public StockRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * Rezervasyonu siparis basina BIR kez kaydeder. PK (order_id) + ON CONFLICT DO NOTHING tekrar
+     * teslimde false doner; dinleyici o zaman stok dusmez. Ayni siparisin iki teslimi es zamanliysa
+     * ikinci INSERT birincinin commit'ini bekler, sonra 0 satir doner (check-then-act yarisi yok).
+     */
+    public boolean recordReservationOnce(UUID orderId, String sku, int quantity, Instant reservedAt) {
+        return jdbc.sql("""
+                INSERT INTO inventory.reservation (order_id, sku, quantity, reserved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (order_id) DO NOTHING
+                """)
+                .params(orderId, sku, quantity, Timestamp.from(reservedAt))
+                .update() == 1;
+    }
+
+    /** Stok satiri yoksa false (tanimlanmamis urun). Yetersiz stok CHECK (available >= 0) ile reddedilir. */
+    public boolean decrement(String sku, int quantity) {
+        return jdbc.sql("UPDATE inventory.stock SET available = available - ? WHERE sku = ?")
+                .params(quantity, sku)
+                .update() == 1;
+    }
+
+    public void upsertStock(String sku, int available) {
+        jdbc.sql("""
+                INSERT INTO inventory.stock (sku, available) VALUES (?, ?)
+                ON CONFLICT (sku) DO UPDATE SET available = EXCLUDED.available
+                """)
+                .params(sku, available)
+                .update();
+    }
+
+    public OptionalInt available(String sku) {
+        return jdbc.sql("SELECT available FROM inventory.stock WHERE sku = ?")
+                .param(sku).query(Integer.class).optional()
+                .map(OptionalInt::of).orElseGet(OptionalInt::empty);
+    }
+
+    public int reservationCount(UUID orderId) {
+        return jdbc.sql("SELECT count(*) FROM inventory.reservation WHERE order_id = ?")
+                .param(orderId).query(Integer.class).single();
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/inventory/package-info.java`
+
+```java
+/**
+ * Inventory modulu. Yalniz order'in API'sine (kok paketi: OrderPlaced) bagimli olabilir;
+ * order.internal'a erisim ve baska modullere bag verify() ile yakalanir.
+ */
+@org.springframework.modulith.ApplicationModule(displayName = "Inventory", allowedDependencies = "order")
+package com.acme.modulith.inventory;
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/order/OrderPlaced.java`
+
+```java
+package com.acme.modulith.order;
+
+import java.time.Instant;
+import java.util.UUID;
+
+/**
+ * Order modulunun disa acik olayi (modulun kok paketinde = API). Diger moduller yalniz bunu gorur,
+ * {@code order.internal} icindekileri degil. Registry bu kaydi JSON olarak event_publication'a yazar;
+ * yeniden gonderimde JSON'dan geri okunur, bu yuzden yalniz basit, kararli alanlar tasir (PII yok).
+ */
+public record OrderPlaced(UUID orderId, String sku, int quantity, Instant placedAt) {
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/order/OrderService.java`
+
+```java
+package com.acme.modulith.order;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.util.UUID;
+
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.acme.modulith.order.internal.OrderRepository;
+
+/**
+ * Siparis yazar ve {@link OrderPlaced} yayinlar. Inventory'yi DOGRUDAN cagirmaz: moduller arasi bag
+ * yalniz olaydir, boylece inventory ileride ayri servise cikarilirsa order degismez (Bolum 1.1 Sekil C).
+ */
+@Service
+public class OrderService {
+
+    private final OrderRepository orders;
+    private final ApplicationEventPublisher events;
+    private final Clock clock;
+
+    public OrderService(OrderRepository orders, ApplicationEventPublisher events, Clock clock) {
+        this.orders = orders;
+        this.events = events;
+        this.clock = clock;
+    }
+
+    /**
+     * Siparis satiri ve event_publication satiri AYNI transaction'da yazilir (in-process outbox):
+     * ikisi birlikte commit olur ya da ikisi birlikte geri alinir. Transaction yoksa
+     * {@code @ApplicationModuleListener} (bir @TransactionalEventListener) olayi hic almaz; bu yuzden
+     * {@code @Transactional} burada sart, "tercih" degil.
+     */
+    @Transactional
+    public UUID placeOrder(String sku, int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("quantity must be positive");
+        }
+        UUID orderId = UUID.randomUUID();
+        Instant now = clock.instant();
+        orders.insert(orderId, sku, quantity, now);
+        events.publishEvent(new OrderPlaced(orderId, sku, quantity, now));
+        return orderId;
+    }
+
+    public boolean exists(UUID orderId) {
+        return orders.exists(orderId);
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/order/internal/OrderRepository.java`
+
+```java
+package com.acme.modulith.order.internal;
+
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.UUID;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+/**
+ * Order modulunun ic deposu. Tablo order modulunun semasindadir (ordering); baska modul bu sinifa
+ * ya da tabloya erisemez. Public olmasi yalniz order'in kendi paketleri arasi erisim icindir.
+ */
+@Repository
+public class OrderRepository {
+
+    private final JdbcClient jdbc;
+
+    public OrderRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public void insert(UUID orderId, String sku, int quantity, Instant placedAt) {
+        jdbc.sql("INSERT INTO ordering.orders (id, sku, quantity, placed_at) VALUES (?, ?, ?, ?)")
+                .params(orderId, sku, quantity, Timestamp.from(placedAt))
+                .update();
+    }
+
+    public boolean exists(UUID orderId) {
+        return jdbc.sql("SELECT count(*) FROM ordering.orders WHERE id = ?")
+                .param(orderId).query(Long.class).single() == 1L;
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/java/com/acme/modulith/order/package-info.java`
+
+```java
+/**
+ * Order modulu. Hicbir module bagimli olamaz: bos allowedDependencies "hepsine izin" degil,
+ * "hicbirine izin yok" demektir (varsayilan OPEN_TOKEN'dir). Order -> inventory bagi eklenirse
+ * verify() kirar; akis yonu olay ile tersine (inventory order'i dinler) kalir.
+ */
+@org.springframework.modulith.ApplicationModule(displayName = "Order", allowedDependencies = {})
+package com.acme.modulith.order;
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/resources/application.properties`
+
+```
+spring.application.name=modulith-example
+# Tablo sahipligi migration'da (Flyway); uygulama acilista DDL calistirmaz.
+spring.modulith.events.jdbc.schema-initialization.enabled=false
+# Tamamlanan publication satiri silinmez, completion_date/status ile isaretlenir (denetim + test gozlemi).
+# Tablo buyur: CompletedEventPublications.deletePublicationsOlderThan(...) ile periyodik temizlik gerekir.
+spring.modulith.events.completion-mode=update
+# Acilista tamamlanmamislari otomatik yeniden yayinlamak coklu instance'ta ayni olayi N kez teslim eder;
+# yeniden teslim, tek bir zamanlanmis is/operator tarafindan IncompleteEventPublications ile yapilir.
+spring.modulith.events.republish-outstanding-events-on-restart=false
+```
+
+---
+
+### `skeleton-example/modulith-example/src/main/resources/db/modulith-example-schema.sql`
+
+```
+-- Modul basina sema (Bolum 1.1 Sekil A: "sema/modul ayrimi"). Uretimde Flyway migration'i olur.
+-- event_publication tablosu burada DEGIL: Spring Modulith'in kendi DDL'i (jar icindeki
+-- schemas/v2/schema-postgresql.sql) birebir migration'a kopyalanir; testler o dosyayi dogrudan uygular.
+CREATE SCHEMA IF NOT EXISTS ordering;
+CREATE SCHEMA IF NOT EXISTS inventory;
+
+CREATE TABLE IF NOT EXISTS ordering.orders (
+  id        UUID PRIMARY KEY,
+  sku       TEXT NOT NULL,
+  quantity  INT  NOT NULL CHECK (quantity > 0),
+  placed_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory.stock (
+  sku       TEXT PRIMARY KEY,
+  available INT  NOT NULL CHECK (available >= 0)
+);
+
+-- Idempotent dinleyicinin dedup anahtari: siparis basina tek rezervasyon.
+CREATE TABLE IF NOT EXISTS inventory.reservation (
+  order_id    UUID PRIMARY KEY,
+  sku         TEXT NOT NULL,
+  quantity    INT  NOT NULL,
+  reserved_at TIMESTAMPTZ NOT NULL
+);
+```
+
+---
+
+### `skeleton-example/modulith-example/src/test/java/com/acme/modulith/EmbeddedPg.java`
+
+```java
+package com.acme.modulith;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.sql.Connection;
+import java.sql.SQLException;
+
+import javax.sql.DataSource;
+
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+
+/**
+ * JVM basina tek gercek PostgreSQL 18 sureci (zonky gomulu ikili; Docker gerekmez).
+ * DDL: Modulith'in KENDI event_publication semasi (jar'daki v2 dosyasi, kopyasi degil) + modul semalari.
+ */
+public final class EmbeddedPg {
+
+    private static final EmbeddedPostgres PG = start();
+
+    private EmbeddedPg() {
+    }
+
+    public static String jdbcUrl() {
+        return PG.getJdbcUrl("postgres", "postgres");
+    }
+
+    /** Spring'in havuzundan bagimsiz baglanti kaynagi: "baska bir oturumdan gorunuyor mu" sorulari icin. */
+    public static DataSource independentDataSource() {
+        return PG.getPostgresDatabase();
+    }
+
+    private static EmbeddedPostgres start() {
+        try {
+            EmbeddedPostgres pg = EmbeddedPostgres.builder().start();
+            try (Connection c = pg.getPostgresDatabase().getConnection()) {
+                ScriptUtils.executeSqlScript(c, new ClassPathResource(
+                        "org/springframework/modulith/events/jdbc/schemas/v2/schema-postgresql.sql"));
+                ScriptUtils.executeSqlScript(c, new ClassPathResource("db/modulith-example-schema.sql"));
+            }
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    pg.close();
+                } catch (IOException ignored) {
+                    // JVM kapanirken temizlik; hata raporlanacak yer yok
+                }
+            }));
+            return pg;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/test/java/com/acme/modulith/EventPublicationRegistryIT.java`
+
+```java
+package com.acme.modulith;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
+
+import javax.sql.DataSource;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.modulith.events.EventPublication;
+import org.springframework.modulith.events.IncompleteEventPublications;
+import org.springframework.modulith.events.ResubmissionOptions;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import com.acme.modulith.inventory.InventoryService;
+import com.acme.modulith.order.OrderPlaced;
+import com.acme.modulith.order.OrderService;
+
+/**
+ * Seviye 2 (gercek PostgreSQL 18): Modulith event publication registry = in-process outbox (Bolum 1.1, 11.2).
+ * Dinleyici gercekten asenkron (@EnableAsync) calisir; beklemeler, gercek arka plan thread'inin DB'ye
+ * yazdigi sonucu sinirli sure yoklar (Awaitility), uygulama mantigini sleep ile "beklemez".
+ */
+@SpringBootTest(classes = {ModulithApp.class, EventPublicationRegistryIT.ClockConfig.class})
+class EventPublicationRegistryIT {
+
+    private static final Duration WAIT = Duration.ofSeconds(20);
+    private static final Instant T0 = Instant.parse("2026-03-01T09:00:00Z");
+
+    @TestConfiguration
+    static class ClockConfig {
+        @Bean
+        @Primary
+        MutableClock testClock() {
+            return new MutableClock(T0);
+        }
+    }
+
+    @DynamicPropertySource
+    static void datasource(DynamicPropertyRegistry r) {
+        r.add("spring.datasource.url", EmbeddedPg::jdbcUrl);
+        r.add("spring.datasource.username", () -> "postgres");
+        r.add("spring.datasource.password", () -> "");
+    }
+
+    @Autowired OrderService orders;
+    @Autowired InventoryService inventory;
+    @Autowired IncompleteEventPublications incomplete;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired TransactionTemplate tx;
+    @Autowired MutableClock clock;
+
+    private final DataSource otherSession = EmbeddedPg.independentDataSource();
+
+    @Test
+    void runsAgainstRealPostgres18WithModulithsOwnSchema() {
+        assertThat(jdbc.queryForObject("SELECT current_setting('server_version_num')::int", Integer.class))
+                .isBetween(180000, 189999);
+        assertThat(jdbc.queryForList("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'event_publication'
+                """, String.class))
+                .contains("status", "completion_attempts", "last_resubmission_date"); // v2 semasi
+    }
+
+    // --- 3a: siparis satiri ve publication satiri AYNI transaction'da -------------------------------------
+
+    @Test
+    void orderRowAndPublicationRowAreWrittenInTheSameTransaction() throws Exception {
+        String sku = sku();
+        inventory.provision(sku, 10);
+        AtomicReference<UUID> id = new AtomicReference<>();
+
+        tx.executeWithoutResult(status -> {
+            id.set(orders.placeOrder(sku, 2));
+            // Transaction'in kendi baglantisi: ikisi de yazilmis
+            assertThat(countOrdersInTx(id.get())).isEqualTo(1);
+            assertThat(countPublicationsInTx(id.get())).isEqualTo(1);
+            // Bagimsiz bir oturum: commit oncesi IKISI DE gorunmez (ayri commit olsalardi biri gorunurdu)
+            assertThat(countOrders(otherSession, id.get())).isZero();
+            assertThat(countPublications(otherSession, id.get())).isZero();
+        });
+
+        // Commit sonrasi ikisi birlikte gorunur
+        assertThat(countOrders(otherSession, id.get())).isEqualTo(1);
+        assertThat(countPublications(otherSession, id.get())).isEqualTo(1);
+        awaitStatus(id.get(), "COMPLETED");
+        assertThat(inventory.availableStock(sku)).hasValue(8);
+    }
+
+    // --- 3b: dinleyici bloke iken publication kayitli ve tamamlanmamis; bitince COMPLETED -----------------
+
+    @Test
+    void publicationIsPersistedWhileListenerIsBlockedAndCompletedAfterwards() throws Exception {
+        String sku = sku();
+        inventory.provision(sku, 10);
+
+        UUID id;
+        // Dinleyiciyi gercek bir satir kilidiyle durdur: stok satirini baska oturumda FOR UPDATE tut
+        try (Connection blocker = otherSession.getConnection()) {
+            blocker.setAutoCommit(false);
+            try (PreparedStatement ps = blocker.prepareStatement("SELECT available FROM inventory.stock WHERE sku = ? FOR UPDATE")) {
+                ps.setString(1, sku);
+                ps.executeQuery().close();
+            }
+
+            id = orders.placeOrder(sku, 3);
+
+            // Dinleyici gercekten basladi ve kilitte bekliyor (henuz baslamamis olmasiyla karistirilmasin)
+            await().atMost(WAIT).until(() -> listenerWaitingOnLock());
+
+            Map<String, Object> pub = publication(id);
+            assertThat(orders.exists(id)).isTrue();
+            assertThat(pub.get("completion_date")).isNull();
+            assertThat(pub.get("status")).isEqualTo("PROCESSING");
+            assertThat((String) pub.get("listener_id")).contains("OrderPlacedListener");
+            assertThat(((Timestamp) pub.get("publication_date")).toInstant()).isEqualTo(clock.instant());
+            assertThat(inventory.availableStock(sku)).hasValue(10);
+
+            blocker.rollback(); // kilidi birak
+        }
+
+        awaitStatus(id, "COMPLETED");
+        Map<String, Object> done = publication(id);
+        assertThat(done.get("completion_date")).isNotNull();
+        assertThat(((Timestamp) done.get("completion_date")).toInstant()).isEqualTo(clock.instant());
+        assertThat(inventory.availableStock(sku)).hasValue(7);
+        assertThat(inventory.reservationCount(id)).isEqualTo(1);
+    }
+
+    // --- 3c: dinleyici firlatir -> tamamlanmamis kalir; resubmit (yas esigi Clock ile) -> tamamlanir ---------
+
+    @Test
+    void failingListenerLeavesPublicationIncompleteAndResubmissionCompletesIt() {
+        String sku = sku(); // stok TANIMSIZ: dinleyici StockNotProvisionedException firlatir
+        UUID id = orders.placeOrder(sku, 4);
+
+        awaitStatus(id, "FAILED");
+        Map<String, Object> failed = publication(id);
+        assertThat(failed.get("completion_date")).isNull();
+        assertThat(inventory.reservationCount(id)).isZero(); // dedup satiri da geri alindi
+
+        inventory.provision(sku, 10); // eksik stok sonradan tanimlandi
+
+        // Yas esigi registry'nin Clock'u ile hesaplanir: 1 dk sonra "5 dk'dan eski" kaydi SECMEZ.
+        // (Diger testler bitmeden once kendi publication'larini COMPLETED'e getirir; filtresiz cagri guvenli.)
+        clock.advance(Duration.ofMinutes(1));
+        incomplete.resubmitIncompletePublicationsOlderThan(Duration.ofMinutes(5));
+        assertThat(publication(id).get("status")).isEqualTo("FAILED");
+        assertThat(inventory.availableStock(sku)).hasValue(10);
+
+        // 6 dk sonra secer ve yeniden teslim eder
+        clock.advance(Duration.ofMinutes(5));
+        incomplete.resubmitIncompletePublicationsOlderThan(Duration.ofMinutes(5));
+
+        awaitStatus(id, "COMPLETED");
+        assertThat(inventory.availableStock(sku)).hasValue(6);
+        assertThat(inventory.reservationCount(id)).isEqualTo(1);
+    }
+
+    // --- 3c': KUTUPHANE KUSURU (Modulith 2.1.1 JDBC) sabitlenir: ResubmissionOptions.withMinAge FAILED'da etkisiz ---
+
+    /**
+     * {@code resubmitIncompletePublications(ResubmissionOptions)} yalniz FAILED kayitlari okur ve SQL'i
+     * {@code WHERE STATUS = 'FAILED' OR (STATUS IS NULL AND COMPLETION_DATE IS NULL) AND PUBLICATION_DATE < ?}
+     * olarak kurar: AND, OR'dan once baglar, yas esigi FAILED dalina UYGULANMAZ. Sonuc: 1 dakikalik FAILED
+     * kayit "en az 5 dk" secenegine ragmen hemen yeniden teslim edilir (backoff yok). Bu test kusuru sabitler;
+     * surum yukseltmesinde duzelirse kirilir ve referans notu guncellenir. Yasa gore geri alma icin
+     * {@code resubmitIncompletePublicationsOlderThan(Duration)} kullanilir (dogru parantezli sorgu, test 3c).
+     */
+    @Test
+    void knownDefect_minAgeIsIgnoredForFailedPublicationsInModulith211Jdbc() {
+        String sku = sku();
+        UUID id = orders.placeOrder(sku, 1);
+        awaitStatus(id, "FAILED");
+        Instant publishedAt = ((Timestamp) publication(id).get("publication_date")).toInstant();
+        inventory.provision(sku, 5);
+
+        clock.advance(Duration.ofMinutes(1));
+        assertThat(Duration.between(publishedAt, clock.instant())).isLessThan(Duration.ofMinutes(5));
+        incomplete.resubmitIncompletePublications(ResubmissionOptions.defaults()
+                .withMinAge(Duration.ofMinutes(5)).withFilter(forOrder(id)));
+
+        // Beklenen (dokumante edilen) davranis: secilmemeli. Gercek: yeniden teslim edilip tamamlaniyor.
+        awaitStatus(id, "COMPLETED");
+        assertThat(inventory.availableStock(sku)).hasValue(4);
+    }
+
+    // --- 3d: etki commit oldu ama "tamamlandi" yazilamadi -> yeniden teslim cift rezervasyon YAPMAZ --------
+
+    @Test
+    void redeliveryAfterLostCompletionDoesNotDoubleReserve() {
+        String sku = sku();
+        inventory.provision(sku, 10);
+        // Surec cokusu simulasyonu: dinleyicinin transaction'i commit olduktan SONRA gelen "tamamlandi"
+        // yazimini DB'de sessizce yut (Modulith bunu ayri yazimla yapar; arada cokus = ayni durum).
+        jdbc.execute("CREATE TABLE IF NOT EXISTS lost_completion (publication_id UUID, at TIMESTAMPTZ DEFAULT now())");
+        jdbc.execute("""
+                CREATE OR REPLACE FUNCTION swallow_completion() RETURNS trigger AS $$
+                BEGIN
+                  IF NEW.completion_date IS NOT NULL AND OLD.completion_date IS NULL THEN
+                    INSERT INTO lost_completion (publication_id) VALUES (OLD.id);
+                    RETURN NULL;
+                  END IF;
+                  RETURN NEW;
+                END $$ LANGUAGE plpgsql""");
+        jdbc.execute("CREATE TRIGGER swallow_completion BEFORE UPDATE ON event_publication "
+                + "FOR EACH ROW EXECUTE FUNCTION swallow_completion()");
+        UUID id;
+        UUID publicationId;
+        try {
+            id = orders.placeOrder(sku, 2);
+            publicationId = (UUID) publication(id).get("id");
+            await().atMost(WAIT).until(() -> jdbc.queryForObject(
+                    "SELECT count(*) FROM lost_completion WHERE publication_id = ?", Long.class, publicationId) == 1L);
+        } finally {
+            jdbc.execute("DROP TRIGGER IF EXISTS swallow_completion ON event_publication");
+        }
+
+        // Etki kalici, publication tamamlanmamis: tam "at-least-once" penceresi
+        assertThat(inventory.availableStock(sku)).hasValue(8);
+        assertThat(inventory.reservationCount(id)).isEqualTo(1);
+        assertThat(publication(id).get("completion_date")).isNull();
+
+        clock.advance(Duration.ofMinutes(10));
+        incomplete.resubmitIncompletePublications(forOrder(id));
+
+        awaitStatus(id, "COMPLETED");
+        // Ikinci teslim dedup'a takildi: stok bir kez dustu, rezervasyon tek
+        assertThat(inventory.availableStock(sku)).hasValue(8);
+        assertThat(inventory.reservationCount(id)).isEqualTo(1);
+        assertThat((Integer) publication(id).get("completion_attempts")).isGreaterThanOrEqualTo(2);
+    }
+
+    // --- 3e: publish SONRASI istisna -> ne siparis ne publication (birlikte geri alinir) ------------------
+
+    @Test
+    void exceptionAfterPublishRollsBackOrderAndPublicationTogether() throws Exception {
+        String sku = sku();
+        inventory.provision(sku, 10);
+        AtomicReference<UUID> id = new AtomicReference<>();
+
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> {
+            id.set(orders.placeOrder(sku, 1));
+            assertThat(countPublicationsInTx(id.get())).isEqualTo(1); // publish gercekten oldu
+            throw new IllegalStateException("downstream step failed after publish");
+        })).isInstanceOf(IllegalStateException.class);
+
+        assertThat(countOrders(otherSession, id.get())).isZero();
+        assertThat(countPublications(otherSession, id.get())).isZero();
+        // AFTER_COMMIT dinleyici hic tetiklenmez: stok ve rezervasyon dokunulmamis
+        assertThat(inventory.availableStock(sku)).hasValue(10);
+        assertThat(inventory.reservationCount(id.get())).isZero();
+    }
+
+    // --- yardimcilar ------------------------------------------------------------------------------------
+
+    private static String sku() {
+        return "SKU-" + UUID.randomUUID();
+    }
+
+    private static Predicate<EventPublication> forOrder(UUID id) {
+        return p -> p.getEvent() instanceof OrderPlaced e && e.orderId().equals(id);
+    }
+
+    private void awaitStatus(UUID orderId, String status) {
+        await().atMost(WAIT).until(() -> status.equals(publication(orderId).get("status")));
+    }
+
+    private Map<String, Object> publication(UUID orderId) {
+        return jdbc.queryForMap("SELECT * FROM event_publication WHERE serialized_event LIKE ?", "%" + orderId + "%");
+    }
+
+    private boolean listenerWaitingOnLock() {
+        return jdbc.queryForObject("""
+                SELECT count(*) FROM pg_stat_activity
+                WHERE wait_event_type = 'Lock' AND query LIKE 'UPDATE inventory.stock%'
+                """, Long.class) > 0;
+    }
+
+    private long countOrdersInTx(UUID id) {
+        return jdbc.queryForObject("SELECT count(*) FROM ordering.orders WHERE id = ?", Long.class, id);
+    }
+
+    private long countPublicationsInTx(UUID id) {
+        return jdbc.queryForObject("SELECT count(*) FROM event_publication WHERE serialized_event LIKE ?",
+                Long.class, "%" + id + "%");
+    }
+
+    private static long countOrders(DataSource ds, UUID id) {
+        return count(ds, "SELECT count(*) FROM ordering.orders WHERE id = ?", id);
+    }
+
+    private static long countPublications(DataSource ds, UUID id) {
+        return count(ds, "SELECT count(*) FROM event_publication WHERE serialized_event LIKE ?", "%" + id + "%");
+    }
+
+    /** Spring'in transaction'ina KATILMAYAN ayri bir oturumdan (autocommit) sayim. */
+    private static long count(DataSource ds, String sql, Object arg) {
+        try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setObject(1, arg);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/test/java/com/acme/modulith/ModuleBoundaryViolationTest.java`
+
+```java
+package com.acme.modulith;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.core.Violations;
+
+import com.tngtech.archunit.core.importer.ImportOption;
+
+/**
+ * Seviye 1: verify() gercekten bir sinir ihlalini yakaliyor mu? (Negatif kanit olmadan "verify gecti"
+ * bir sey soylemez.) Ihlalli sinif src/test/java altinda, order paketinde: LeakyOrderStockPeek ->
+ * inventory.internal.StockRepository. Test siniflarini da iceren bir ImportOption ile modul modeli kurulur.
+ */
+class ModuleBoundaryViolationTest {
+
+    // Uretim siniflari + yalniz order paketindeki test siniflari. Tum test siniflarini almak baska (alakasiz)
+    // ihlaller de getirir: Modulith, test sinifindaki @Autowired alanlari "field injection" ihlali sayar.
+    private static final ImportOption INCLUDE_TEST_CLASSES = location ->
+            !location.contains("/test-classes/") || location.contains("/test-classes/com/acme/modulith/order/");
+
+    @Test
+    void verifyRejectsOrderReachingIntoInventoryInternals() {
+        ApplicationModules withTests = ApplicationModules.of(ModulithApp.class, INCLUDE_TEST_CLASSES);
+
+        // Ihlalli sinif gercekten order moduline atfedildi mi (yoksa test sessizce bosa gecer)
+        assertThat(withTests.getModuleByName("order").orElseThrow()
+                .contains("com.acme.modulith.order.LeakyOrderStockPeek")).isTrue();
+
+        assertThatThrownBy(withTests::verify)
+                .isInstanceOf(Violations.class)
+                .hasMessageContaining("LeakyOrderStockPeek")
+                .hasMessageContaining("com.acme.modulith.inventory.internal.StockRepository");
+
+        // Ihlal tam olarak bu bagimlilik: baska (ornegin gecerli) baglar ihlal sayilmiyor.
+        Violations violations = withTests.detectViolations();
+        assertThat(violations.getMessages())
+                .isNotEmpty()
+                .allSatisfy(m -> assertThat(m).contains("LeakyOrderStockPeek"));
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/test/java/com/acme/modulith/ModuleStructureTest.java`
+
+```java
+package com.acme.modulith;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.stream.Stream;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.modulith.core.ApplicationModule;
+import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.docs.Documenter;
+
+import com.acme.modulith.order.OrderPlaced;
+
+/** Seviye 1: gercek (uretim) kodun modul yapisi Bolum 16'daki kuralla dogrulanir. */
+class ModuleStructureTest {
+
+    // Varsayilan ImportOption test siniflarini disarida birakir: yalniz uretim kodu dogrulanir.
+    private final ApplicationModules modules = ApplicationModules.of(ModulithApp.class);
+
+    @Test
+    void productionCodeRespectsModuleBoundaries() {
+        modules.verify(); // ihlal varsa Violations firlatir
+        assertThat(modules.detectViolations().hasViolations()).isFalse();
+    }
+
+    @Test
+    void detectsOrderAndInventoryAndOnlyInventoryDependsOnOrder() {
+        assertThat(modules.stream().map(ApplicationModule::getIdentifier).map(Object::toString))
+                .containsExactlyInAnyOrder("order", "inventory");
+
+        ApplicationModule order = modules.getModuleByName("order").orElseThrow();
+        ApplicationModule inventory = modules.getModuleByName("inventory").orElseThrow();
+
+        // Olay order'in API'sinde (kok paket); inventory ona bagli, ters yon yok.
+        assertThat(order.contains(OrderPlaced.class)).isTrue();
+        assertThat(inventory.getBootstrapDependencies(modules)).isEmpty();
+        assertThat(inventory.getDirectDependencies(modules).contains(order)).isTrue();
+        assertThat(order.getDirectDependencies(modules).contains(inventory)).isFalse();
+    }
+
+    @Test
+    void writesModuleDocumentation() throws Exception {
+        Path out = Path.of("target", "spring-modulith-docs");
+        new Documenter(modules, Documenter.Options.defaults().withOutputFolder(out.toString()))
+                .writeModulesAsPlantUml()
+                .writeIndividualModulesAsPlantUml();
+        try (Stream<Path> files = Files.list(out)) {
+            assertThat(files.map(p -> p.getFileName().toString()))
+                    .contains("components.puml", "module-order.puml", "module-inventory.puml");
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/test/java/com/acme/modulith/MutableClock.java`
+
+```java
+package com.acme.modulith;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** Testte zamani elle ilerletilen Clock: "N dakikadan eski" kararlari beklemeden, deterministik test edilir. */
+public final class MutableClock extends Clock {
+
+    private final AtomicReference<Instant> now;
+
+    public MutableClock(Instant start) {
+        this.now = new AtomicReference<>(start);
+    }
+
+    public void advance(Duration d) {
+        now.updateAndGet(i -> i.plus(d));
+    }
+
+    @Override
+    public Instant instant() {
+        return now.get();
+    }
+
+    @Override
+    public ZoneId getZone() {
+        return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+        return this;
+    }
+}
+```
+
+---
+
+### `skeleton-example/modulith-example/src/test/java/com/acme/modulith/order/LeakyOrderStockPeek.java`
+
+```java
+package com.acme.modulith.order;
+
+import java.util.OptionalInt;
+
+import com.acme.modulith.inventory.internal.StockRepository;
+
+/**
+ * KASITLI SINIR IHLALI (yalniz test kaynaginda): order modulunun paketinde duran bir sinif, inventory'nin
+ * ic sinifina (inventory.internal.StockRepository) dogrudan bagimli. Uretim kodunda olsaydi
+ * ApplicationModules.of(ModulithApp.class).verify() kirmaliydi; ModuleBoundaryViolationTest bunu kanitlar.
+ * Uygulama context'ine girmez (bean degil).
+ */
+class LeakyOrderStockPeek {
+
+    private final StockRepository stock;
+
+    LeakyOrderStockPeek(StockRepository stock) {
+        this.stock = stock;
+    }
+
+    OptionalInt peek(String sku) {
+        return stock.available(sku);
+    }
+}
 ```
 
 ---
@@ -5592,12 +11386,23 @@ public record CreateOrderRequest(@NotBlank String sku, int quantity) {}
 <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
   <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
   <artifactId>order-core</artifactId>
+  <dependencyManagement><dependencies>
+    <!-- Gomulu PostgreSQL 18: lazy connection-fetch testi gercek PG'ye karsi kosar (Docker gerektirmez) -->
+    <dependency><groupId>io.zonky.test.postgres</groupId><artifactId>embedded-postgres-binaries-bom</artifactId><version>18.1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
   <dependencies>
     <dependency><groupId>com.acme</groupId><artifactId>platform-core</artifactId><version>${revision}</version></dependency>
     <dependency><groupId>com.acme</groupId><artifactId>order-api</artifactId><version>${revision}</version></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <!-- Disa giden istekler (SSRF filtreli egress client, referans 9.11) -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-restclient</artifactId></dependency>
+    <!-- Hikari + DataSource auto-config; spring.datasource.connection-fetch=lazy (referans 2.1) -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
     <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><scope>test</scope></dependency>
   </dependencies>
   <build><plugins>
@@ -5622,13 +11427,162 @@ public class OrderApp { public static void main(String[] a) { SpringApplication.
 
 ---
 
+### `skeleton-example/order-core/src/main/java/com/acme/order/config/ApiVersioningConfig.java`
+
+```java
+package com.acme.order.config;
+
+import java.time.ZoneOffset;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.accept.ApiVersionDeprecationHandler;
+import org.springframework.web.accept.StandardApiVersionDeprecationHandler;
+
+/**
+ * Surum cozumleme Boot property'leriyle (spring.mvc.apiversion.use.header vb.); Boot bu bean'i
+ * ObjectProvider<ApiVersionDeprecationHandler> uzerinden otomatik baglar (WebMvcAutoConfiguration).
+ *
+ * Dikkat: spring.mvc.apiversion.required=true, strateji tanimli her DispatcherServlet route'una uygulanir
+ * (surumsuz handler'lar ve ayni porttaki actuator dahil; yalniz ERROR dispatch muaf). Bu nedenle actuator ayri
+ * management portunda calisir ya da required=false + default surum secilir.
+ */
+@Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(ApiVersioningProperties.class)
+public class ApiVersioningConfig {
+
+    @Bean
+    ApiVersionDeprecationHandler apiVersionDeprecationHandler(ApiVersioningProperties props) {
+        StandardApiVersionDeprecationHandler handler = new StandardApiVersionDeprecationHandler();
+        for (ApiVersioningProperties.Deprecation d : props.deprecations()) {
+            StandardApiVersionDeprecationHandler.VersionSpec spec = handler.configureVersion(d.version())
+                    .setDeprecationDate(d.deprecatedAt().atZone(ZoneOffset.UTC))
+                    .setSunsetDate(d.sunsetAt().atZone(ZoneOffset.UTC));
+            if (d.link() != null) spec.setDeprecationLink(d.link());
+        }
+        return handler;
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/config/ApiVersioningProperties.java`
+
+```java
+package com.acme.order.config;
+
+import java.net.URI;
+import java.time.Instant;
+import java.util.List;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/**
+ * Kaldirilacak API surumleri (referans Bolum 20): Deprecation (RFC 9745, @epoch), Sunset (RFC 8594) ve
+ * Link rel="deprecation" header'lari bu listeden uretilir. Sunset sonrasi surum kapatilir (410).
+ */
+@ConfigurationProperties("api")
+public record ApiVersioningProperties(List<Deprecation> deprecations) {
+    public ApiVersioningProperties { deprecations = deprecations == null ? List.of() : List.copyOf(deprecations); }
+    public record Deprecation(String version, Instant deprecatedAt, Instant sunsetAt, URI link) {}
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/config/ClockConfig.java`
+
+```java
+package com.acme.order.config;
+
+import java.time.Clock;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/** Zaman tek kaynaktan: testler sabit/ilerletilebilir Clock verir, uretim UTC sistem saati. */
+@Configuration(proxyBeanMethods = false)
+public class ClockConfig {
+    @Bean
+    Clock clock() { return Clock.systemUTC(); }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/config/EgressClientConfig.java`
+
+```java
+package com.acme.order.config;
+
+import org.springframework.boot.http.client.InetAddressFilter;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.client.RestClient;
+
+/**
+ * SSRF korumasi (referans Bolum 9.11). InetAddressFilter bean'i Boot 4.1 HttpClientAutoConfiguration tarafindan
+ * HttpClientSettings'e alinir ve auto-configured her RestClient/WebClient'a uygulanir: hedef host DNS'ten
+ * cozuldukten SONRA ic/ozel adrese (10/8, 172.16/12, 192.168/16, 127/8, link-local, NAT64) giden istek
+ * FilteredHostException ile kesilir; DNS rebinding'e karsi da bu yuzden etkilidir.
+ *
+ * Dikkat: bean globaldir; ic servis client'lari (spring.http.serviceclient.*) da ayni filtreyi alir. Ic ag
+ * adreslerine giden servis client'lari icin filtre uygulanmamis ayri bir ClientHttpRequestFactory gerekir.
+ * Timeout/redirect ayarlari spring.http.clients.* altindadir (application.yml).
+ */
+@Configuration(proxyBeanMethods = false)
+public class EgressClientConfig {
+
+    /** Yalniz genel internet adresleri: ic ag, loopback, link-local (169.254.169.254 metadata) reddedilir. */
+    @Bean
+    InetAddressFilter egressAddressFilter() { return InetAddressFilter.externalAddresses(); }
+
+    /** Kullanici kaynakli URL'lere (webhook, onizleme) giden client; auto-configured Builder filtreyi tasir. */
+    @Bean
+    RestClient egressRestClient(RestClient.Builder builder) { return builder.build(); }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/config/ResilienceConfig.java`
+
+```java
+package com.acme.order.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.resilience.annotation.EnableResilientMethods;
+
+/**
+ * Spring Framework 7 yerlesik dayaniklilik: @Retryable ve @ConcurrencyLimit (semaphore bulkhead) icin
+ * proxy post-processor'lari (referans Bolum 4.7). Retry senkron HTTP yolunda kullanilmaz; worker'larda,
+ * idempotent ve gecici hatalarda kullanilir.
+ */
+@Configuration(proxyBeanMethods = false)
+@EnableResilientMethods
+public class ResilienceConfig {}
+```
+
+---
+
 ### `skeleton-example/order-core/src/main/java/com/acme/order/config/WebConfig.java`
 
 ```java
 package com.acme.order.config;
+
+import com.acme.order.web.CurrentAccountArgumentResolver;
+import java.util.List;
 import org.springframework.context.annotation.Configuration;
-@Configuration
-public class WebConfig {}
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/** MVC kablolamasi. API versiyonlama Boot property'leriyle (spring.mvc.apiversion.*) yapilir; burada kod yok. */
+@Configuration(proxyBeanMethods = false)
+public class WebConfig implements WebMvcConfigurer {
+    @Override
+    public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
+        resolvers.add(new CurrentAccountArgumentResolver());
+    }
+}
 ```
 
 ---
@@ -5637,23 +11591,62 @@ public class WebConfig {}
 
 ```java
 package com.acme.order.controller;
+
 import com.acme.order.api.dto.CreateOrderRequest;
 import com.acme.order.service.OrderService;
+import com.acme.order.service.OrderSummary;
+import com.acme.order.web.CurrentAccount;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Public REST. Major surum path'te (/v1), minor surum Spring Framework 7 API versiyonlama ile
+ * (API-Version header'i; referans Bolum 20). Kimlik yalniz @CurrentAccount'tan gelir (Bolum 6.5).
+ */
 @RestController
 @RequestMapping("/v1/orders")
 public class OrderController {
     private final OrderService service;
     public OrderController(OrderService service) { this.service = service; }
+
     @PostMapping
-    public ResponseEntity<UUID> create(@RequestHeader("X-Idempotency-Key") UUID key, @Valid @RequestBody CreateOrderRequest req) {
-        return ResponseEntity.ok(service.create(UUID.randomUUID(), key, req));
+    public ResponseEntity<UUID> create(@CurrentAccount UUID accountId,
+                                       @RequestHeader("X-Idempotency-Key") UUID idempotencyKey,
+                                       @Valid @RequestBody CreateOrderRequest req) {
+        return ResponseEntity.ok(service.create(accountId, idempotencyKey, req));
     }
+
     @PostMapping("/{orderId}/cancel")
-    public ResponseEntity<Void> cancel(@PathVariable("orderId") UUID orderId) { service.cancel(UUID.randomUUID(), orderId); return ResponseEntity.noContent().build(); }
+    public ResponseEntity<Void> cancel(@CurrentAccount UUID accountId, @PathVariable("orderId") UUID orderId) {
+        service.cancel(accountId, orderId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** 1.0: kaldirilacak surum; Deprecation/Sunset/Link header'larini ApiVersioningConfig ekler. */
+    @GetMapping(path = "/{orderId}/summary", version = "1.0")
+    public OrderSummaryV1 summaryV1(@CurrentAccount UUID accountId, @PathVariable("orderId") UUID orderId) {
+        OrderSummary s = service.summary(accountId, orderId);
+        return new OrderSummaryV1(s.id(), s.status());
+    }
+
+    /** 1.1: kirici degisiklik (alan ekleme degil, sema degisimi) -> ayni path, yeni surum. */
+    @GetMapping(path = "/{orderId}/summary", version = "1.1")
+    public OrderSummaryV1_1 summaryV1_1(@CurrentAccount UUID accountId, @PathVariable("orderId") UUID orderId) {
+        OrderSummary s = service.summary(accountId, orderId);
+        return new OrderSummaryV1_1(s.id(), new OrderSummaryV1_1.Line(s.sku(), s.quantity()), s.status());
+    }
+
+    // Yanit DTO'lari gercek projede order-api/dto'da yasar; iskelette api modulu degistirilmedigi icin buradadir.
+    public record OrderSummaryV1(UUID id, String status) {}
+    public record OrderSummaryV1_1(UUID id, Line line, String status) { public record Line(String sku, int quantity) {} }
 }
 ```
 
@@ -5664,7 +11657,55 @@ public class OrderController {
 ```java
 package com.acme.order.entity;
 import java.util.UUID;
-public class Order { private UUID id; private String sku; public UUID getId() { return id; } public String getSku() { return sku; } }
+/** Iskelet entity'si (gercek projede JPA @Entity + @Table(schema = "order")). Entity api paketine cikmaz. */
+public class Order {
+    private final UUID id; private final String sku; private final int quantity; private final String status;
+    public Order(UUID id, String sku, int quantity, String status) { this.id = id; this.sku = sku; this.quantity = quantity; this.status = status; }
+    public UUID getId() { return id; } public String getSku() { return sku; }
+    public int getQuantity() { return quantity; } public String getStatus() { return status; }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/exception/CommonErrorCode.java`
+
+```java
+package com.acme.order.exception;
+
+import org.springframework.http.HttpStatus;
+
+/**
+ * Ortak (servis bagimsiz) hata kodlari: validation blogu 90000-90099, system blogu 99998-99999 (referans Bolum 7.2).
+ * Global handler standart MVC hatalarini bu kodlara esler (Bolum 7.3). Bu enum kavramsal olarak ortak kutuphaneye
+ * (platform-core) aittir; bu sprintte modul siniri disina cikilmadigi icin order-core'da tanimlidir ve tasinirken
+ * kodlar/servis adlari degismez (ErrorCodeUniquenessTest bloklari korur).
+ */
+public enum CommonErrorCode implements com.acme.platform.core.ErrorCode {
+    // --- validation: bean validation, bind, malformed body, type mismatch, eksik parametre/header (90000-90009)
+    VALIDATION(90000, "validation", "Request validation failed.", HttpStatus.BAD_REQUEST),
+    REQUEST_NOT_READABLE(90001, "validation", "Request body could not be read.", HttpStatus.BAD_REQUEST),
+    TYPE_MISMATCH(90002, "validation", "Request parameter has an invalid type.", HttpStatus.BAD_REQUEST),
+    MISSING_PARAMETER(90003, "validation", "Required request parameter is missing.", HttpStatus.BAD_REQUEST),
+    // --- istek sekli / route (90010-90019)
+    NOT_FOUND(90010, "validation", "Resource not found.", HttpStatus.NOT_FOUND),
+    METHOD_NOT_ALLOWED(90011, "validation", "HTTP method not allowed.", HttpStatus.METHOD_NOT_ALLOWED),
+    UNSUPPORTED_MEDIA_TYPE(90012, "validation", "Unsupported media type.", HttpStatus.UNSUPPORTED_MEDIA_TYPE),
+    NOT_ACCEPTABLE(90013, "validation", "Requested media type is not acceptable.", HttpStatus.NOT_ACCEPTABLE),
+    PAYLOAD_TOO_LARGE(90014, "validation", "Request payload is too large.", HttpStatus.CONTENT_TOO_LARGE),
+    // --- API versiyonlama (90020-90029): eksik/desteklenmeyen API-Version (referans Bolum 20)
+    API_VERSION_INVALID(90020, "validation", "API version is missing or not supported.", HttpStatus.BAD_REQUEST),
+    // --- system
+    UPSTREAM_ERROR(99998, "system", "Upstream service failed.", HttpStatus.BAD_GATEWAY),
+    INTERNAL_ERROR(99999, "system", "Unexpected error.", HttpStatus.INTERNAL_SERVER_ERROR);
+
+    private final int code; private final String service; private final String message; private final HttpStatus httpStatus;
+    CommonErrorCode(int code, String service, String message, HttpStatus httpStatus) {
+        this.code = code; this.service = service; this.message = message; this.httpStatus = httpStatus;
+    }
+    public int getCode() { return code; } public String getMessage() { return message; }
+    public String getService() { return service; } public HttpStatus getHttpStatus() { return httpStatus; }
+}
 ```
 
 ---
@@ -5674,13 +11715,149 @@ public class Order { private UUID id; private String sku; public UUID getId() { 
 ```java
 package com.acme.order.exception;
 import org.springframework.http.HttpStatus;
+/** order servisinin kod blogu: 11000-11999 (referans Bolum 7.2; blok tablosu README'de). */
 public enum ErrorCode implements com.acme.platform.core.ErrorCode {
     ORDER_NOT_FOUND(11001, "Order not found.", HttpStatus.NOT_FOUND),
-    ORDER_NOT_CANCELLABLE(11002, "Order cannot be cancelled.", HttpStatus.CONFLICT);
+    ORDER_NOT_CANCELLABLE(11002, "Order cannot be cancelled.", HttpStatus.CONFLICT),
+    // Is kurali reddi: istek sekli dogru (400 degil) ama icerik kabul edilemez -> 422
+    ORDER_QUANTITY_INVALID(11003, "Order quantity is out of range.", HttpStatus.UNPROCESSABLE_CONTENT);
     private final int code; private final String message; private final HttpStatus httpStatus;
     ErrorCode(int c, String m, HttpStatus s) { code = c; message = m; httpStatus = s; }
     public int getCode() { return code; } public String getMessage() { return message; }
     public String getService() { return "order"; } public HttpStatus getHttpStatus() { return httpStatus; }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/exception/OrderServiceException.java`
+
+```java
+package com.acme.order.exception;
+
+import com.acme.platform.core.ServiceException;
+import java.util.List;
+
+/**
+ * order servisinin tipli istisnasi (referans Bolum 7.1). details istemciye DONER (yalniz gosterilebilir k=v),
+ * safeLogReason/safeLogCategory YALNIZ log icindir (Bolum 7.4): ikisi asla karistirilmaz.
+ */
+public class OrderServiceException extends ServiceException {
+    private final List<String> details;
+    private final String safeLogReason;
+    private final String safeLogCategory;
+
+    public OrderServiceException(ErrorCode code) { this(code, null, null, List.of()); }
+
+    public OrderServiceException(ErrorCode code, String safeLogReason) { this(code, safeLogReason, null, List.of()); }
+
+    public OrderServiceException(ErrorCode code, String safeLogReason, String safeLogCategory, List<String> details) {
+        super(code);
+        this.safeLogReason = safeLogReason;
+        this.safeLogCategory = safeLogCategory;
+        this.details = List.copyOf(details);
+    }
+
+    public List<String> getDetails() { return details; }
+    public String getSafeLogReason() { return safeLogReason; }
+    public String getSafeLogCategory() { return safeLogCategory; }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/logging/SensitiveLogSanitizer.java`
+
+```java
+package com.acme.order.logging;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.regex.Pattern;
+
+/**
+ * Log satirina girecek serbest metin icin tek kapi (referans Bolum 8.4). Kural: log satiri allowlist'teki
+ * alanlardan (code=, reason=, outcome=, exceptionType=, teknik id) kurulur; kullanicidan/saglayicidan gelen
+ * her metin (SKU, exception mesaji, URL) yalniz bu sinif uzerinden gecerek yazilir. Parametreli loglama
+ * sanitize yerine gecmez: {} icine giren deger de ham metindir.
+ *
+ * Kavramsal olarak ortak kutuphaneye (platform-core) aittir; bu sprintte modul siniri disina cikilmadi.
+ */
+public final class SensitiveLogSanitizer {
+
+    static final int MAX_LENGTH = 240;
+    private static final String REDACTED = "[REDACTED]";
+
+    /** k=v veya JSON icindeki gizli alan adlari; deger sonraki ayiraca kadar redakte edilir. */
+    private static final Pattern SECRET_FIELD = Pattern.compile(
+            "(?i)\\b(token|access_token|refresh_token|password|passwd|pwd|secret|otp|ciphertext|authorization|api[_-]?key|bearer)\\b"
+                    + "(\\s*[=:]\\s*\"?)([^\\s,;&\"}\\]]+)");
+    /** Uzun base64/hex bloklari (JWT, sifreli icerik, anahtar) - 32+ karakter. */
+    private static final Pattern LONG_OPAQUE = Pattern.compile("[A-Za-z0-9+/_\\-]{32,}={0,2}");
+    private static final Pattern EMAIL = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
+    /** +90 555 123 45 67, 05551234567, (555) 123-4567 gibi 10-15 haneli diziler. */
+    private static final Pattern PHONE = Pattern.compile("\\+?\\d[\\d\\s().-]{8,18}\\d");
+    private static final Pattern DIGITS = Pattern.compile("\\D");
+
+    private SensitiveLogSanitizer() {}
+
+    /** CR/LF (log injection), gizli alanlar, e-posta, telefon, uzun opak bloklar; 240 karakterde keser. */
+    public static String sanitize(String raw) {
+        if (raw == null) return "";
+        String s = raw.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ');
+        s = SECRET_FIELD.matcher(s).replaceAll(m -> m.group(1) + m.group(2) + REDACTED);
+        s = EMAIL.matcher(s).replaceAll(m -> maskEmail(m.group()));
+        s = PHONE.matcher(s).replaceAll(m -> maskPhone(m.group()));
+        s = LONG_OPAQUE.matcher(s).replaceAll(REDACTED);
+        return s.length() > MAX_LENGTH ? s.substring(0, MAX_LENGTH) + "..." : s;
+    }
+
+    /** Ulke kodu/ilk 2 hane + son 2 hane kalir: +905551234567 -> +90*******67. */
+    public static String maskPhone(String phone) {
+        if (phone == null) return "";
+        String digits = DIGITS.matcher(phone).replaceAll("");
+        if (digits.length() < 6) return "***";
+        int keepHead = phone.startsWith("+") ? 2 : 1;
+        String head = (phone.startsWith("+") ? "+" : "") + digits.substring(0, keepHead);
+        return head + "*".repeat(digits.length() - keepHead - 2) + digits.substring(digits.length() - 2);
+    }
+
+    /** jane.doe@example.com -> j***@e***.com (alan adinin TLD'si kalir). */
+    public static String maskEmail(String email) {
+        if (email == null) return "";
+        int at = email.indexOf('@');
+        if (at < 1) return "***";
+        String local = email.substring(0, at);
+        String domain = email.substring(at + 1);
+        int dot = domain.lastIndexOf('.');
+        String tld = dot > 0 ? domain.substring(dot) : "";
+        return local.charAt(0) + "***@" + (domain.isEmpty() ? "" : domain.charAt(0)) + "***" + tld;
+    }
+
+    /** Token'i loglamadan iliskilendirmek icin kisa sha256 parmak izi (12 hex). */
+    public static String tokenFingerprint(String token) {
+        if (token == null || token.isEmpty()) return "";
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
+            return "sha256:" + HexFormat.of().formatHex(hash, 0, 6);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
+    /**
+     * Root-cause tipi + sanitize edilmis mesaj. Ham exception mesaji (PG DETAIL satiri, HTTP istemci URL'si,
+     * saglayici yaniti) sik sik PII/secret tasir; log'a yalniz bu ozet yazilir, throwable'in kendisi eklenmez.
+     */
+    public static String safeExceptionSummary(Throwable t) {
+        if (t == null) return "";
+        Throwable root = t;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        String msg = root.getMessage() == null ? "" : ": " + sanitize(root.getMessage());
+        return root.getClass().getSimpleName() + msg;
+    }
 }
 ```
 
@@ -5691,10 +11868,19 @@ public enum ErrorCode implements com.acme.platform.core.ErrorCode {
 ```java
 package com.acme.order.repository;
 import com.acme.order.entity.Order;
-import java.util.Optional; import java.util.UUID;
+import java.util.List; import java.util.Optional; import java.util.UUID;
 import org.springframework.stereotype.Repository;
+/**
+ * Iskelet repository'si (gercek projede Spring Data JPA / JdbcClient). Metot sozlesmeleri gercek olanlarla aynidir:
+ * updateStatus etkilenen satir sayisini doner (idempotent; worker retry'i buna dayanir).
+ */
 @Repository
-public class OrderRepository { public Optional<Order> findById(UUID id) { return Optional.empty(); } }
+public class OrderRepository {
+    public Optional<Order> findById(UUID id) { return Optional.empty(); }
+    public Order save(Order order) { return order; }
+    public int updateStatus(UUID id, String status) { return 0; }
+    public List<Order> findAll() { return List.of(); }
+}
 ```
 
 ---
@@ -5705,7 +11891,24 @@ public class OrderRepository { public Optional<Order> findById(UUID id) { return
 package com.acme.order.service;
 import com.acme.order.api.dto.CreateOrderRequest;
 import java.util.UUID;
-public interface OrderService { UUID create(UUID accountId, UUID idempotencyKey, CreateOrderRequest req); void cancel(UUID accountId, UUID orderId); }
+public interface OrderService {
+    UUID create(UUID accountId, UUID idempotencyKey, CreateOrderRequest req);
+    void cancel(UUID accountId, UUID orderId);
+    OrderSummary summary(UUID accountId, UUID orderId);
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/service/OrderSummary.java`
+
+```java
+package com.acme.order.service;
+
+import java.util.UUID;
+
+/** Servis katmaninin okuma modeli; controller bunu surume gore DTO'ya esler (entity controller'a cikmaz). */
+public record OrderSummary(UUID id, String sku, int quantity, String status) {}
 ```
 
 ---
@@ -5714,19 +11917,410 @@ public interface OrderService { UUID create(UUID accountId, UUID idempotencyKey,
 
 ```java
 package com.acme.order.service.impl;
+
 import com.acme.order.api.dto.CreateOrderRequest;
+import com.acme.order.entity.Order;
 import com.acme.order.exception.ErrorCode;
+import com.acme.order.exception.OrderServiceException;
+import com.acme.order.logging.SensitiveLogSanitizer;
 import com.acme.order.repository.OrderRepository;
 import com.acme.order.service.OrderService;
-import com.acme.platform.core.ServiceException;
+import com.acme.order.service.OrderSummary;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+
+/**
+ * Log sozlesmesi (referans Bolum 8.2/8.4): satirlar allowlist alanlarla kurulur (code=, reason=, outcome=,
+ * operation=, orderId=). accountId kisisel veriyle eslenebilir oldugu icin log'a yazilmaz; istemciden gelen
+ * serbest metin (sku) yalniz SensitiveLogSanitizer'dan gecerek yazilir.
+ */
 @Service
 public class OrderServiceImpl implements OrderService {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
+    static final int MAX_QUANTITY = 1000;
+
     private final OrderRepository repo;
+
     public OrderServiceImpl(OrderRepository repo) { this.repo = repo; }
-    public UUID create(UUID a, UUID k, CreateOrderRequest r) { return UUID.randomUUID(); }
-    public void cancel(UUID a, UUID id) { repo.findById(id).orElseThrow(() -> new ServiceException(ErrorCode.ORDER_NOT_FOUND)); }
+
+    @Override
+    public UUID create(UUID accountId, UUID idempotencyKey, CreateOrderRequest req) {
+        if (req.quantity() < 1 || req.quantity() > MAX_QUANTITY) {
+            // sku ham yazilmaz: CR/LF ile sahte log satiri ve icine yapistirilmis telefon/e-posta/token olabilir.
+            throw reject(ErrorCode.ORDER_QUANTITY_INVALID, "QUANTITY_OUT_OF_RANGE",
+                    "sku=" + SensitiveLogSanitizer.sanitize(req.sku()));
+        }
+        UUID id = UUID.randomUUID(); // gercek projede UUIDv7 (Bolum 10.3)
+        repo.save(new Order(id, req.sku(), req.quantity(), "CREATED"));
+        log.info("Order created: operation=ORDER_CREATE outcome=SUCCESS orderId={}", id);
+        return id;
+    }
+
+    @Override
+    public void cancel(UUID accountId, UUID orderId) {
+        Order order = repo.findById(orderId)
+                .orElseThrow(() -> reject(ErrorCode.ORDER_NOT_FOUND, "NOT_FOUND", "orderId=" + orderId));
+        if (!"CREATED".equals(order.getStatus())) {
+            // status sabit bir durum degeridir (serbest metin degil); sebep olarak loglanabilir.
+            throw reject(ErrorCode.ORDER_NOT_CANCELLABLE, "STATUS_" + order.getStatus(), "orderId=" + orderId);
+        }
+        repo.updateStatus(orderId, "CANCELLED");
+        log.info("Order cancelled: operation=ORDER_CANCEL outcome=SUCCESS orderId={}", orderId);
+    }
+
+    @Override
+    public OrderSummary summary(UUID accountId, UUID orderId) {
+        Order o = repo.findById(orderId)
+                .orElseThrow(() -> new OrderServiceException(ErrorCode.ORDER_NOT_FOUND, "NOT_FOUND"));
+        return new OrderSummary(o.getId(), o.getSku(), o.getQuantity(), o.getStatus());
+    }
+
+    /** Tek red satiri: "Order rejected: code=X reason=Y outcome=REJECTED <guvenli baglam>"; sonra tipli istisna. */
+    private static OrderServiceException reject(ErrorCode code, String reason, String safeContext) {
+        log.warn("Order rejected: code={} reason={} outcome=REJECTED {}", code, reason, safeContext);
+        return new OrderServiceException(code, reason);
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/web/ApiResponse.java`
+
+```java
+package com.acme.order.web;
+
+/** Yanit zarfi: hatalar HER ZAMAN zarflidir; basari yanitlari bu iskelette ham doner (referans Bolum 6.2 karari). */
+public record ApiResponse<T>(boolean ok, T data, ErrorResponse error) {
+    public static ApiResponse<Void> error(ErrorResponse error) { return new ApiResponse<>(false, null, error); }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/web/CurrentAccount.java`
+
+```java
+package com.acme.order.web;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Kimlik baglami: dogrulanmis service JWT'nin sub claim'i (request attribute x.accountId) -> UUID.
+ * Hesap kimligi ASLA path/query/body'den alinmaz (IDOR; referans Bolum 6.5).
+ */
+@Target(ElementType.PARAMETER)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface CurrentAccount {}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/web/CurrentAccountArgumentResolver.java`
+
+```java
+package com.acme.order.web;
+
+import java.util.UUID;
+import org.springframework.core.MethodParameter;
+import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.bind.support.WebDataBinderFactory;
+import org.springframework.web.context.request.NativeWebRequest;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.method.support.ModelAndViewContainer;
+
+/**
+ * @CurrentAccount UUID cozumleyicisi. Kaynak yalniz guvenlik filtresinin koydugu request attribute'udur;
+ * attribute yoksa istek servise ULASMADAN 400 ile reddedilir (filtre yanlis sirada/eksik demektir).
+ */
+public class CurrentAccountArgumentResolver implements HandlerMethodArgumentResolver {
+
+    public static final String ACCOUNT_ID_ATTRIBUTE = "x.accountId";
+
+    @Override
+    public boolean supportsParameter(MethodParameter parameter) {
+        return parameter.hasParameterAnnotation(CurrentAccount.class) && UUID.class.equals(parameter.getParameterType());
+    }
+
+    @Override
+    public Object resolveArgument(MethodParameter parameter, ModelAndViewContainer mav, NativeWebRequest request,
+                                  WebDataBinderFactory binderFactory) throws ServletRequestBindingException {
+        Object value = request.getAttribute(ACCOUNT_ID_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (value instanceof UUID uuid) return uuid;
+        if (value instanceof String s && !s.isBlank()) {
+            try { return UUID.fromString(s); } catch (IllegalArgumentException ignored) { /* asagida reddedilir */ }
+        }
+        // Mesaj sabittir: attribute degeri (ne olursa olsun) yanita veya log'a tasinmaz.
+        throw new ServletRequestBindingException("Authenticated account context is missing");
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/web/ErrorResponse.java`
+
+```java
+package com.acme.order.web;
+
+import java.util.List;
+
+/**
+ * Tek hata zarfi (referans Bolum 6.2). details yalniz istemciye gosterilebilir k=v tasir; reddedilen deger,
+ * exception metni veya log'a ozel sebep (safeLogReason) buraya ASLA konmaz (Bolum 7.4).
+ */
+public record ErrorResponse(int code, String message, String service, String path, long timestamp, String traceId,
+                            List<String> details) {}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/web/GlobalServiceExceptionHandler.java`
+
+```java
+package com.acme.order.web;
+
+import com.acme.order.exception.CommonErrorCode;
+import com.acme.order.exception.OrderServiceException;
+import com.acme.order.logging.SensitiveLogSanitizer;
+import com.acme.platform.core.ErrorCode;
+import com.acme.platform.core.ServiceException;
+import jakarta.validation.ConstraintViolationException;
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import org.springframework.beans.TypeMismatchException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.accept.InvalidApiVersionException;
+import org.springframework.web.accept.MissingApiVersionException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+/**
+ * Global handler (referans Bolum 7.3). ResponseEntityExceptionHandler'dan turer: standart MVC hatalarinin tamami
+ * (400/404/405/406/413/415, API version 400) taban sinifta tek noktadan handleExceptionInternal'a duser; burada
+ * kod eslemesi ve tek zarf uretilir. Boylece yeni bir MVC hata tipi 500'e dusmez.
+ *
+ * Gizlilik: yanita ve log'a reddedilen deger, exception metni ve body ASLA yazilmaz; 500'de yalniz
+ * exceptionType + sanitize edilmis ozet loglanir (ham throwable log olayina eklenmez, cunku mesaji PII tasiyabilir).
+ */
+@RestControllerAdvice
+public class GlobalServiceExceptionHandler extends ResponseEntityExceptionHandler {
+
+    public static final String TRACE_ID_HEADER = "X-Trace-Id";
+    private static final Logger log = LoggerFactory.getLogger(GlobalServiceExceptionHandler.class);
+
+    private final Clock clock;
+
+    public GlobalServiceExceptionHandler(Clock clock) { this.clock = clock; }
+
+    /** Is hatalari: status/kod exception'dan; safeLogReason yalniz log'a, details yalniz yanita. */
+    @ExceptionHandler(ServiceException.class)
+    public ResponseEntity<Object> handleServiceException(ServiceException ex, WebRequest request) {
+        ErrorCode code = ex.getErrorCode();
+        List<String> details = ex instanceof OrderServiceException o ? o.getDetails() : List.of();
+        String reason = ex instanceof OrderServiceException o ? o.getSafeLogReason() : null;
+        String category = ex instanceof OrderServiceException o ? o.getSafeLogCategory() : null;
+        String traceId = currentTraceId();
+        HttpStatus status = code.getHttpStatus();
+        if (status.is5xxServerError()) {
+            log.error("Request failed: code={} status={} reason={} category={} exceptionType={} traceId={}",
+                    code, status.value(), reason, category, ex.getClass().getSimpleName(), traceId);
+        } else {
+            log.warn("Request rejected: code={} status={} reason={} category={} traceId={}",
+                    code, status.value(), reason, category, traceId);
+        }
+        return envelope(status, code, details, traceId, request);
+    }
+
+    /** @Validated metot parametreleri (ConstraintViolation) taban sinifta yoktur; acikca eslenir. */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<Object> handleConstraintViolation(ConstraintViolationException ex, WebRequest request) {
+        List<String> details = ex.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + "=" + v.getMessage()) // alan adi + kural mesaji; deger yok
+                .sorted().toList();
+        String traceId = currentTraceId();
+        log.warn("Request rejected: code={} status=400 exceptionType={} traceId={}",
+                CommonErrorCode.VALIDATION, ex.getClass().getSimpleName(), traceId);
+        return envelope(HttpStatus.BAD_REQUEST, CommonErrorCode.VALIDATION, details, traceId, request);
+    }
+
+    /** Beklenmeyen her sey: 500 + genel mesaj; log'a exceptionType ve sanitize ozet (Bolum 7.3 son satir). */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Object> handleUnexpected(Exception ex, WebRequest request) {
+        String traceId = currentTraceId();
+        log.error("Request failed: code={} status=500 exceptionType={} summary={} traceId={}",
+                CommonErrorCode.INTERNAL_ERROR, ex.getClass().getSimpleName(),
+                SensitiveLogSanitizer.safeExceptionSummary(ex), traceId);
+        return envelope(HttpStatus.INTERNAL_SERVER_ERROR, CommonErrorCode.INTERNAL_ERROR, List.of(), traceId, request);
+    }
+
+    /**
+     * ResponseEntityExceptionHandler'in TUM handleXxx metotlari buraya gelir (status taban sinifin karari).
+     * Eslenmeyen yeni bir tip 4xx ise VALIDATION, 5xx ise INTERNAL_ERROR olur; hicbiri ham metin tasimaz.
+     */
+    @Override
+    protected ResponseEntity<Object> handleExceptionInternal(Exception ex, Object body, HttpHeaders headers,
+                                                             HttpStatusCode status, WebRequest request) {
+        String traceId = currentTraceId();
+        if (status.is5xxServerError()) {
+            log.error("Request failed: code={} status={} exceptionType={} summary={} traceId={}",
+                    CommonErrorCode.INTERNAL_ERROR, status.value(), ex.getClass().getSimpleName(),
+                    SensitiveLogSanitizer.safeExceptionSummary(ex), traceId);
+            return envelope(status, CommonErrorCode.INTERNAL_ERROR, List.of(), traceId, request);
+        }
+        Mapping m = map(ex);
+        log.warn("Request rejected: code={} status={} exceptionType={} traceId={}",
+                m.code(), status.value(), ex.getClass().getSimpleName(), traceId);
+        return envelope(status, m.code(), m.details(), traceId, request);
+    }
+
+    private record Mapping(CommonErrorCode code, List<String> details) {}
+
+    private static Mapping map(Exception ex) {
+        return switch (ex) {
+            case MethodArgumentNotValidException e -> new Mapping(CommonErrorCode.VALIDATION, fieldDetails(e));
+            case HandlerMethodValidationException e -> new Mapping(CommonErrorCode.VALIDATION, parameterDetails(e));
+            case HttpMessageNotReadableException e -> new Mapping(CommonErrorCode.REQUEST_NOT_READABLE, List.of());
+            case MethodArgumentTypeMismatchException e ->
+                    new Mapping(CommonErrorCode.TYPE_MISMATCH, List.of("parameter=" + e.getName()));
+            case TypeMismatchException e -> new Mapping(CommonErrorCode.TYPE_MISMATCH, List.of());
+            case MissingServletRequestParameterException e ->
+                    new Mapping(CommonErrorCode.MISSING_PARAMETER, List.of("parameter=" + e.getParameterName()));
+            case MissingRequestHeaderException e ->
+                    new Mapping(CommonErrorCode.MISSING_PARAMETER, List.of("header=" + e.getHeaderName()));
+            case ServletRequestBindingException e -> new Mapping(CommonErrorCode.MISSING_PARAMETER, List.of());
+            case NoResourceFoundException e -> new Mapping(CommonErrorCode.NOT_FOUND, List.of());
+            case NoHandlerFoundException e -> new Mapping(CommonErrorCode.NOT_FOUND, List.of());
+            case HttpRequestMethodNotSupportedException e -> new Mapping(CommonErrorCode.METHOD_NOT_ALLOWED,
+                    e.getSupportedMethods() == null ? List.of() : List.of("allowed=" + String.join(",", e.getSupportedMethods())));
+            case HttpMediaTypeNotSupportedException e -> new Mapping(CommonErrorCode.UNSUPPORTED_MEDIA_TYPE,
+                    List.of("supported=" + MediaType.toString(e.getSupportedMediaTypes())));
+            case HttpMediaTypeNotAcceptableException e -> new Mapping(CommonErrorCode.NOT_ACCEPTABLE, List.of());
+            case MaxUploadSizeExceededException e -> new Mapping(CommonErrorCode.PAYLOAD_TOO_LARGE, List.of());
+            case MissingApiVersionException e -> new Mapping(CommonErrorCode.API_VERSION_INVALID, List.of());
+            case InvalidApiVersionException e -> new Mapping(CommonErrorCode.API_VERSION_INVALID, List.of());
+            default -> new Mapping(CommonErrorCode.VALIDATION, List.of());
+        };
+    }
+
+    /** Alan adi + kural mesaji (orn. sku=must not be blank). Reddedilen deger bilincli olarak alinmaz. */
+    private static List<String> fieldDetails(MethodArgumentNotValidException e) {
+        List<String> details = new ArrayList<>();
+        e.getBindingResult().getFieldErrors().forEach(f -> details.add(f.getField() + "=" + f.getDefaultMessage()));
+        e.getBindingResult().getGlobalErrors().forEach(g -> details.add(g.getObjectName() + "=" + g.getDefaultMessage()));
+        return details;
+    }
+
+    private static List<String> parameterDetails(HandlerMethodValidationException e) {
+        List<String> details = new ArrayList<>();
+        e.getParameterValidationResults().forEach(r -> {
+            String name = r.getMethodParameter().getParameterName();
+            String message = r.getResolvableErrors().isEmpty() ? "invalid" : r.getResolvableErrors().get(0).getDefaultMessage();
+            details.add((name != null ? name : "arg" + r.getMethodParameter().getParameterIndex()) + "=" + message);
+        });
+        return details;
+    }
+
+    private ResponseEntity<Object> envelope(HttpStatusCode status, ErrorCode code, List<String> details,
+                                            String traceId, WebRequest request) {
+        String path = request instanceof ServletWebRequest s ? s.getRequest().getRequestURI() : null;
+        ErrorResponse error = new ErrorResponse(code.getCode(), code.getMessage(), code.getService(), path,
+                clock.millis(), traceId, details);
+        return ResponseEntity.status(status)
+                .header(TRACE_ID_HEADER, traceId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.error(error));
+    }
+
+    /** traceId aktif span'den (Micrometer Tracing MDC'ye koyar); tracing yoksa yanit ve log ayni uretilmis id'yi tasir. */
+    static String currentTraceId() {
+        String fromSpan = MDC.get("traceId");
+        return fromSpan != null && !fromSpan.isBlank() ? fromSpan : UUID.randomUUID().toString().replace("-", "");
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/main/java/com/acme/order/worker/OrderMaintenanceWorker.java`
+
+```java
+package com.acme.order.worker;
+
+import com.acme.order.repository.OrderRepository;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.TransientDataAccessException;
+import org.springframework.resilience.annotation.ConcurrencyLimit;
+import org.springframework.resilience.annotation.Retryable;
+import org.springframework.stereotype.Component;
+
+/**
+ * Worker tarafi dayaniklilik (referans Bolum 4.7: retry yalniz worker'da, butceyle, idempotent islemde).
+ * Proxy tabanlidir: metotlar public ve self-invocation yoktur (ResilienceConfig @EnableResilientMethods).
+ */
+@Component
+public class OrderMaintenanceWorker {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderMaintenanceWorker.class);
+
+    private final OrderRepository repo;
+
+    public OrderMaintenanceWorker(OrderRepository repo) { this.repo = repo; }
+
+    /**
+     * Gecici DB hatalari (serialization_failure 40001, deadlock 40P01 -> TransientDataAccessException) toplam
+     * 3 denemeye kadar tekrarlanir; kalici hatalar (DataIntegrityViolation vb.) hemen yukari gider.
+     * Framework 7 @Retryable'da sayac maxRetries'tir (ilk deneme haric); maxAttempts diye bir nitelik yoktur.
+     */
+    @Retryable(includes = TransientDataAccessException.class, maxRetries = 2,
+            delayString = "${order.worker.retry-delay:100ms}", multiplier = 2.0)
+    public int markCancelled(UUID orderId) {
+        int updated = repo.updateStatus(orderId, "CANCELLED");
+        log.info("Order maintenance: operation=MARK_CANCELLED outcome={} orderId={}", updated == 1 ? "SUCCESS" : "NOOP", orderId);
+        return updated;
+    }
+
+    /** Projeksiyon rebuild'i deterministik olmali: ayni anda tek kosucu (semaphore bulkhead, bekleyenler kuyrukta). */
+    @ConcurrencyLimit(1)
+    public int rebuildProjection() {
+        int rows = repo.findAll().size();
+        log.info("Order maintenance: operation=REBUILD_PROJECTION outcome=SUCCESS rows={}", rows);
+        return rows;
+    }
 }
 ```
 
@@ -5754,6 +12348,45 @@ services:
 
 ---
 
+### `skeleton-example/order-core/src/main/resources/application.yml`
+
+```yaml
+# Ortamdan bagimsiz taban ayarlar. Ortam degerleri config/order.yml (deploy) ve application-local.yml'dedir.
+spring:
+  application:
+    name: order
+  mvc:
+    apiversion:
+      # Spring Framework 7 versiyonlama (referans Bolum 20): minor surum API-Version header'indan; major /v1 path'te.
+      # required=true strateji tanimli TUM route'lara uygulanir (surumsuz handler ve ayni porttaki actuator dahil):
+      # eksik/desteklenmeyen surum 400 API_VERSION_INVALID doner. Path-segment cozumleme (use.path-segment) da
+      # bir Boot property'sidir ama /internal/** gibi surumsuz path'leri de surum olarak parse edecegi icin burada secilmedi.
+      use:
+        header: API-Version
+      required: true
+      supported: [ "1.0", "1.1" ]
+  datasource:
+    # Boot 4.1: baglanti yalniz ilk SQL'de havuzdan alinir; @Transactional read-only cache hit'leri havuzu tutmaz (Bolum 2.1)
+    connection-fetch: lazy
+  http:
+    clients:
+      # Auto-configured tum client'lar icin kisa timeout (Bolum 4.7, 9.11 madde 4)
+      connect-timeout: 2s
+      read-timeout: 5s
+api:
+  # Kaldirilacak surumler: Deprecation (@epoch), Sunset (HTTP-date) ve Link rel="deprecation" header'lari (Bolum 20)
+  deprecations:
+    - version: "1.0"
+      deprecated-at: "2026-09-01T00:00:00Z"
+      sunset-at: "2027-03-01T00:00:00Z"
+      link: "https://docs.acme.example/order/api/deprecations#v1-0"
+order:
+  worker:
+    retry-delay: 100ms
+```
+
+---
+
 ### `skeleton-example/order-core/src/main/resources/config/order.yml`
 
 ```yaml
@@ -5776,6 +12409,31 @@ spring:
       inventory: { base-url: "${INVENTORY_URL}", connect-timeout: 2s, read-timeout: 5s }
 services:
   inventory.base-url: ${INVENTORY_URL}
+# Structured (JSON) log: Loki json stage / OTLP alimi icin (referans Bolum 8.1). Local profil duz metin kalir.
+logging:
+  structured:
+    format:
+      console: ecs
+    json:
+      stacktrace: { root: first, max-length: 4000 }
+```
+
+---
+
+### `skeleton-example/order-core/src/main/resources/db/migration/V1__init.sql`
+
+```
+-- order semasi: siparis kalemi. id uygulamada UUIDv7 ile uretilir (referans Bolum 10.3).
+CREATE TABLE "order".order_item (
+  id          UUID PRIMARY KEY,
+  account_id  UUID NOT NULL,
+  sku         TEXT NOT NULL,
+  quantity    INT  NOT NULL CHECK (quantity > 0),
+  status      TEXT NOT NULL DEFAULT 'CREATED' CHECK (status IN ('CREATED','CANCELLED')),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Hesabin siparis listesi (keyset sayfalama: created_at DESC, id DESC) icin.
+CREATE INDEX idx_order_item_account ON "order".order_item (account_id, created_at DESC, id DESC);
 ```
 
 ---
@@ -6145,6 +12803,1282 @@ class ErrorCodeUniquenessTest {
 
 ---
 
+### `skeleton-example/order-core/src/test/java/com/acme/order/config/EgressClientSsrfTest.java`
+
+```java
+package com.acme.order.config;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.http.client.FilteredHostException;
+import org.springframework.boot.http.client.InetAddressFilter;
+import org.springframework.boot.http.client.autoconfigure.HttpClientAutoConfiguration;
+import org.springframework.boot.http.client.autoconfigure.imperative.ImperativeHttpClientAutoConfiguration;
+import org.springframework.boot.restclient.autoconfigure.RestClientAutoConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.web.client.RestClient;
+
+/**
+ * SSRF kaniti (referans Bolum 9.11): InetAddressFilter.externalAddresses() bean'i auto-configured RestClient'a
+ * uygulanir; loopback'e (IP ile ve DNS'ten cozulen "localhost" ile) giden istek FilteredHostException ile kesilir
+ * ve sunucuya HIC ulasmaz. Filtresiz duz RestClient ayni istegi basarir: engelleyen sey filtredir.
+ * Sunucu gercek bir HTTP sunucusudur (com.sun.net.httpserver, 127.0.0.1, rastgele port).
+ */
+@SpringBootTest(classes = EgressClientConfig.class)
+@ImportAutoConfiguration({HttpClientAutoConfiguration.class, ImperativeHttpClientAutoConfiguration.class,
+        RestClientAutoConfiguration.class})
+class EgressClientSsrfTest {
+
+    static HttpServer server;
+    static int port;
+    static final AtomicInteger hits = new AtomicInteger();
+
+    @Autowired @Qualifier("egressRestClient") RestClient egress;
+    // ObjectProvider: bean silinirse context yine kalkar ve loopback testleri DAVRANISLA (istek sunucuya ulasir) kirilir.
+    @Autowired ObjectProvider<InetAddressFilter> filterProvider;
+
+    @BeforeAll
+    static void startLocalServer() throws IOException {
+        server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.createContext("/ping", exchange -> {
+            hits.incrementAndGet();
+            byte[] body = "pong".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(body); }
+        });
+        server.start();
+        port = server.getAddress().getPort();
+    }
+
+    @AfterAll
+    static void stopLocalServer() { if (server != null) server.stop(0); }
+
+    @BeforeEach
+    void resetHits() { hits.set(0); }
+
+    @Test
+    void loopbackIp_isBlockedByFilter_beforeAnyConnection() {
+        Throwable t = catchThrowable(() -> egress.get().uri("http://127.0.0.1:" + port + "/ping").retrieve().body(String.class));
+        assertThat(t).isNotNull();
+        assertThat(rootCause(t)).isInstanceOf(FilteredHostException.class);
+        assertThat(((FilteredHostException) rootCause(t)).getHost()).isEqualTo("127.0.0.1");
+        assertThat(hits).as("sunucuya ulasan istek").hasValue(0);
+    }
+
+    @Test
+    void hostnameResolvingToPrivateAddress_isBlocked_dnsRebindingSafe() {
+        Throwable t = catchThrowable(() -> egress.get().uri("http://localhost:" + port + "/ping").retrieve().body(String.class));
+        assertThat(t).isNotNull();
+        assertThat(rootCause(t)).isInstanceOf(FilteredHostException.class);
+        assertThat(((FilteredHostException) rootCause(t)).getHost()).isEqualTo("localhost");
+        assertThat(hits).hasValue(0);
+    }
+
+    @Test
+    void plainRestClientWithoutFilter_reachesTheSameServer() {
+        String body = RestClient.create().get().uri("http://127.0.0.1:" + port + "/ping").retrieve().body(String.class);
+        assertThat(body).isEqualTo("pong");
+        assertThat(hits).hasValue(1);
+    }
+
+    @Test
+    void filterClassifiesPrivateMetadataAndPublicAddresses() throws Exception {
+        InetAddressFilter filter = filterProvider.getObject();
+        // Literal IP: DNS sorgusu yok.
+        for (String internal : new String[]{"10.0.0.1", "172.16.0.1", "192.168.1.1", "127.0.0.1", "169.254.169.254", "::1", "fd00::1"}) {
+            assertThat(filter.matches(InetAddress.getByName(internal))).as(internal).isFalse();
+        }
+        for (String external : new String[]{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"}) {
+            assertThat(filter.matches(InetAddress.getByName(external))).as(external).isTrue();
+        }
+    }
+
+    static Throwable rootCause(Throwable t) {
+        Throwable r = t;
+        while (r.getCause() != null && r.getCause() != r) r = r.getCause();
+        return r;
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/config/LazyConnectionFetchIT.java`
+
+```java
+package com.acme.order.config;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import java.io.IOException;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+
+/**
+ * Boot 4.1 spring.datasource.connection-fetch=lazy kaniti (referans Bolum 2.1) - gercek PostgreSQL 18 (gomulu),
+ * kanit seviyesi 2: auto-configured DataSource LazyConnectionDataSourceProxy ile sarilir; getConnection() ve
+ * transaction ayarlari (setAutoCommit vb.) havuzdan baglanti ALMAZ; fiziksel baglanti ilk Statement'ta alinir.
+ * Karsilastirma ayni havuz uzerinden: sarilmamis Hikari getConnection() aninda aktif sayaci artirir.
+ */
+// Property test'te VERILMEZ: uretim application.yml'deki spring.datasource.connection-fetch=lazy kanitlanir
+// (yml'den silinirse bu test kirilir).
+@SpringBootTest(classes = LazyConnectionFetchIT.Config.class)
+class LazyConnectionFetchIT {
+
+    @Configuration(proxyBeanMethods = false)
+    @ImportAutoConfiguration(DataSourceAutoConfiguration.class)
+    static class Config {}
+
+    static EmbeddedPostgres pg;
+
+    @DynamicPropertySource
+    static void embeddedPostgres(DynamicPropertyRegistry registry) throws IOException {
+        pg = EmbeddedPostgres.builder().start();
+        registry.add("spring.datasource.url", () -> pg.getJdbcUrl("postgres", "postgres"));
+        registry.add("spring.datasource.username", () -> "postgres");
+        registry.add("spring.datasource.password", () -> "postgres");
+    }
+
+    @AfterAll
+    static void stopDb() throws IOException { if (pg != null) pg.close(); }
+
+    @Autowired DataSource dataSource;
+
+    @Test
+    void dataSourceBeanIsLazyProxyAroundHikari() throws Exception {
+        assertThat(dataSource).isInstanceOf(LazyConnectionDataSourceProxy.class);
+        assertThat(((LazyConnectionDataSourceProxy) dataSource).getTargetDataSource()).isInstanceOf(HikariDataSource.class);
+        assertThat(dataSource.unwrap(HikariDataSource.class)).isNotNull();
+    }
+
+    @Test
+    void getConnectionAndTransactionSetup_doNotBorrowFromPool_untilFirstStatement() throws Exception {
+        HikariDataSource hikari = dataSource.unwrap(HikariDataSource.class);
+
+        try (Connection lazy = dataSource.getConnection()) {
+            // Proxy dondu ama havuzdan odunc alinmis baglanti yok (havuz henuz baslamamis olabilir: pool == null).
+            assertThat(activeConnections(hikari)).as("getConnection() sonrasi aktif").isZero();
+            lazy.setAutoCommit(false);
+            lazy.setReadOnly(true);
+            assertThat(lazy.getAutoCommit()).isFalse();
+            assertThat(activeConnections(hikari)).as("transaction ayarlari sonrasi aktif").isZero();
+
+            try (Statement st = lazy.createStatement(); ResultSet rs = st.executeQuery("SELECT version()")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).startsWith("PostgreSQL 18");
+                assertThat(activeConnections(hikari)).as("ilk statement sonrasi aktif").isEqualTo(1);
+            }
+            assertThat(lazy.getAutoCommit()).isFalse(); // ayarlar fiziksel baglantiya uygulandi
+            lazy.rollback();
+        }
+        assertThat(activeConnections(hikari)).as("close sonrasi aktif").isZero();
+    }
+
+    @Test
+    void unwrappedHikari_isEager_forContrast() throws Exception {
+        HikariDataSource hikari = dataSource.unwrap(HikariDataSource.class);
+        try (Connection eager = hikari.getConnection()) {
+            assertThat(eager.isValid(1)).isTrue();
+            assertThat(activeConnections(hikari)).as("Hikari getConnection() aninda aktif").isEqualTo(1);
+        }
+        assertThat(activeConnections(hikari)).isZero();
+    }
+
+    /** Havuz ilk fiziksel baglantida baslar; baslamamissa odunc alinan baglanti da yoktur. */
+    static int activeConnections(HikariDataSource hikari) {
+        HikariPoolMXBean pool = hikari.getHikariPoolMXBean();
+        return pool == null ? 0 : pool.getActiveConnections();
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/controller/ApiVersionPathSegmentTest.java`
+
+```java
+package com.acme.order.controller;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.order.config.ApiVersioningConfig;
+import com.acme.order.config.ClockConfig;
+import com.acme.order.exception.CommonErrorCode;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Path-segment cozumleme (Boot property spring.mvc.apiversion.use.path-segment=0): ilk path parcasi surumdur
+ * (/v1.1/...); SemanticApiVersionParser bastaki "v"yi atar. Uretimde header secildi (application.yml'deki
+ * gerekce: path-segment /internal/** gibi surumsuz path'leri de parse eder); bu test property'nin calistigini
+ * ve ayni deprecation handler'in path ile secilen 1.0'a da uygulandigini kanitlar.
+ */
+@WebMvcTest(controllers = ApiVersionPathSegmentTest.PathProbeController.class,
+        properties = "spring.mvc.apiversion.use.path-segment=0")
+@Import({ClockConfig.class, ApiVersioningConfig.class, ApiVersionPathSegmentTest.PathProbeController.class})
+class ApiVersionPathSegmentTest {
+
+    @RestController
+    static class PathProbeController {
+        @GetMapping(path = "/{version}/probe", version = "1.0")
+        String v10() { return "handler=1.0"; }
+
+        @GetMapping(path = "/{version}/probe", version = "1.1")
+        String v11() { return "handler=1.1"; }
+    }
+
+    @Autowired MockMvc mvc;
+
+    @Test
+    void pathSegmentSelectsVersion11() throws Exception {
+        mvc.perform(get("/v1.1/probe")).andExpect(status().isOk()).andExpect(content().string("handler=1.1"))
+                .andExpect(header().doesNotExist("Deprecation"));
+    }
+
+    @Test
+    void pathSegmentSelectsDeprecatedVersion10_withDeprecationHeaders() throws Exception {
+        mvc.perform(get("/v1.0/probe")).andExpect(status().isOk()).andExpect(content().string("handler=1.0"))
+                .andExpect(header().exists("Deprecation")).andExpect(header().exists("Sunset"));
+    }
+
+    @Test
+    void unsupportedPathVersion_returns400() throws Exception {
+        mvc.perform(get("/v9.9/probe")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.API_VERSION_INVALID.getCode()));
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/controller/ApiVersionRequiredScopeTest.java`
+
+```java
+package com.acme.order.controller;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.order.config.ApiVersioningConfig;
+import com.acme.order.config.ClockConfig;
+import com.acme.order.exception.CommonErrorCode;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * spring.mvc.apiversion.required=true'nun KAPSAMI (referans Bolum 20): zorunluluk yalniz version= tasiyan
+ * handler'lara degil, strateji tanimli DispatcherServlet'teki TUM route'lara uygulanir. Surumsuz bir handler
+ * (orn. /internal/**, ayni porttaki actuator) header'siz cagrilinca 400 API_VERSION_INVALID doner.
+ * Bu, ApiVersioningConfig ve application.yml'deki uyarinin kanitidir.
+ */
+@WebMvcTest(controllers = ApiVersionRequiredScopeTest.UnversionedProbeController.class)
+@Import({ClockConfig.class, ApiVersioningConfig.class, ApiVersionRequiredScopeTest.UnversionedProbeController.class})
+class ApiVersionRequiredScopeTest {
+
+    @RestController
+    static class UnversionedProbeController {
+        @GetMapping("/internal/probe")
+        String probe() { return "unversioned"; }
+    }
+
+    @Autowired MockMvc mvc;
+
+    @Test
+    void unversionedHandler_withoutHeader_isRejectedBecauseRequiredIsGlobal() throws Exception {
+        mvc.perform(get("/internal/probe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.API_VERSION_INVALID.getCode()));
+    }
+
+    @Test
+    void unversionedHandler_withSupportedHeader_isServed() throws Exception {
+        mvc.perform(get("/internal/probe").header("API-Version", "1.1"))
+                .andExpect(status().isOk()).andExpect(content().string("unversioned"));
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/controller/ApiVersioningTest.java`
+
+```java
+package com.acme.order.controller;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.order.config.ApiVersioningConfig;
+import com.acme.order.config.ClockConfig;
+import com.acme.order.exception.CommonErrorCode;
+import com.acme.order.service.OrderService;
+import com.acme.order.service.OrderSummary;
+import com.acme.order.web.CurrentAccountArgumentResolver;
+import com.acme.order.web.GlobalServiceExceptionHandler;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+/**
+ * Spring Framework 7 API versiyonlama (referans Bolum 20): ayni path'te @GetMapping(version="1.0") ve "1.1";
+ * cozumleme Boot property'leriyle (spring.mvc.apiversion.use.header=API-Version, required, supported - application.yml).
+ * Kaldirilacak 1.0 yaniti Deprecation (RFC 9745, @epoch), Sunset (RFC 8594, HTTP-date) ve Link rel="deprecation"
+ * tasir; 1.1 tasimaz. Eksik/desteklenmeyen surum 400 API_VERSION_INVALID zarfidir.
+ */
+@WebMvcTest(controllers = OrderController.class)
+@Import({ClockConfig.class, ApiVersioningConfig.class})
+class ApiVersioningTest {
+
+    // application.yml api.deprecations[0] ile birebir
+    static final Instant DEPRECATED_AT = Instant.parse("2026-09-01T00:00:00Z");
+    static final Instant SUNSET_AT = Instant.parse("2027-03-01T00:00:00Z");
+    static final String LINK = "https://docs.acme.example/order/api/deprecations#v1-0";
+
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService service;
+
+    final UUID accountId = UUID.fromString("aaaaaaaa-0000-4000-8000-00000000a001");
+    final UUID orderId = UUID.fromString("cccccccc-0000-4000-8000-00000000c003");
+
+    @BeforeEach
+    void stubService() {
+        when(service.summary(accountId, orderId)).thenReturn(new OrderSummary(orderId, "SKU-42", 3, "CREATED"));
+    }
+
+    @Test
+    void headerVersion11_selectsNewHandler_withoutDeprecationHeaders() throws Exception {
+        mvc.perform(summary().header("API-Version", "1.1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(orderId.toString()))
+                .andExpect(jsonPath("$.line.sku").value("SKU-42"))
+                .andExpect(jsonPath("$.line.quantity").value(3))
+                .andExpect(jsonPath("$.status").value("CREATED"))
+                .andExpect(header().doesNotExist("Deprecation"))
+                .andExpect(header().doesNotExist("Sunset"));
+    }
+
+    @Test
+    void headerVersion10_selectsDeprecatedHandler_withDeprecationSunsetAndLinkHeaders() throws Exception {
+        MvcResult r = mvc.perform(summary().header("API-Version", "1.0"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(orderId.toString()))
+                .andExpect(jsonPath("$.status").value("CREATED"))
+                .andExpect(jsonPath("$.line").doesNotExist())
+                // RFC 9745: Deprecation = structured-field date (@epoch-seconds)
+                .andExpect(header().string("Deprecation", "@" + DEPRECATED_AT.getEpochSecond()))
+                // RFC 8594: Sunset = HTTP-date (IMF-fixdate)
+                .andExpect(header().string("Sunset", DateTimeFormatter.RFC_1123_DATE_TIME.format(SUNSET_AT.atZone(ZoneOffset.UTC))))
+                .andReturn();
+        assertThat(r.getResponse().getHeaders("Link"))
+                .anyMatch(l -> l.contains("<" + LINK + ">") && l.contains("rel=\"deprecation\""));
+    }
+
+    @Test
+    void patchLevelRequest_isNotImplicitlySupported_returns400() throws Exception {
+        // supported listesi (application.yml) birebir esler: 1.0.7, 1.0 ile ayni degildir -> desteklenmeyen surum.
+        // Patch surumleri kabul edilecekse listeye eklenir ya da detect-supported ile mapping'lerden toplanir.
+        mvc.perform(summary().header("API-Version", "1.0.7"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.API_VERSION_INVALID.getCode()));
+    }
+
+    @Test
+    void missingVersion_returns400ApiVersionInvalidEnvelope() throws Exception {
+        mvc.perform(summary())
+                .andExpect(status().isBadRequest())
+                .andExpect(header().exists(GlobalServiceExceptionHandler.TRACE_ID_HEADER))
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.API_VERSION_INVALID.getCode()));
+    }
+
+    @Test
+    void unsupportedVersion_returns400ApiVersionInvalidEnvelope() throws Exception {
+        mvc.perform(summary().header("API-Version", "9.9"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.API_VERSION_INVALID.getCode()));
+    }
+
+    @Test
+    void unparsableVersion_returns400NotFiveHundred() throws Exception {
+        mvc.perform(summary().header("API-Version", "latest"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.API_VERSION_INVALID.getCode()));
+    }
+
+    MockHttpServletRequestBuilder summary() {
+        return get("/v1/orders/{id}/summary", orderId)
+                .requestAttr(CurrentAccountArgumentResolver.ACCOUNT_ID_ATTRIBUTE, accountId.toString());
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/controller/OrderControllerTest.java`
+
+```java
+package com.acme.order.controller;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.order.api.dto.CreateOrderRequest;
+import com.acme.order.exception.ErrorCode;
+import com.acme.order.exception.OrderServiceException;
+import com.acme.order.service.OrderService;
+import com.acme.order.web.CurrentAccountArgumentResolver;
+import com.acme.order.web.GlobalServiceExceptionHandler;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.UUID;
+import org.hamcrest.Matchers;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.accept.DefaultApiVersionStrategy;
+import org.springframework.web.accept.HeaderApiVersionResolver;
+import org.springframework.web.accept.SemanticApiVersionParser;
+
+/**
+ * Controller binding sablonu (referans Bolum 23.5): binding HTTP katmani uzerinden dogrulanir; kimlik yalniz
+ * dogrulanmis baglamdan (request attribute x.accountId) gelir, path/query/header/body'den asla.
+ * Standalone kurulum: Spring context yok; yalniz controller + resolver + advice + surum stratejisi.
+ */
+class OrderControllerTest {
+
+    private final OrderService orderService = mock(OrderService.class);
+    private final MockMvc mockMvc = MockMvcBuilders
+            .standaloneSetup(new OrderController(orderService))
+            .setCustomArgumentResolvers(new CurrentAccountArgumentResolver())
+            .setControllerAdvice(new GlobalServiceExceptionHandler(Clock.fixed(Instant.parse("2026-09-29T10:00:00Z"), ZoneOffset.UTC)))
+            // TUZAK: controller'da @GetMapping(version=...) varsa standalone kurulum strateji olmadan "Invalid mapping"
+            // ile cokar; uretimle ayni cozumleme (API-Version header'i, zorunlu) burada elle verilir.
+            .setApiVersionStrategy(new DefaultApiVersionStrategy(List.of(new HeaderApiVersionResolver("API-Version")),
+                    new SemanticApiVersionParser(), true, null, true, null, null))
+            .build();
+
+    // Ayirt edici sentetik degerler: yanlis kaynaktan (path/query/body) alinan kimlik hemen goze carpar.
+    private final UUID accountId = UUID.fromString("aaaaaaaa-0000-4000-8000-00000000a001");
+    private final UUID spoofedAccountId = UUID.fromString("bbbbbbbb-0000-4000-8000-00000000b002");
+    private final UUID orderId = UUID.fromString("cccccccc-0000-4000-8000-00000000c003");
+    private final UUID idempotencyKey = UUID.fromString("dddddddd-0000-4000-8000-00000000d004");
+
+    @Test
+    void cancel_bindsPathTargetAndAuthenticatedAccount() throws Exception {
+        mockMvc.perform(authenticated(post("/v1/orders/{orderId}/cancel", orderId)))
+                .andExpect(status().isNoContent());
+        verify(orderService).cancel(accountId, orderId);
+    }
+
+    @Test
+    void cancel_whenPathIsNotUuid_rejectsBeforeReachingService() throws Exception {
+        mockMvc.perform(authenticated(post("/v1/orders/{orderId}/cancel", "not-a-uuid")))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().exists(GlobalServiceExceptionHandler.TRACE_ID_HEADER))
+                // path alani istek URI'sini tasir (Bolum 6.2); reddedilen deger mesaj/details'e sizmaz, yalniz parametre adi
+                .andExpect(jsonPath("$.error.message").value(Matchers.not(Matchers.containsString("not-a-uuid"))))
+                .andExpect(jsonPath("$.error.details").value(Matchers.contains("parameter=orderId")));
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    void cancel_whenAuthenticatedAccountIsMissing_doesNotReachService() throws Exception {
+        mockMvc.perform(versioned(post("/v1/orders/{orderId}/cancel", orderId)))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    void cancel_whenNotCancellable_returnsErrorEnvelope() throws Exception {
+        doThrow(new OrderServiceException(ErrorCode.ORDER_NOT_CANCELLABLE)).when(orderService).cancel(accountId, orderId);
+        mockMvc.perform(authenticated(post("/v1/orders/{orderId}/cancel", orderId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.error.code").value(11002))
+                .andExpect(jsonPath("$.error.service").value("order"));
+    }
+
+    @Test
+    void create_whenBodyIsInvalid_serviceIsNeverCalled() throws Exception {
+        mockMvc.perform(authenticated(post("/v1/orders"))
+                        .header("X-Idempotency-Key", idempotencyKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sku\":\"\",\"quantity\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details[0]").value("sku=must not be blank"));
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    void create_takesAccountFromAuthenticatedContext_neverFromRequestData() throws Exception {
+        // Ayni istekte sahte kimlik her kanaldan gonderilir: query, header ve body. Hicbiri baglanmaz.
+        mockMvc.perform(authenticated(post("/v1/orders"))
+                        .queryParam("accountId", spoofedAccountId.toString())
+                        .header("X-Account-Id", spoofedAccountId.toString())
+                        .header("X-Idempotency-Key", idempotencyKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-1\",\"quantity\":2,\"accountId\":\"" + spoofedAccountId + "\"}"))
+                .andExpect(status().isOk());
+        verify(orderService).create(eq(accountId), eq(idempotencyKey), eq(new CreateOrderRequest("SKU-1", 2)));
+        verify(orderService, never()).create(eq(spoofedAccountId), any(), any());
+    }
+
+    /** Surum header'i (uretimde zorunlu) - kimlik baglami YOK. */
+    static MockHttpServletRequestBuilder versioned(MockHttpServletRequestBuilder b) { return b.header("API-Version", "1.0"); }
+
+    /** Guvenlik filtresinin koydugu baglam: attribute x.accountId (String; JWT sub claim'i). */
+    MockHttpServletRequestBuilder authenticated(MockHttpServletRequestBuilder b) {
+        return versioned(b).requestAttr(CurrentAccountArgumentResolver.ACCOUNT_ID_ATTRIBUTE, accountId.toString());
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/logging/SensitiveLogSanitizerTest.java`
+
+```java
+package com.acme.order.logging;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+/** Sanitizer birim kurallari (referans Bolum 8.4 tablosu). */
+class SensitiveLogSanitizerTest {
+
+    @Test
+    void sanitize_removesLineBreaks_redactsSecretFields_masksPhoneAndEmail_truncates() {
+        String raw = "POST /hook\r\nAuthorization: Bearer abc.def token=SECRET-1 password: p4ss, otp=123456 "
+                + "to=+905551234567 mail=jane.doe@example.com key=" + "A".repeat(40);
+        String s = SensitiveLogSanitizer.sanitize(raw);
+        assertThat(s).doesNotContain("\r").doesNotContain("\n")
+                .contains("token=[REDACTED]").contains("password: [REDACTED]").contains("otp=[REDACTED]")
+                .doesNotContain("SECRET-1").doesNotContain("p4ss").doesNotContain("123456")
+                .contains("+90********67").doesNotContain("905551234567")
+                .contains("j***@e***.com").doesNotContain("jane.doe")
+                .doesNotContain("A".repeat(40));
+        // 240 karakterde kesme (bosluklu metin; kesintisiz 32+ alfanumerik dizi zaten opak token sayilip redakte edilir)
+        assertThat(SensitiveLogSanitizer.sanitize("word ".repeat(100))).hasSize(SensitiveLogSanitizer.MAX_LENGTH + 3).endsWith("...");
+        assertThat(SensitiveLogSanitizer.sanitize("x".repeat(500))).isEqualTo("[REDACTED]");
+        assertThat(SensitiveLogSanitizer.sanitize(null)).isEmpty();
+    }
+
+    @Test
+    void maskPhone_keepsCountryCodeAndLastTwoDigits() {
+        assertThat(SensitiveLogSanitizer.maskPhone("+905551234567")).isEqualTo("+90********67");
+        assertThat(SensitiveLogSanitizer.maskPhone("05551234567")).isEqualTo("0********67");
+        assertThat(SensitiveLogSanitizer.maskPhone("123")).isEqualTo("***");
+    }
+
+    @Test
+    void maskEmail_keepsFirstCharAndTld() {
+        assertThat(SensitiveLogSanitizer.maskEmail("jane.doe@example.com")).isEqualTo("j***@e***.com");
+        assertThat(SensitiveLogSanitizer.maskEmail("bogus")).isEqualTo("***");
+    }
+
+    @Test
+    void tokenFingerprint_isShortStableSha256_notTheToken() {
+        String fp = SensitiveLogSanitizer.tokenFingerprint("SECRET-TOKEN");
+        assertThat(fp).startsWith("sha256:").hasSize("sha256:".length() + 12).doesNotContain("SECRET");
+        assertThat(SensitiveLogSanitizer.tokenFingerprint("SECRET-TOKEN")).isEqualTo(fp);
+        assertThat(SensitiveLogSanitizer.tokenFingerprint("OTHER")).isNotEqualTo(fp);
+    }
+
+    @Test
+    void safeExceptionSummary_usesRootCauseTypeAndSanitizedMessage() {
+        var root = new IllegalStateException("insert failed: Key (phone)=(+905551234567) token=SECRET-9");
+        var wrapped = new RuntimeException("outer", new RuntimeException("middle", root));
+        String s = SensitiveLogSanitizer.safeExceptionSummary(wrapped);
+        assertThat(s).startsWith("IllegalStateException: ").contains("+90********67").contains("token=[REDACTED]")
+                .doesNotContain("905551234567").doesNotContain("SECRET-9").doesNotContain("outer");
+        assertThat(SensitiveLogSanitizer.safeExceptionSummary(new IllegalArgumentException())).isEqualTo("IllegalArgumentException");
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/logging/StructuredLoggingTest.java`
+
+```java
+package com.acme.order.logging;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.UUID;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.logging.LoggingSystem;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.context.annotation.Configuration;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Structured logging kaniti (referans Bolum 8.1): logging.structured.format.console=ecs ile konsol satirlari
+ * JSON'dur ve ECS alanlarini tasir (@timestamp, log.level, message, ecs.version). Uretimde bu property
+ * config/order.yml'dedir; test acikca verir.
+ *
+ * TUZAK: Logback LoggingSystem JVM'de bir kez baslatilir; ayni surefire JVM'inde onceki bir Spring testi
+ * duz metin formatla baslattiysa property'miz sessizce yok sayilir. Bu yuzden context yuklenmeden once
+ * cleanUp() ile yeniden baslatma zorlanir; sonrasinda da geri alinir ki siradaki testler kendi ayarini kursun.
+ */
+@SpringBootTest(classes = StructuredLoggingTest.Empty.class, properties = "logging.structured.format.console=ecs")
+@ExtendWith(OutputCaptureExtension.class)
+class StructuredLoggingTest {
+
+    @Configuration(proxyBeanMethods = false)
+    static class Empty {}
+
+    @BeforeAll
+    static void forceLoggingReinitialization() { LoggingSystem.get(StructuredLoggingTest.class.getClassLoader()).cleanUp(); }
+
+    @AfterAll
+    static void releaseLoggingSystem() { LoggingSystem.get(StructuredLoggingTest.class.getClassLoader()).cleanUp(); }
+
+    @Test
+    void consoleLinesAreEcsJson(CapturedOutput output) {
+        String marker = "ecs-probe-" + UUID.randomUUID();
+        LoggerFactory.getLogger("com.acme.order.EcsProbe").info("Structured probe: outcome=SUCCESS marker={}", marker);
+
+        String line = output.getOut().lines().filter(l -> l.contains(marker)).findFirst()
+                .orElseThrow(() -> new AssertionError("probe satiri konsolda yok; cikti:\n" + output.getOut()));
+        assertThat(line).startsWith("{").endsWith("}");
+
+        JsonNode json = JsonMapper.builder().build().readTree(line);
+        assertThat(json.get("@timestamp").asString()).as("@timestamp").isNotBlank();
+        assertThat(json.at("/log/level").asString()).as("log.level").isEqualTo("INFO");
+        assertThat(json.at("/log/logger").asString()).isEqualTo("com.acme.order.EcsProbe");
+        assertThat(json.get("message").asString()).contains("outcome=SUCCESS").contains(marker);
+        assertThat(json.at("/ecs/version").asString()).as("ecs.version").isNotBlank();
+        assertThat(json.at("/process/pid").isNumber()).isTrue();
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/service/impl/OrderServiceLogPrivacyTest.java`
+
+```java
+package com.acme.order.service.impl;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.acme.order.api.dto.CreateOrderRequest;
+import com.acme.order.entity.Order;
+import com.acme.order.exception.OrderServiceException;
+import com.acme.order.repository.OrderRepository;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Log privacy sablonu (referans Bolum 23.6, 8.5): guvenli alan (outcome=) VAR; sentetik hassas isaretler
+ * rendered mesajda, argumanlarda, MDC'de ve exception'da YOK. Appender her testten sonra ayrilir, seviye geri yuklenir.
+ */
+class OrderServiceLogPrivacyTest {
+
+    static final String PHONE_MARKER = "+905551234567";
+    static final String EMAIL_MARKER = "jane.doe@example.com";
+    static final String TOKEN_MARKER = "SECRET-TOKEN-MARKER-4e5f6a7b";
+
+    private final OrderRepository repo = mock(OrderRepository.class);
+    private final OrderServiceImpl service = new OrderServiceImpl(repo);
+    private final UUID accountId = UUID.fromString("aaaaaaaa-0000-4000-8000-00000000a001");
+
+    private Logger logger;
+    private ListAppender<ILoggingEvent> appender;
+
+    @BeforeEach
+    void attachAppender() {
+        logger = (Logger) LoggerFactory.getLogger(OrderServiceImpl.class);
+        logger.setLevel(Level.INFO);
+        appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    @AfterEach
+    void detachAppender() {
+        logger.detachAppender(appender);
+        logger.setLevel(null);
+    }
+
+    @Test
+    void create_whenRejected_logsCodeReasonOutcome_withoutSensitiveInputOrAccountId() {
+        // sku istemciden gelen serbest metindir: CR/LF (log injection), telefon, e-posta ve token tasiyor olabilir.
+        String sku = "SKU-1\r\nfake=line " + PHONE_MARKER + " " + EMAIL_MARKER + " token=" + TOKEN_MARKER;
+
+        assertThatThrownBy(() -> service.create(accountId, UUID.randomUUID(), new CreateOrderRequest(sku, 0)))
+                .isInstanceOf(OrderServiceException.class);
+
+        assertThat(rendered())
+                .anyMatch(m -> m.contains("Order rejected:") && m.contains("code=ORDER_QUANTITY_INVALID")
+                        && m.contains("reason=QUANTITY_OUT_OF_RANGE") && m.contains("outcome=REJECTED"))
+                .noneMatch(m -> m.contains("\n") || m.contains("\r"));
+        // Maskeli/redakte halleri var, ham degerler yok:
+        assertThat(rendered()).anyMatch(m -> m.contains("+90********67") && m.contains("j***@e***.com") && m.contains("token=[REDACTED]"));
+        assertNoMarkerAnywhere(PHONE_MARKER);
+        assertNoMarkerAnywhere(EMAIL_MARKER);
+        assertNoMarkerAnywhere(TOKEN_MARKER);
+        assertNoMarkerAnywhere(accountId.toString());
+    }
+
+    @Test
+    void create_whenSucceeds_logsOutcomeSuccessWithoutAccountId() {
+        UUID id = service.create(accountId, UUID.randomUUID(), new CreateOrderRequest("SKU-1", 2));
+
+        assertThat(rendered()).anyMatch(m -> m.contains("operation=ORDER_CREATE") && m.contains("outcome=SUCCESS")
+                && m.contains("orderId=" + id));
+        assertNoMarkerAnywhere(accountId.toString());
+    }
+
+    @Test
+    void cancel_whenNotFound_logsRejectionBeforeThrowing_withoutAccountId() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.findById(orderId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.cancel(accountId, orderId)).isInstanceOf(OrderServiceException.class);
+
+        assertThat(rendered()).anyMatch(m -> m.contains("code=ORDER_NOT_FOUND") && m.contains("outcome=REJECTED")
+                && m.contains("orderId=" + orderId));
+        assertNoMarkerAnywhere(accountId.toString());
+    }
+
+    @Test
+    void cancel_whenNotCancellable_logsStatusAsReason() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.findById(orderId)).thenReturn(Optional.of(new Order(orderId, "SKU-1", 1, "SHIPPED")));
+
+        assertThatThrownBy(() -> service.cancel(accountId, orderId)).isInstanceOf(OrderServiceException.class);
+
+        assertThat(rendered()).anyMatch(m -> m.contains("code=ORDER_NOT_CANCELLABLE") && m.contains("reason=STATUS_SHIPPED"));
+    }
+
+    private Stream<String> rendered() { return appender.list.stream().map(ILoggingEvent::getFormattedMessage); }
+
+    private void assertNoMarkerAnywhere(String marker) {
+        for (ILoggingEvent e : appender.list) {
+            assertThat(e.getFormattedMessage()).doesNotContain(marker);
+            if (e.getArgumentArray() != null) {
+                assertThat(Stream.of(e.getArgumentArray()).map(String::valueOf)).noneMatch(a -> a.contains(marker));
+            }
+            assertThat(e.getMDCPropertyMap().values()).noneMatch(v -> v.contains(marker));
+            for (var p = e.getThrowableProxy(); p != null; p = p.getCause()) {
+                assertThat(String.valueOf(p.getMessage())).doesNotContain(marker);
+            }
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/web/GlobalServiceExceptionHandlerTest.java`
+
+```java
+package com.acme.order.web;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.acme.order.config.ApiVersioningConfig;
+import com.acme.order.controller.OrderController;
+import com.acme.order.exception.CommonErrorCode;
+import com.acme.order.exception.ErrorCode;
+import com.acme.order.exception.OrderServiceException;
+import com.acme.order.service.OrderService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Global handler eslemesi (referans Bolum 7.3) ve gizlilik (Bolum 8.4): her hata tek zarf + X-Trace-Id;
+ * reddedilen deger / exception metni ne yanitta ne log'da. Log dogrulamasi ROOT logger'a takilan ListAppender
+ * ile yapilir: framework'un kendi WARN satirlari da (orn. resolved-exception) denetime girer.
+ *
+ * Kanit seviyesi 1 (MockMvc, @WebMvcTest dilimi). application.yml'deki API-Version zorunlulugu gecerlidir;
+ * bu yuzden her istek header'i tasir (eksik header senaryosu ApiVersioningTest'tedir).
+ */
+@WebMvcTest(controllers = OrderController.class)
+@Import({ApiVersioningConfig.class, GlobalServiceExceptionHandlerTest.FixedClock.class,
+        GlobalServiceExceptionHandlerTest.ValidationProbeController.class})
+class GlobalServiceExceptionHandlerTest {
+
+    static final Instant NOW = Instant.parse("2026-09-29T10:00:00Z");
+    static final String ACCOUNT_ID = "5f1c2a3b-7d8e-4f90-a1b2-c3d4e5f60718";
+    static final String PHONE_MARKER = "+905551234567";
+    static final String TOKEN_MARKER = "SECRET-TOKEN-MARKER-9f8e7d6c";
+    static final String VALUE_MARKER = "rejected-value-marker-31337";
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClock {
+        @Bean Clock clock() { return Clock.fixed(NOW, ZoneOffset.UTC); }
+    }
+
+    /** @Valid + ayirt edici reddedilen deger icin sonda: order-api DTO'su (sku/quantity) bu senaryoyu uretemez. */
+    @RestController
+    @RequestMapping("/v1/probe")
+    static class ValidationProbeController {
+        record ProbeBody(@Pattern(regexp = "[A-Z0-9-]{3,20}") String code) {}
+        @PostMapping
+        ResponseEntity<Void> post(@Valid @RequestBody ProbeBody body) { return ResponseEntity.noContent().build(); }
+    }
+
+    @Autowired MockMvc mvc;
+    @MockitoBean OrderService service;
+
+    Logger root;
+    ListAppender<ILoggingEvent> appender;
+
+    @BeforeEach
+    void attachAppender() {
+        root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+        appender = new ListAppender<>();
+        appender.start();
+        root.addAppender(appender);
+    }
+
+    @AfterEach
+    void detachAppender() { root.detachAppender(appender); appender.stop(); }
+
+    // ---------- senaryolar ----------
+
+    @Test
+    void validationFailure_returns400ValidationWithoutRejectedValue() throws Exception {
+        MvcResult r = mvc.perform(versioned(post("/v1/probe")).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + VALUE_MARKER + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.VALIDATION.getCode()))
+                .andExpect(jsonPath("$.error.service").value("validation"))
+                .andExpect(jsonPath("$.error.details[0]").value(org.hamcrest.Matchers.startsWith("code=")))
+                .andReturn();
+        assertEnvelope(r);
+        assertThat(r.getResponse().getContentAsString()).doesNotContain(VALUE_MARKER);
+        assertThat(renderedLogs()).anyMatch(m -> m.contains("code=VALIDATION") && m.contains("status=400"))
+                .noneMatch(m -> m.contains(VALUE_MARKER));
+        assertNoMarkerAnywhereInLogs(VALUE_MARKER);
+    }
+
+    @Test
+    void malformedJson_returns400NotReadableWithoutPayloadText() throws Exception {
+        MvcResult r = mvc.perform(versioned(post("/v1/orders")).header("X-Idempotency-Key", UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sku\":\"SKU-1\",\"quantity\":\"" + VALUE_MARKER + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.REQUEST_NOT_READABLE.getCode()))
+                .andReturn();
+        assertEnvelope(r);
+        assertThat(r.getResponse().getContentAsString()).doesNotContain(VALUE_MARKER).doesNotContain("JsonParseException")
+                .doesNotContain("Cannot");
+        assertNoMarkerAnywhereInLogs(VALUE_MARKER);
+    }
+
+    @Test
+    void unknownPath_returns404NotFoundInsteadOf500() throws Exception {
+        MvcResult r = mvc.perform(versioned(get("/v1/nothing-here")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.NOT_FOUND.getCode()))
+                .andReturn();
+        assertEnvelope(r);
+    }
+
+    @Test
+    void wrongMethod_returns405WithAllowedMethods() throws Exception {
+        MvcResult r = mvc.perform(versioned(delete("/v1/orders")))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.METHOD_NOT_ALLOWED.getCode()))
+                .andExpect(jsonPath("$.error.details[0]").value("allowed=POST"))
+                .andReturn();
+        assertEnvelope(r);
+    }
+
+    @Test
+    void unsupportedMediaType_returns415() throws Exception {
+        MvcResult r = mvc.perform(versioned(post("/v1/orders")).header("X-Idempotency-Key", UUID.randomUUID())
+                        .contentType(MediaType.TEXT_PLAIN).content("sku=SKU-1"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.UNSUPPORTED_MEDIA_TYPE.getCode()))
+                .andReturn();
+        assertEnvelope(r);
+    }
+
+    @Test
+    void serviceException_returnsItsOwnStatusAndCode_andLogsSafeReasonOnly() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        doThrow(new OrderServiceException(ErrorCode.ORDER_NOT_CANCELLABLE, "STATUS_SHIPPED", "BUSINESS_RULE",
+                List.of("retryAfterSeconds=120")))
+                .when(service).cancel(UUID.fromString(ACCOUNT_ID), orderId);
+
+        MvcResult r = mvc.perform(versioned(post("/v1/orders/{id}/cancel", orderId)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value(11002))
+                .andExpect(jsonPath("$.error.service").value("order"))
+                .andExpect(jsonPath("$.error.message").value("Order cannot be cancelled."))
+                .andExpect(jsonPath("$.error.details[0]").value("retryAfterSeconds=120"))
+                .andReturn();
+        assertEnvelope(r);
+        assertThat(r.getResponse().getContentAsString()).doesNotContain("STATUS_SHIPPED"); // safeLogReason yanita cikmaz
+        assertThat(renderedLogs()).anyMatch(m -> m.contains("code=ORDER_NOT_CANCELLABLE") && m.contains("reason=STATUS_SHIPPED")
+                && m.contains("category=BUSINESS_RULE") && m.contains("status=409"));
+    }
+
+    @Test
+    void unexpectedRuntimeException_returns500GenericMessage_andLogsSanitizedSummaryWithoutThrowable() throws Exception {
+        when(service.create(any(), any(), any()))
+                .thenThrow(new IllegalStateException("boom token=" + TOKEN_MARKER + " phone=" + PHONE_MARKER));
+
+        MvcResult r = mvc.perform(versioned(post("/v1/orders")).header("X-Idempotency-Key", UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"sku\":\"SKU-1\",\"quantity\":1}"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.INTERNAL_ERROR.getCode()))
+                .andExpect(jsonPath("$.error.service").value("system"))
+                .andExpect(jsonPath("$.error.message").value("Unexpected error."))
+                .andExpect(jsonPath("$.error.details").isEmpty())
+                .andReturn();
+        assertEnvelope(r);
+        String body = r.getResponse().getContentAsString();
+        assertThat(body).doesNotContain("boom").doesNotContain("IllegalStateException").doesNotContain(TOKEN_MARKER);
+
+        assertThat(renderedLogs()).anyMatch(m -> m.contains("code=INTERNAL_ERROR") && m.contains("exceptionType=IllegalStateException")
+                && m.contains("token=[REDACTED]") && m.contains("+90********67"));
+        assertNoMarkerAnywhereInLogs(TOKEN_MARKER);
+        assertNoMarkerAnywhereInLogs(PHONE_MARKER);
+        // Ham throwable log olayina eklenmez: stack trace exception mesajini (PII) tasirdi.
+        assertThat(appender.list).filteredOn(e -> e.getFormattedMessage().contains("code=INTERNAL_ERROR"))
+                .allMatch(e -> e.getThrowableProxy() == null);
+    }
+
+    @Test
+    void headerTypeMismatch_returns400WithoutRejectedValue() throws Exception {
+        MvcResult r = mvc.perform(versioned(post("/v1/orders")).header("X-Idempotency-Key", VALUE_MARKER)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"sku\":\"SKU-1\",\"quantity\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.TYPE_MISMATCH.getCode()))
+                .andReturn();
+        assertEnvelope(r);
+        assertThat(r.getResponse().getContentAsString()).doesNotContain(VALUE_MARKER);
+        assertNoMarkerAnywhereInLogs(VALUE_MARKER);
+    }
+
+    @Test
+    void missingRequiredHeader_returns400NamingTheHeaderOnly() throws Exception {
+        MvcResult r = mvc.perform(versioned(post("/v1/orders"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"sku\":\"SKU-1\",\"quantity\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.MISSING_PARAMETER.getCode()))
+                .andExpect(jsonPath("$.error.details[0]").value("header=X-Idempotency-Key"))
+                .andReturn();
+        assertEnvelope(r);
+    }
+
+    @Test
+    void missingAccountContext_returns400BeforeReachingService() throws Exception {
+        MvcResult r = mvc.perform(post("/v1/orders/{id}/cancel", UUID.randomUUID()).header("API-Version", "1.0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(CommonErrorCode.MISSING_PARAMETER.getCode()))
+                .andReturn();
+        assertEnvelope(r);
+        org.mockito.Mockito.verifyNoInteractions(service);
+    }
+
+    // ---------- yardimcilar ----------
+
+    static MockHttpServletRequestBuilder versioned(MockHttpServletRequestBuilder b) {
+        return b.header("API-Version", "1.0").requestAttr(CurrentAccountArgumentResolver.ACCOUNT_ID_ATTRIBUTE, ACCOUNT_ID);
+    }
+
+    /** Her hata yanitinda: X-Trace-Id header'i, zarf alanlari, traceId = header, timestamp = Clock. */
+    static void assertEnvelope(MvcResult r) throws Exception {
+        String traceId = r.getResponse().getHeader(GlobalServiceExceptionHandler.TRACE_ID_HEADER);
+        assertThat(traceId).as("X-Trace-Id header").isNotBlank();
+        assertThat(r.getResponse().getContentType()).startsWith(MediaType.APPLICATION_JSON_VALUE);
+        String body = r.getResponse().getContentAsString();
+        assertThat(body).contains("\"ok\":false").contains("\"traceId\":\"" + traceId + "\"")
+                .contains("\"timestamp\":" + NOW.toEpochMilli()).contains("\"path\":\"" + r.getRequest().getRequestURI() + "\"");
+        assertThat(body).doesNotContain(ACCOUNT_ID); // hesap id'si hata zarfina sizmaz
+    }
+
+    List<String> renderedLogs() { return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList(); }
+
+    /** Bolum 8.5: rendered mesaj, argumanlar, MDC ve exception zincirinde isaret yok. */
+    void assertNoMarkerAnywhereInLogs(String marker) {
+        for (ILoggingEvent e : appender.list) {
+            assertThat(e.getFormattedMessage()).as("formatted message").doesNotContain(marker);
+            if (e.getArgumentArray() != null) {
+                assertThat(Stream.of(e.getArgumentArray()).map(String::valueOf).toList()).noneMatch(a -> a.contains(marker));
+            }
+            assertThat(e.getMDCPropertyMap().values()).noneMatch(v -> v.contains(marker));
+            for (var p = e.getThrowableProxy(); p != null; p = p.getCause()) {
+                assertThat(String.valueOf(p.getMessage())).as("throwable message").doesNotContain(marker);
+            }
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/order-core/src/test/java/com/acme/order/worker/OrderMaintenanceWorkerTest.java`
+
+```java
+package com.acme.order.worker;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.acme.order.config.ResilienceConfig;
+import com.acme.order.repository.OrderRepository;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+/**
+ * Spring Framework 7 dayaniklilik kaniti (referans Bolum 4.7, 2.1): @EnableResilientMethods altinda
+ * @Retryable gecici hatayi toplam 3 denemeye kadar tekrarlar (maxRetries=2), kalici hatayi tekrarlamaz;
+ * @ConcurrencyLimit(1) es zamanli cagrilari seri hale getirir (gozlenen maksimum es zamanlilik == 1).
+ * Retry gecikmesi property ile 1ms'ye cekilir; beklemek icin sleep yok - bekleyen thread'ler durumlarindan izlenir.
+ */
+@SpringBootTest(classes = {ResilienceConfig.class, OrderMaintenanceWorker.class}, properties = "order.worker.retry-delay=1ms")
+class OrderMaintenanceWorkerTest {
+
+    @Autowired OrderMaintenanceWorker worker;
+    @MockitoBean OrderRepository repo;
+
+    @Test
+    void retryable_retriesTransientFailure_untilSuccess_withinThreeAttempts() {
+        UUID id = UUID.randomUUID();
+        when(repo.updateStatus(id, "CANCELLED"))
+                .thenThrow(new ConcurrencyFailureException("could not serialize access (40001)"))
+                .thenThrow(new ConcurrencyFailureException("deadlock detected (40P01)"))
+                .thenReturn(1);
+
+        assertThat(worker.markCancelled(id)).isEqualTo(1);
+        verify(repo, times(3)).updateStatus(id, "CANCELLED");
+    }
+
+    @Test
+    void retryable_givesUpAfterThreeAttempts_andSurfacesLastTransientFailure() {
+        UUID id = UUID.randomUUID();
+        when(repo.updateStatus(eq(id), any())).thenThrow(new ConcurrencyFailureException("still deadlocked"));
+
+        Throwable t = catchThrowable(() -> worker.markCancelled(id));
+
+        assertThat(t).isNotNull();
+        assertThat(rootCause(t)).isInstanceOf(ConcurrencyFailureException.class).hasMessage("still deadlocked");
+        verify(repo, times(3)).updateStatus(id, "CANCELLED");
+    }
+
+    @Test
+    void retryable_doesNotRetryPermanentFailure() {
+        UUID id = UUID.randomUUID();
+        when(repo.updateStatus(eq(id), any())).thenThrow(new DataIntegrityViolationException("check constraint"));
+
+        Throwable t = catchThrowable(() -> worker.markCancelled(id));
+
+        assertThat(t).isInstanceOf(DataIntegrityViolationException.class);
+        verify(repo, times(1)).updateStatus(id, "CANCELLED");
+    }
+
+    @Test
+    void concurrencyLimitOne_serializesConcurrentCalls() throws Exception {
+        int callers = 4;
+        AtomicInteger inFlight = new AtomicInteger();
+        AtomicInteger maxInFlight = new AtomicInteger();
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch gate = new CountDownLatch(1);
+        when(repo.findAll()).thenAnswer(inv -> {
+            int now = inFlight.incrementAndGet();
+            maxInFlight.accumulateAndGet(now, Math::max);
+            firstEntered.countDown();
+            gate.await(30, TimeUnit.SECONDS);          // ilk cagiran icerde tutulur; digerleri semaphore'da beklemeli
+            inFlight.decrementAndGet();
+            return List.of();
+        });
+
+        Thread[] threads = new Thread[callers];
+        for (int i = 0; i < callers; i++) {
+            threads[i] = new Thread(() -> worker.rebuildProjection(), "rebuild-" + i);
+        }
+        threads[0].start();
+        assertThat(firstEntered.await(10, TimeUnit.SECONDS)).isTrue();
+        for (int i = 1; i < callers; i++) threads[i].start();
+
+        // Sleep yok: diger thread'ler ya semaphore'da (dogru) ya da mock'un gate'inde (limit yok) bekler; ikisi de
+        // WAITING/TIMED_WAITING durumudur. Hepsi bekleme durumuna gecince gozlem kararlidir; sinirli poll (<= 10 sn).
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!allWaiting(threads, 1) && System.nanoTime() < deadline) Thread.onSpinWait();
+        assertThat(allWaiting(threads, 1)).as("bekleyen thread'ler").isTrue();
+        assertThat(inFlight).as("icerdeki cagri sayisi").hasValue(1);
+
+        gate.countDown();
+        for (Thread t : threads) t.join(10_000);
+        assertThat(maxInFlight).as("gozlenen maksimum es zamanlilik").hasValue(1);
+        verify(repo, times(callers)).findAll();
+    }
+
+    static boolean allWaiting(Thread[] threads, int from) {
+        for (int i = from; i < threads.length; i++) {
+            Thread.State s = threads[i].getState();
+            if (s != Thread.State.WAITING && s != Thread.State.TIMED_WAITING && s != Thread.State.TERMINATED) return false;
+        }
+        return true;
+    }
+
+    static Throwable rootCause(Throwable t) {
+        Throwable r = t;
+        while (r.getCause() != null && r.getCause() != r) r = r.getCause();
+        return r;
+    }
+}
+```
+
+---
+
 ### `skeleton-example/platform-core/pom.xml`
 
 ```xml
@@ -6196,7 +14130,11 @@ public class ServiceException extends RuntimeException {
   <dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
     <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId></dependency>
+    <!-- Read-model sayaci/gauge'u (readmodel_gap_total, readmodel_lag_seconds; Bolum 4.6). Registry'yi servis saglar. -->
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-core</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <!-- Metrik adlarinin Prometheus'ta nasil gorundugunu (readmodel_gap_total) testte kanitlamak icin -->
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><scope>test</scope></dependency>
     <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>test</scope></dependency>
     <dependency><groupId>io.zonky.test</groupId><artifactId>embedded-postgres</artifactId><version>2.1.0</version><scope>test</scope></dependency>
   </dependencies>
@@ -6206,6 +14144,84 @@ public class ServiceException extends RuntimeException {
       <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
   </plugins></build>
 </project>
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/cloudevents/CloudEventHeaders.java`
+
+```java
+package com.acme.platform.messaging.cloudevents;
+
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * CloudEvents 1.0 attribute'larinin AMQP 0-9-1 mesaj header'larina eslenmesi (referans Bolum 12.2). AMQP 0-9-1 icin
+ * resmi CloudEvents binding'i yoktur; attribute'lar "ce-" onekiyle header'a yazilir ve bu esleme YALNIZ burada yasar:
+ * uretici (outbox handler) ve tuketici (listener) ayni sabitleri kullanir, header adi iki yerde yazilmaz.
+ *
+ * Transport'a bagimli tip (Spring AMQP Message) kullanilmaz; duz Map ile calisir ki platform-messaging AMQP'siz
+ * (Kafka, HTTP) tasiyicilarda da ayni eslemeyi tasiyabilsin.
+ */
+public final class CloudEventHeaders {
+
+    public static final String ID = "ce-id";
+    public static final String TYPE = "ce-type";
+    public static final String SOURCE = "ce-source";
+    public static final String SUBJECT = "ce-subject";
+    public static final String TIME = "ce-time";
+    public static final String SPEC_VERSION = "ce-specversion";
+    public static final String SPEC_VERSION_VALUE = "1.0";
+    /** W3C Trace Context extension'lari: outbox headers JSON'undan oldugu gibi kopyalanir (span uretici tarafinda acildi). */
+    public static final String TRACEPARENT = "traceparent";
+    public static final String TRACESTATE = "tracestate";
+
+    private CloudEventHeaders() { }
+
+    /**
+     * Uretici tarafi: outbox satirindan header kumesi. traceparent/tracestate outbox headers'inda varsa tasinir;
+     * yoksa header yazilmaz (bos string yazmak tuketicide gecersiz trace baglami uretir).
+     */
+    public static Map<String, Object> of(UUID id, String type, String source, UUID subject, Instant time,
+                                         Map<String, ?> outboxHeaders) {
+        Map<String, Object> h = new LinkedHashMap<>();
+        h.put(SPEC_VERSION, SPEC_VERSION_VALUE);
+        h.put(ID, id.toString());
+        h.put(TYPE, type);
+        h.put(SOURCE, source);
+        if (subject != null) h.put(SUBJECT, subject.toString());
+        h.put(TIME, time.toString());
+        copyIfText(outboxHeaders, TRACEPARENT, h);
+        copyIfText(outboxHeaders, TRACESTATE, h);
+        return h;
+    }
+
+    /** Tuketici tarafi: header yoksa veya UUID degilse bos doner; karar (zehirli mesaj) cagirana aittir. */
+    public static Optional<UUID> id(Map<String, Object> headers) {
+        Object v = headers == null ? null : headers.get(ID);
+        if (v == null) return Optional.empty();
+        try {
+            return Optional.of(UUID.fromString(v.toString()));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
+
+    public static Optional<String> text(Map<String, Object> headers, String name) {
+        Object v = headers == null ? null : headers.get(name);
+        return v == null ? Optional.empty() : Optional.of(v.toString());
+    }
+
+    private static void copyIfText(Map<String, ?> from, String key, Map<String, Object> to) {
+        if (from == null) return;
+        Object v = from.get(key);
+        if (v instanceof String s && !s.isBlank()) to.put(key, s);
+    }
+}
 ```
 
 ---
@@ -6553,6 +14569,486 @@ package com.acme.platform.messaging.outbox;
 /** Yeniden denemenin anlamsiz oldugu hata (kalici 4xx; 401/403/408/429 haric). DEAD karari dead_policy'ye gore verilir. */
 public class PermanentFailureException extends RuntimeException {
     public PermanentFailureException(String message) { super(message); }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/AccountStatusProjection.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+/**
+ * SNAPSHOT projeksiyon ornegi (sahibi auth, olay account.status.changed). Olay tam durumu tasir; bu yuzden UPSERT
+ * yalniz EXCLUDED.source_revision > mevcut ise yazar: gec gelen eski karar yeni karari ezmez, tekrar teslim tek etkidir.
+ */
+public class AccountStatusProjection implements SnapshotProjection<AccountStatusProjection.AccountStatus> {
+
+    public record AccountStatus(UUID accountId, boolean active, boolean legalOk, long sourceRevision, Instant sourceTime) { }
+
+    public record Row(UUID accountId, boolean active, boolean legalOk, long sourceRevision, Instant sourceTime, Instant appliedAt) { }
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final String table;
+
+    public AccountStatusProjection(NamedParameterJdbcTemplate jdbc, String schema) {
+        this.jdbc = jdbc;
+        this.table = "\"" + schema + "\".rm_account_status";
+    }
+
+    @Override
+    public int upsert(AccountStatus s, Instant appliedAt) {
+        return jdbc.update("""
+                INSERT INTO %s (account_id, active, legal_ok, source_revision, source_time, applied_at)
+                VALUES (:id, :active, :legal, :rev, :srcTime, :applied)
+                ON CONFLICT (account_id) DO UPDATE SET active = EXCLUDED.active, legal_ok = EXCLUDED.legal_ok,
+                    source_revision = EXCLUDED.source_revision, source_time = EXCLUDED.source_time, applied_at = EXCLUDED.applied_at
+                WHERE EXCLUDED.source_revision > %s.source_revision""".formatted(table, table),
+                new MapSqlParameterSource().addValue("id", s.accountId()).addValue("active", s.active())
+                        .addValue("legal", s.legalOk()).addValue("rev", s.sourceRevision())
+                        .addValue("srcTime", Timestamp.from(s.sourceTime())).addValue("applied", Timestamp.from(appliedAt)));
+    }
+
+    @Override
+    public void clear() {
+        jdbc.getJdbcTemplate().execute("TRUNCATE " + table);                    // PostgreSQL'de TRUNCATE transactional'dir
+    }
+
+    public List<Row> findAll() {
+        return jdbc.query("SELECT * FROM %s ORDER BY account_id".formatted(table), (rs, i) -> new Row(
+                rs.getObject("account_id", UUID.class), rs.getBoolean("active"), rs.getBoolean("legal_ok"),
+                rs.getLong("source_revision"), rs.getTimestamp("source_time").toInstant(), rs.getTimestamp("applied_at").toInstant()));
+    }
+
+    public boolean exists(UUID accountId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM %s WHERE account_id = :id)".formatted(table),
+                Map.of("id", accountId), Boolean.class));
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/BlockRelationProjection.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+/**
+ * DELTA projeksiyon ornegi (sahibi user, olaylar user.block.created / user.block.removed). Her olay tek bir
+ * degisikliktir; onceki durumu kapsamaz. Bu yuzden hicbir olay atlanamaz: sira kontrolu ReadModelApplier'dadir,
+ * bu sinif yalniz dogrulanmis olayi uygular.
+ */
+public class BlockRelationProjection implements DeltaProjection<BlockRelationProjection.BlockOp> {
+
+    public enum Kind { CREATED, REMOVED }
+
+    public record BlockOp(UUID blockedId, Kind kind) { }
+
+    public record Row(UUID blockerId, UUID blockedId, long sourceSeq) { }
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final String table;
+
+    public BlockRelationProjection(NamedParameterJdbcTemplate jdbc, String schema) {
+        this.jdbc = jdbc;
+        this.table = "\"" + schema + "\".rm_block_relation";
+    }
+
+    @Override
+    public void apply(DeltaEvent<BlockOp> e) {
+        Map<String, Object> p = Map.of("blocker", e.aggregateId(), "blocked", e.op().blockedId(), "seq", e.aggregateSeq());
+        switch (e.op().kind()) {
+            case CREATED -> jdbc.update("""
+                    INSERT INTO %s (blocker_id, blocked_id, source_seq) VALUES (:blocker, :blocked, :seq)
+                    ON CONFLICT (blocker_id, blocked_id) DO UPDATE SET source_seq = EXCLUDED.source_seq""".formatted(table), p);
+            case REMOVED -> jdbc.update("DELETE FROM %s WHERE blocker_id = :blocker AND blocked_id = :blocked".formatted(table), p);
+        }
+    }
+
+    @Override
+    public void clear() {
+        jdbc.getJdbcTemplate().execute("TRUNCATE " + table);
+    }
+
+    public List<Row> findByBlocker(UUID blockerId) {
+        return jdbc.query("SELECT * FROM %s WHERE blocker_id = :b ORDER BY blocked_id".formatted(table), Map.of("b", blockerId),
+                (rs, i) -> new Row(rs.getObject("blocker_id", UUID.class), rs.getObject("blocked_id", UUID.class), rs.getLong("source_seq")));
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/ConsumerPositionStore.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+/**
+ * Tuketim konumu (rm_consumer_position) ve delta sira takibi (rm_delta_position). Konum GREATEST ile ilerler:
+ * snapshot olaylari sirasiz gelebilir, konum hicbir zaman geri gitmez ve son durum teslim sirasindan bagimsiz olur.
+ */
+public class ConsumerPositionStore {
+
+    public record Position(String source, long lastSeq, Instant lastEventTime, Instant updatedAt) { }
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final String position;
+    private final String deltaPosition;
+
+    public ConsumerPositionStore(NamedParameterJdbcTemplate jdbc, String schema) {
+        this.jdbc = jdbc;
+        this.position = "\"" + schema + "\".rm_consumer_position";
+        this.deltaPosition = "\"" + schema + "\".rm_delta_position";
+    }
+
+    public void advance(String source, long streamSeq, Instant eventTime, Instant now) {
+        jdbc.update("""
+                INSERT INTO %s (source, last_seq, last_event_time, updated_at) VALUES (:s, :seq, :t, :now)
+                ON CONFLICT (source) DO UPDATE SET
+                    last_seq = GREATEST(%s.last_seq, EXCLUDED.last_seq),
+                    last_event_time = GREATEST(%s.last_event_time, EXCLUDED.last_event_time),
+                    updated_at = EXCLUDED.updated_at""".formatted(position, position, position),
+                Map.of("s", source, "seq", streamSeq, "t", Timestamp.from(eventTime), "now", Timestamp.from(now)));
+    }
+
+    public Optional<Position> find(String source) {
+        return jdbc.query("SELECT source, last_seq, last_event_time, updated_at FROM %s WHERE source = :s".formatted(position),
+                Map.of("s", source), (rs, i) -> new Position(rs.getString("source"), rs.getLong("last_seq"),
+                        rs.getTimestamp("last_event_time").toInstant(), rs.getTimestamp("updated_at").toInstant()))
+                .stream().findFirst();
+    }
+
+    /**
+     * Aggregate'in son uygulanan delta sirasi; satir yoksa 0 (ilk olay seq=1). Satir FOR UPDATE ile kilitlenir:
+     * ayni aggregate'e iki tuketici ayni anda gelirse sira kontrolu serilesir (kontrol-et-sonra-yaz yarisini kapatir).
+     */
+    public long lockDeltaSeq(String source, UUID aggregateId) {
+        jdbc.update("INSERT INTO %s (source, aggregate_id, last_seq) VALUES (:s, :a, 0) ON CONFLICT DO NOTHING".formatted(deltaPosition),
+                Map.of("s", source, "a", aggregateId));
+        return jdbc.queryForObject("SELECT last_seq FROM %s WHERE source = :s AND aggregate_id = :a FOR UPDATE".formatted(deltaPosition),
+                Map.of("s", source, "a", aggregateId), Long.class);
+    }
+
+    public void setDeltaSeq(String source, UUID aggregateId, long seq) {
+        jdbc.update("UPDATE %s SET last_seq = :seq WHERE source = :s AND aggregate_id = :a".formatted(deltaPosition),
+                Map.of("s", source, "a", aggregateId, "seq", seq));
+    }
+
+    /** Rebuild: kaynagin konumu ve delta siralari sifirlanir; export yeniden uygulanirken konum yeniden kurulur. */
+    public void reset(String source) {
+        jdbc.update("DELETE FROM %s WHERE source = :s".formatted(deltaPosition), Map.of("s", source));
+        jdbc.update("DELETE FROM %s WHERE source = :s".formatted(position), Map.of("s", source));
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/DeltaEvent.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.time.Instant;
+import java.util.UUID;
+
+/**
+ * DEGISIKLIK (delta) olayi: op tek bir degisikliktir (bir engel ekleme/kaldirma); onceki durumu kapsamaz.
+ * aggregateSeq aggregate basina monoton siradir: hicbir olay atlanamaz, bosluk = eksik olay. streamSeq tuketim
+ * konumu icindir.
+ */
+public record DeltaEvent<D>(long streamSeq, UUID aggregateId, long aggregateSeq, Instant eventTime, D op) { }
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/DeltaProjection.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+/** Kaynak basina bir delta projeksiyonu. apply yalniz sira dogrulandiktan sonra cagrilir (ReadModelApplier). */
+public interface DeltaProjection<D> {
+
+    void apply(DeltaEvent<D> event);
+
+    void clear();
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/GapDetectedException.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.util.UUID;
+
+/**
+ * Delta akisinda sira boslugu: beklenen seq gelmedi. Tuketici DURUR ve kaynakla uzlasir (rebuild veya since ucu);
+ * bosluktan sonraki olaylar uygulanmaz, aksi halde projeksiyon sessizce yanlis olur.
+ */
+public class GapDetectedException extends RuntimeException {
+
+    private final String source;
+    private final UUID aggregateId;
+    private final long expectedSeq;
+    private final long actualSeq;
+
+    public GapDetectedException(String source, UUID aggregateId, long expectedSeq, long actualSeq) {
+        super("read-model gap: source=%s aggregate=%s expected=%d actual=%d".formatted(source, aggregateId, expectedSeq, actualSeq));
+        this.source = source;
+        this.aggregateId = aggregateId;
+        this.expectedSeq = expectedSeq;
+        this.actualSeq = actualSeq;
+    }
+
+    public String source() { return source; }
+    public UUID aggregateId() { return aggregateId; }
+    public long expectedSeq() { return expectedSeq; }
+    public long actualSeq() { return actualSeq; }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/Outcome.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+/** Bir read-model olayinin sonucu: uygulandi ya da (eski/esit revizyon, tekrar teslim) yok sayildi. Bosluk sonuc degil, istisnadir. */
+public enum Outcome { APPLIED, IGNORED }
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/ReadModelApplier.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Clock;
+import java.util.List;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * Read-model tuketici sozlesmesi (referans Bolum 4.6). Projeksiyon degisikligi ve tuketim konumu AYNI transaction'da
+ * yazilir; disaridan bir TX (inbox, Bolum 11.3) icinde cagrilirsa ona katilir (REQUIRED): dis TX rollback olursa
+ * ne projeksiyon ne konum degisir. Snapshot: kucuk/esit revizyon yok sayilir. Delta: seq == last + 1 zorunlu;
+ * bosluk => sayac + istisna, HICBIR SEY uygulanmaz; tekrar (seq <= last) => yok sayilir.
+ */
+public class ReadModelApplier {
+
+    /** Micrometer adi; Prometheus'ta readmodel_gap_total{source} olarak gorunur. */
+    public static final String GAP_METRIC = "readmodel.gap";
+
+    private final TransactionTemplate tx;
+    private final ConsumerPositionStore positions;
+    private final Clock clock;
+    private final MeterRegistry meters;
+
+    public ReadModelApplier(TransactionTemplate tx, ConsumerPositionStore positions, Clock clock, MeterRegistry meters) {
+        this.tx = tx;
+        this.positions = positions;
+        this.clock = clock;
+        this.meters = meters;
+    }
+
+    public <S> Outcome applySnapshot(String source, SnapshotProjection<S> projection, SnapshotEvent<S> event) {
+        return tx.execute(status -> {
+            int changed = projection.upsert(event.state(), clock.instant());   // revizyon korumasi UPSERT'in icinde
+            positions.advance(source, event.streamSeq(), event.eventTime(), clock.instant());  // yok sayilsa da tuketildi
+            return changed > 0 ? Outcome.APPLIED : Outcome.IGNORED;
+        });
+    }
+
+    public <D> Outcome applyDelta(String source, DeltaProjection<D> projection, DeltaEvent<D> event) {
+        return tx.execute(status -> {
+            long last = positions.lockDeltaSeq(source, event.aggregateId());
+            if (event.aggregateSeq() <= last) {                                 // tekrar teslim: tek etki
+                positions.advance(source, event.streamSeq(), event.eventTime(), clock.instant());
+                return Outcome.IGNORED;
+            }
+            if (event.aggregateSeq() != last + 1) {                             // bosluk: dur + uzlastir; kontrol ONCE
+                gaps(source).increment();
+                throw new GapDetectedException(source, event.aggregateId(), last + 1, event.aggregateSeq());
+            }
+            projection.apply(event);                                            // yalniz sira dogrulandiktan sonra
+            positions.setDeltaSeq(source, event.aggregateId(), event.aggregateSeq());
+            positions.advance(source, event.streamSeq(), event.eventTime(), clock.instant());
+            return Outcome.APPLIED;
+        });
+    }
+
+    /**
+     * Sahibin export'undan (veya stream replay'inden) sifirdan kurma: projeksiyon ve konum silinir, export sirayla
+     * uygulanir. Ayni export iki kez => ayni satirlar (deterministik); export sirasi da sonucu degistirmez (revizyon korumasi).
+     */
+    public <S> void rebuildFromExport(String source, SnapshotProjection<S> projection, List<SnapshotEvent<S>> export) {
+        tx.executeWithoutResult(status -> {
+            projection.clear();
+            positions.reset(source);
+            for (SnapshotEvent<S> e : export) {
+                projection.upsert(e.state(), clock.instant());
+                positions.advance(source, e.streamSeq(), e.eventTime(), clock.instant());
+            }
+        });
+    }
+
+    private Counter gaps(String source) {
+        return Counter.builder(GAP_METRIC).tag("source", source)
+                .description("read-model delta akisinda tespit edilen sira boslugu; alarm esigi > 0").register(meters);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/ReadModelFreshness.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+
+/**
+ * Tazelik TUKETIM KONUMUNDAN olculur: now - rm_consumer_position.last_event_time. Projeksiyon satirinin applied_at'i
+ * kullanilmaz; bir hesabin durumu bir ay degismemis olabilir, o eski satir gecikme degildir. Konum yoksa gecikme
+ * sonsuzdur (hic tuketilmemis kaynak = bilinmeyen durum, alarm).
+ */
+public class ReadModelFreshness {
+
+    /** Micrometer adi; Prometheus'ta readmodel_lag_seconds{source}. */
+    public static final String LAG_METRIC = "readmodel.lag.seconds";
+
+    private final ConsumerPositionStore positions;
+    private final Clock clock;
+    private final MeterRegistry meters;
+
+    public ReadModelFreshness(ConsumerPositionStore positions, Clock clock, MeterRegistry meters) {
+        this.positions = positions;
+        this.clock = clock;
+        this.meters = meters;
+    }
+
+    /** Her scrape'te konum satiri okunur (PK lookup); kaynak sayisi kucuktur, bu maliyet kabul edilir. */
+    public void registerGauge(String source) {
+        Gauge.builder(LAG_METRIC, () -> lagSeconds(source)).tag("source", source)
+                .description("tuketim konumundan olculen read-model gecikmesi (saniye)").register(meters);
+    }
+
+    public Optional<Duration> lag(String source) {
+        Instant now = clock.instant();
+        return positions.find(source)
+                .map(p -> Duration.between(p.lastEventTime(), now))
+                .map(d -> d.isNegative() ? Duration.ZERO : d);                  // saat kaymasi gecikme sayilmaz
+    }
+
+    double lagSeconds(String source) {
+        return lag(source).map(d -> d.toMillis() / 1000.0).orElse(Double.POSITIVE_INFINITY);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/SnapshotEvent.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.time.Instant;
+
+/**
+ * TAM DURUM (snapshot) olayi: state onceki durumu butunuyle kapsar, bu yuzden kucuk revizyonu atlamak guvenlidir.
+ * streamSeq kaynak akisindaki konumdur (tuketim konumu icin); revizyon state icindedir ve yalniz kendi aggregate'i
+ * icinde karsilastirilir.
+ */
+public record SnapshotEvent<S>(long streamSeq, Instant eventTime, S state) { }
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/SnapshotProjection.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.time.Instant;
+
+/** Kaynak basina bir snapshot projeksiyonu. upsert revizyon korumali UPSERT'tir: 0 satir = eski/esit revizyon, yok sayildi. */
+public interface SnapshotProjection<S> {
+
+    int upsert(S state, Instant appliedAt);
+
+    /** Rebuild icin: projeksiyon sifirlanir, export sirayla yeniden uygulanir. */
+    void clear();
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/main/java/com/acme/platform/messaging/readmodel/StalenessGuard.java`
+
+```java
+package com.acme.platform.messaging.readmodel;
+
+import java.time.Duration;
+
+/**
+ * Karar kurali (referans Bolum 4.6): her karar icin "en fazla ne kadar eski bilgiyle verilebilir" ayri cevaplanir
+ * (engel karari <= 30 sn, aktiflik bayragi <= 5 dk). Satir yoksa ya da konum maxLag'i asiyorsa FAIL_CLOSED:
+ * cagiran kaynaga sorar veya reddeder; read-model karar verdirir ama kaynak degildir.
+ */
+public class StalenessGuard {
+
+    public enum Decision { ALLOW, FAIL_CLOSED }
+
+    private final ReadModelFreshness freshness;
+
+    public StalenessGuard(ReadModelFreshness freshness) {
+        this.freshness = freshness;
+    }
+
+    public Decision decide(String source, Duration maxLag, boolean rowPresent) {
+        if (!rowPresent) return Decision.FAIL_CLOSED;                           // varsayilan: satir yok = bilinmiyor
+        return freshness.lag(source)
+                .filter(lag -> lag.compareTo(maxLag) <= 0)
+                .map(lag -> Decision.ALLOW)
+                .orElse(Decision.FAIL_CLOSED);                                  // konum yok veya eski
+    }
 }
 ```
 
@@ -7087,6 +15583,51 @@ CREATE TABLE ${schema}.inbox_event (
 
 ---
 
+### `skeleton-example/platform-messaging/src/main/resources/db/platform/readmodel.sql`
+
+```
+-- Read-model replikasyon DDL sablonu (referans Bolum 4.6). Tuketici servis kendi semasinda, kaynak basina BIR projeksiyon
+-- tutar; ${schema} yerine kendi semasini yazar. Farkli kaynaklarin revizyonlari karsilastirilamaz (auth rev 100 iken
+-- user rev 20 olabilir); bu yuzden tek revision kolonlu birlesik tablo YOKTUR: revizyon satirda, konum kaynakta tutulur.
+
+-- Tuketim konumu: TAZELIK buradan olculur (now - last_event_time), projeksiyon satirinin yasindan degil.
+-- Bir hesabin durumu bir ay degismemis olabilir; eski applied_at gecikme degildir.
+CREATE TABLE ${schema}.rm_consumer_position (
+  source          TEXT PRIMARY KEY,                       -- 'auth', 'user'
+  last_seq        BIGINT NOT NULL,                        -- kaynak akisinda tuketilen son konum (monoton, GREATEST ile)
+  last_event_time TIMESTAMPTZ NOT NULL,                   -- tuketilen son olayin KAYNAKTAKI zamani
+  updated_at      TIMESTAMPTZ NOT NULL
+);
+
+-- DELTA sozlesmesinde hicbir olay atlanamaz: aggregate basina son uygulanan sira burada; seq != last_seq + 1 => bosluk.
+CREATE TABLE ${schema}.rm_delta_position (
+  source       TEXT NOT NULL,
+  aggregate_id UUID NOT NULL,
+  last_seq     BIGINT NOT NULL,
+  PRIMARY KEY (source, aggregate_id)
+);
+
+-- SNAPSHOT (tam durum) ornegi. Sahibi: auth; olay: account.status.changed. Kucuk/esit revizyon yok sayilir.
+CREATE TABLE ${schema}.rm_account_status (
+  account_id      UUID PRIMARY KEY,
+  active          BOOLEAN NOT NULL,
+  legal_ok        BOOLEAN NOT NULL,
+  source_revision BIGINT NOT NULL,                        -- auth'un bu hesap icin olay sirasi
+  source_time     TIMESTAMPTZ NOT NULL,                   -- olayin kaynaktaki zamani (son is degisikligi)
+  applied_at      TIMESTAMPTZ NOT NULL                    -- tuketicinin uyguladigi an (tazelik OLCUSU DEGIL)
+);
+
+-- DELTA (degisiklik) ornegi. Sahibi: user; olay: user.block.created / user.block.removed. Sira boslugunda uygulama durur.
+CREATE TABLE ${schema}.rm_block_relation (
+  blocker_id UUID NOT NULL,
+  blocked_id UUID NOT NULL,
+  source_seq BIGINT NOT NULL,                             -- user'in (blocker) basina monoton sirasi
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+```
+
+---
+
 ### `skeleton-example/platform-messaging/src/main/resources/db/platform/saga_coordinator.sql`
 
 ```
@@ -7500,6 +16041,449 @@ class OutboxBehaviourIT {
         assertThat(left.status()).isEqualTo("PUBLISHING");                         // kira dolunca baska instance alir
         clock.advance(Duration.ofSeconds(30));
         assertThat(poller(Map.of("EVENT", e -> {})).poll("EVENT").applied()).isEqualTo(1);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/test/java/com/acme/platform/messaging/ReadModelBehaviourIT.java`
+
+```java
+package com.acme.platform.messaging;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.acme.platform.messaging.readmodel.AccountStatusProjection;
+import com.acme.platform.messaging.readmodel.AccountStatusProjection.AccountStatus;
+import com.acme.platform.messaging.readmodel.AccountStatusProjection.Row;
+import com.acme.platform.messaging.readmodel.BlockRelationProjection;
+import com.acme.platform.messaging.readmodel.BlockRelationProjection.BlockOp;
+import com.acme.platform.messaging.readmodel.BlockRelationProjection.Kind;
+import com.acme.platform.messaging.readmodel.ConsumerPositionStore;
+import com.acme.platform.messaging.readmodel.ConsumerPositionStore.Position;
+import com.acme.platform.messaging.readmodel.DeltaEvent;
+import com.acme.platform.messaging.readmodel.DeltaProjection;
+import com.acme.platform.messaging.readmodel.GapDetectedException;
+import com.acme.platform.messaging.readmodel.Outcome;
+import com.acme.platform.messaging.readmodel.ReadModelApplier;
+import com.acme.platform.messaging.readmodel.ReadModelFreshness;
+import com.acme.platform.messaging.readmodel.SnapshotEvent;
+import com.acme.platform.messaging.readmodel.StalenessGuard;
+import com.acme.platform.messaging.readmodel.StalenessGuard.Decision;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/**
+ * DAVRANISSAL dogrulama (referans Bolum 4.6 "Dogrulama" satiri; kanit seviyesi 2): gercek PostgreSQL uzerinde
+ * read-model tuketici sozlesmesi. Snapshot: kucuk/esit revizyon yok sayilir, sirasiz teslim ayni sonuca yakinsar.
+ * Delta: bosluk uygulamayi durdurur (sayac + istisna, hicbir etki), tekrar tek etki. Tazelik konumdan olculur.
+ * Rebuild deterministik. Inbox TX'i icinde cagri atomiktir.
+ */
+class ReadModelBehaviourIT {
+
+    static final String SCHEMA = "order";
+    static final String AUTH = "auth";
+    static final String USER = "user";
+    static EmbeddedPostgres pg;
+    static DataSource ds;
+    static NamedParameterJdbcTemplate jdbc;
+    static TransactionTemplate tx;
+
+    MutableClock clock;
+    SimpleMeterRegistry meters;
+    ConsumerPositionStore positions;
+    ReadModelApplier applier;
+    ReadModelFreshness freshness;
+    StalenessGuard guard;
+    AccountStatusProjection accounts;
+    BlockRelationProjection blocks;
+
+    /** Deterministik zaman: gecikme ve applied_at hesaplari gercek zaman beklemeden calisir. */
+    static final class MutableClock extends Clock {
+        volatile Instant now = Instant.parse("2026-09-29T10:00:00Z");
+        @Override public ZoneOffset getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
+        void advance(Duration d) { now = now.plus(d); }
+    }
+
+    @BeforeAll
+    static void startDb() throws Exception {
+        pg = EmbeddedPostgres.builder().start();
+        ds = pg.getPostgresDatabase();
+        jdbc = new NamedParameterJdbcTemplate(ds);
+        tx = new TransactionTemplate(new JdbcTransactionManager(ds));
+        String ddl = new String(ReadModelBehaviourIT.class.getResourceAsStream("/db/platform/readmodel.sql")
+                .readAllBytes(), StandardCharsets.UTF_8).replace("${schema}", "\"" + SCHEMA + "\"");
+        jdbc.getJdbcTemplate().execute("CREATE SCHEMA \"" + SCHEMA + "\"");
+        try (var conn = ds.getConnection()) {
+            ScriptUtils.executeSqlScript(conn, new ByteArrayResource(ddl.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    @AfterAll
+    static void stopDb() throws IOException { if (pg != null) pg.close(); }
+
+    @BeforeEach
+    void clean() {
+        jdbc.getJdbcTemplate().execute("TRUNCATE \"order\".rm_consumer_position, \"order\".rm_delta_position, "
+                + "\"order\".rm_account_status, \"order\".rm_block_relation");
+        clock = new MutableClock();
+        meters = new SimpleMeterRegistry();
+        positions = new ConsumerPositionStore(jdbc, SCHEMA);
+        applier = new ReadModelApplier(tx, positions, clock, meters);
+        freshness = new ReadModelFreshness(positions, clock, meters);
+        guard = new StalenessGuard(freshness);
+        accounts = new AccountStatusProjection(jdbc, SCHEMA);
+        blocks = new BlockRelationProjection(jdbc, SCHEMA);
+    }
+
+    // ---------- yardimcilar ----------
+
+    SnapshotEvent<AccountStatus> snapshot(long streamSeq, UUID account, boolean active, long revision) {
+        Instant t = clock.instant().minusSeconds(60).plusSeconds(revision);   // kaynak zamani revizyonla artar
+        return new SnapshotEvent<>(streamSeq, t, new AccountStatus(account, active, true, revision, t));
+    }
+
+    DeltaEvent<BlockOp> block(long streamSeq, UUID blocker, long seq, UUID blocked, Kind kind) {
+        return new DeltaEvent<>(streamSeq, blocker, seq, clock.instant().minusSeconds(10), new BlockOp(blocked, kind));
+    }
+
+    Outcome applyAuth(SnapshotEvent<AccountStatus> e) { return applier.applySnapshot(AUTH, accounts, e); }
+
+    Outcome applyUser(DeltaEvent<BlockOp> e) { return applier.applyDelta(USER, blocks, e); }
+
+    Row row(UUID account) {
+        return accounts.findAll().stream().filter(r -> r.accountId().equals(account)).findFirst().orElseThrow();
+    }
+
+    double gapCount(String source) {
+        var c = meters.find(ReadModelApplier.GAP_METRIC).tag("source", source).counter();
+        return c == null ? 0 : c.count();
+    }
+
+    int count(String table) {
+        return jdbc.getJdbcTemplate().queryForObject("SELECT count(*) FROM \"order\"." + table, Integer.class);
+    }
+
+    /** Sira kontrolunun projeksiyona DOKUNMADAN yapildigini gormek icin: apply cagri sayisini sayan sarmalayici. */
+    static final class CountingDelta implements DeltaProjection<BlockOp> {
+        final DeltaProjection<BlockOp> inner;
+        final AtomicInteger applied = new AtomicInteger();
+        CountingDelta(DeltaProjection<BlockOp> inner) { this.inner = inner; }
+        @Override public void apply(DeltaEvent<BlockOp> e) { applied.incrementAndGet(); inner.apply(e); }
+        @Override public void clear() { inner.clear(); }
+    }
+
+    // ---------- snapshot (tam durum) ----------
+
+    @Test // kucuk revizyon yok sayilir: gec gelen eski karar yeni karari ezmez
+    void snapshotOlderRevisionIsIgnored() {
+        UUID a = UUID.randomUUID();
+        assertThat(applyAuth(snapshot(1, a, false, 2))).isEqualTo(Outcome.APPLIED);   // rev 2: engellendi
+        assertThat(applyAuth(snapshot(2, a, true, 1))).isEqualTo(Outcome.IGNORED);    // rev 1 gec geldi
+        assertThat(row(a).active()).isFalse();
+        assertThat(row(a).sourceRevision()).isEqualTo(2);
+    }
+
+    @Test // esit revizyon = tekrar teslim: tek etki, satir degismez (applied_at bile)
+    void snapshotEqualRevisionIsIgnoredAsDuplicate() {
+        UUID a = UUID.randomUUID();
+        assertThat(applyAuth(snapshot(1, a, false, 5))).isEqualTo(Outcome.APPLIED);
+        Row before = row(a);
+        clock.advance(Duration.ofMinutes(1));
+        assertThat(applyAuth(snapshot(1, a, true, 5))).isEqualTo(Outcome.IGNORED);
+        assertThat(row(a)).isEqualTo(before);
+    }
+
+    @Test // yeni revizyon uygulanir; applied_at tuketicinin saati, source_time kaynagin
+    void snapshotNewerRevisionIsApplied() {
+        UUID a = UUID.randomUUID();
+        assertThat(applyAuth(snapshot(1, a, true, 1))).isEqualTo(Outcome.APPLIED);
+        clock.advance(Duration.ofMinutes(5));
+        SnapshotEvent<AccountStatus> rev7 = snapshot(2, a, false, 7);
+        assertThat(applyAuth(rev7)).isEqualTo(Outcome.APPLIED);
+        Row r = row(a);
+        assertThat(r.active()).isFalse();
+        assertThat(r.sourceRevision()).isEqualTo(7);
+        assertThat(r.sourceTime()).isEqualTo(rev7.state().sourceTime());
+        assertThat(r.appliedAt()).isEqualTo(clock.instant());
+        assertThat(count("rm_account_status")).isEqualTo(1);
+    }
+
+    @Test // kaynaklar arasi revizyon/konum karsilastirilmaz: auth rev 100 iken user seq 20 birbirine karismaz
+    void perSourceRevisionsAndPositionsAreIndependent() {
+        UUID account = UUID.randomUUID();   // ayni id hem auth'un hesabi hem user'in blocker'i
+        assertThat(applyAuth(snapshot(100, account, true, 100))).isEqualTo(Outcome.APPLIED);
+        // user kaynagi ayni aggregate icin kendi sirasindan (1'den) baslar: auth'un 100'u onu "tekrar" yapmaz
+        assertThat(applyUser(block(20, account, 1, UUID.randomUUID(), Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        Position auth = positions.find(AUTH).orElseThrow(), user = positions.find(USER).orElseThrow();
+        assertThat(auth.lastSeq()).isEqualTo(100);
+        assertThat(user.lastSeq()).isEqualTo(20);
+        // auth'ta rev 101 gelince user'in konumu degismez; user'da seq 2 gelince auth'un konumu degismez
+        assertThat(applyAuth(snapshot(101, account, false, 101))).isEqualTo(Outcome.APPLIED);
+        assertThat(positions.find(USER).orElseThrow().lastSeq()).isEqualTo(20);
+        assertThat(applyUser(block(21, account, 2, UUID.randomUUID(), Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        assertThat(positions.find(AUTH).orElseThrow().lastSeq()).isEqualTo(101);
+        assertThat(blocks.findByBlocker(account)).hasSize(2);
+    }
+
+    @Test // snapshot olaylari SIRASIZ gelse de son durum ayni: revizyon korumasi + GREATEST konum
+    void shuffledSnapshotDeliveryConvergesToSameState() {
+        List<UUID> ids = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        List<SnapshotEvent<AccountStatus>> ordered = new ArrayList<>();
+        long seq = 0;
+        for (long rev = 1; rev <= 4; rev++)
+            for (UUID id : ids) ordered.add(snapshot(++seq, id, rev % 2 == 0, rev));
+        for (SnapshotEvent<AccountStatus> e : ordered) applyAuth(e);
+        List<Row> expected = accounts.findAll();
+        Position expectedPos = positions.find(AUTH).orElseThrow();
+
+        for (int round = 1; round <= 3; round++) {
+            clean();
+            List<SnapshotEvent<AccountStatus>> shuffled = new ArrayList<>(ordered);
+            Collections.shuffle(shuffled, new Random(round));                  // tekrarlanabilir karistirma
+            assertThat(shuffled).isNotEqualTo(ordered);
+            for (SnapshotEvent<AccountStatus> e : shuffled) applyAuth(e);
+            assertThat(accounts.findAll()).isEqualTo(expected);
+            assertThat(accounts.findAll()).allSatisfy(r -> { assertThat(r.sourceRevision()).isEqualTo(4); assertThat(r.active()).isTrue(); });
+            Position p = positions.find(AUTH).orElseThrow();
+            assertThat(p.lastSeq()).isEqualTo(expectedPos.lastSeq());          // konum geri gitmez: max(seq)
+            assertThat(p.lastEventTime()).isEqualTo(expectedPos.lastEventTime());
+        }
+    }
+
+    // ---------- delta (degisiklik) ----------
+
+    @Test // sirali delta uygulanir; ekleme/kaldirma sirasiyla; aggregate sirasi ve kaynak konumu ilerler
+    void deltaInOrderIsApplied() {
+        UUID blocker = UUID.randomUUID(), x = UUID.randomUUID(), y = UUID.randomUUID();
+        assertThat(applyUser(block(1, blocker, 1, x, Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        assertThat(applyUser(block(2, blocker, 2, y, Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        assertThat(applyUser(block(3, blocker, 3, x, Kind.REMOVED))).isEqualTo(Outcome.APPLIED);
+        assertThat(blocks.findByBlocker(blocker)).extracting(BlockRelationProjection.Row::blockedId).containsExactly(y);
+        assertThat(positions.find(USER).orElseThrow().lastSeq()).isEqualTo(3);
+        assertThat(gapCount(USER)).isZero();
+    }
+
+    @Test // bosluk (3'ten sonra 5): istisna, sayac +1, projeksiyon DOKUNULMAMIS, konum degismemis; 4 gelince devam
+    void deltaGapStopsApplyingAndIsCounted() {
+        UUID blocker = UUID.randomUUID(), z = UUID.randomUUID();
+        for (long s = 1; s <= 3; s++) applyUser(block(s, blocker, s, UUID.randomUUID(), Kind.CREATED));
+        Position before = positions.find(USER).orElseThrow();
+        CountingDelta counting = new CountingDelta(blocks);
+
+        assertThatThrownBy(() -> applier.applyDelta(USER, counting, block(5, blocker, 5, z, Kind.CREATED)))
+                .isInstanceOf(GapDetectedException.class)
+                .satisfies(ex -> {
+                    GapDetectedException g = (GapDetectedException) ex;
+                    assertThat(g.expectedSeq()).isEqualTo(4);
+                    assertThat(g.actualSeq()).isEqualTo(5);
+                    assertThat(g.source()).isEqualTo(USER);
+                });
+        assertThat(gapCount(USER)).isEqualTo(1.0);
+        assertThat(counting.applied.get()).isZero();                          // sira kontrolu projeksiyondan ONCE
+        assertThat(blocks.findByBlocker(blocker)).hasSize(3);
+        assertThat(blocks.findByBlocker(blocker)).extracting(BlockRelationProjection.Row::blockedId).doesNotContain(z);
+        assertThat(positions.find(USER).orElseThrow()).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT last_seq FROM \"order\".rm_delta_position WHERE source = :s AND aggregate_id = :a",
+                Map.of("s", USER, "a", blocker), Long.class)).isEqualTo(3);
+
+        // ilk olay da 1 olmak zorunda: yeni aggregate icin 2 ile baslamak bosluktur
+        assertThatThrownBy(() -> applyUser(block(6, UUID.randomUUID(), 2, z, Kind.CREATED))).isInstanceOf(GapDetectedException.class);
+        assertThat(gapCount(USER)).isEqualTo(2.0);
+
+        // uzlastirma: eksik 4 gelir, sonra 5 uygulanir
+        assertThat(applyUser(block(4, blocker, 4, UUID.randomUUID(), Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        assertThat(applyUser(block(5, blocker, 5, z, Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        assertThat(blocks.findByBlocker(blocker)).hasSize(5);
+    }
+
+    @Test // tekrar teslim (seq <= last) yok sayilir, tek etki; kaldirilmis iliski geri gelmez
+    void deltaDuplicateIsIgnored() {
+        UUID blocker = UUID.randomUUID(), x = UUID.randomUUID();
+        assertThat(applyUser(block(1, blocker, 1, x, Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+        assertThat(applyUser(block(2, blocker, 2, x, Kind.REMOVED))).isEqualTo(Outcome.APPLIED);
+        assertThat(applyUser(block(1, blocker, 1, x, Kind.CREATED))).isEqualTo(Outcome.IGNORED);   // eski olay tekrar
+        assertThat(applyUser(block(2, blocker, 2, x, Kind.REMOVED))).isEqualTo(Outcome.IGNORED);   // son olay tekrar
+        assertThat(blocks.findByBlocker(blocker)).isEmpty();
+        assertThat(gapCount(USER)).isZero();
+        assertThat(positions.find(USER).orElseThrow().lastSeq()).isEqualTo(2);
+    }
+
+    @Test // delta SIRALI olmak zorunda: snapshot'in aksine karisik teslim yakinsamaz, koruma durdurur
+    void deltaEventsMustBeOrderedUnlikeSnapshots() {
+        UUID blocker = UUID.randomUUID();
+        UUID a = UUID.randomUUID(), b = UUID.randomUUID(), c = UUID.randomUUID();
+        DeltaEvent<BlockOp> e1 = block(1, blocker, 1, a, Kind.CREATED), e2 = block(2, blocker, 2, b, Kind.CREATED),
+                e3 = block(3, blocker, 3, c, Kind.CREATED);
+        List<DeltaEvent<BlockOp>> shuffled = List.of(e1, e3, e2);            // sabit permutasyon: 3, 2'den once gelir
+        List<Outcome> outcomes = new ArrayList<>();
+        int gaps = 0;
+        for (DeltaEvent<BlockOp> e : shuffled) {
+            try { outcomes.add(applyUser(e)); } catch (GapDetectedException ex) { gaps++; }
+        }
+        assertThat(gaps).isEqualTo(1);
+        assertThat(outcomes).containsExactly(Outcome.APPLIED, Outcome.APPLIED);
+        assertThat(blocks.findByBlocker(blocker)).extracting(BlockRelationProjection.Row::blockedId).containsExactlyInAnyOrder(a, b);
+        assertThat(gapCount(USER)).isEqualTo(1.0);
+        // uzlastirma: 3 yeniden teslim edilince tamamlanir
+        assertThat(applyUser(e3)).isEqualTo(Outcome.APPLIED);
+        assertThat(blocks.findByBlocker(blocker)).hasSize(3);
+    }
+
+    // ---------- tazelik ----------
+
+    @Test // gecikme KONUMDAN olculur: satir 30 gun eski ama konum taze -> ALLOW; gauge konumu yansitir
+    void lagIsMeasuredFromPositionNotFromRowAge() {
+        UUID a = UUID.randomUUID();
+        applyAuth(snapshot(1, a, true, 1));                                   // satir simdi yazildi
+        clock.advance(Duration.ofDays(30));                                   // hesap 30 gundur degismedi
+        jdbc.update("UPDATE \"order\".rm_consumer_position SET last_event_time = :t, updated_at = :t WHERE source = :s",
+                Map.of("t", Timestamp.from(clock.instant().minusSeconds(5)), "s", AUTH));   // ama akis tuketiliyor
+        freshness.registerGauge(AUTH);
+
+        assertThat(row(a).appliedAt()).isBefore(clock.instant().minus(Duration.ofDays(29)));
+        assertThat(freshness.lag(AUTH)).contains(Duration.ofSeconds(5));
+        assertThat(meters.get(ReadModelFreshness.LAG_METRIC).tag("source", AUTH).gauge().value()).isEqualTo(5.0);
+        assertThat(guard.decide(AUTH, Duration.ofSeconds(30), accounts.exists(a))).isEqualTo(Decision.ALLOW);
+    }
+
+    @Test // konum maxLag'i asarsa FAIL_CLOSED (satir taze olsa bile): karar kaynaga sorulur veya reddedilir
+    void stalePositionFailsClosed() {
+        UUID a = UUID.randomUUID();
+        applyAuth(snapshot(1, a, true, 1));
+        assertThat(freshness.lag(AUTH)).contains(Duration.ofSeconds(59));    // snapshot(): kaynak zamani now-60s+rev
+        assertThat(guard.decide(AUTH, Duration.ofMinutes(2), true)).isEqualTo(Decision.ALLOW);
+        clock.advance(Duration.ofMinutes(10));                                // tuketici 10 dk geride kaldi
+        freshness.registerGauge(AUTH);
+        assertThat(meters.get(ReadModelFreshness.LAG_METRIC).tag("source", AUTH).gauge().value()).isGreaterThan(600.0);
+        assertThat(guard.decide(AUTH, Duration.ofSeconds(30), true)).isEqualTo(Decision.FAIL_CLOSED);
+        assertThat(guard.decide(AUTH, Duration.ofMinutes(15), true)).isEqualTo(Decision.ALLOW);  // tolerans karara gore
+    }
+
+    @Test // satir yoksa varsayilan FAIL_CLOSED; hic tuketilmemis kaynak (konum yok) da FAIL_CLOSED ve gauge sonsuz
+    void missingRowOrPositionFailsClosed() {
+        applyAuth(snapshot(1, UUID.randomUUID(), true, 1));                   // konum taze
+        assertThat(guard.decide(AUTH, Duration.ofMinutes(5), false)).isEqualTo(Decision.FAIL_CLOSED);
+        freshness.registerGauge(USER);                                        // user hic tuketilmedi
+        assertThat(freshness.lag(USER)).isEmpty();
+        assertThat(meters.get(ReadModelFreshness.LAG_METRIC).tag("source", USER).gauge().value()).isEqualTo(Double.POSITIVE_INFINITY);
+        assertThat(guard.decide(USER, Duration.ofMinutes(5), true)).isEqualTo(Decision.FAIL_CLOSED);
+    }
+
+    // ---------- rebuild ----------
+
+    @Test // export'tan yeniden kurma deterministik: iki kez -> ayni satirlar; sira farki ve eski/silinmis satir sonucu degistirmez
+    void rebuildFromExportIsDeterministic() {
+        UUID stale = UUID.randomUUID();
+        applyAuth(snapshot(1, stale, true, 9));                               // export'ta olmayan eski satir: silinmeli
+        List<UUID> ids = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        List<SnapshotEvent<AccountStatus>> export = new ArrayList<>();
+        long seq = 10;
+        for (UUID id : ids) { export.add(snapshot(++seq, id, false, 3)); export.add(snapshot(++seq, id, true, 5)); }
+
+        applier.rebuildFromExport(AUTH, accounts, export);
+        List<Row> first = accounts.findAll();
+        Position pos1 = positions.find(AUTH).orElseThrow();
+        assertThat(first).hasSize(4);
+        assertThat(first).allSatisfy(r -> { assertThat(r.sourceRevision()).isEqualTo(5); assertThat(r.active()).isTrue(); });
+        assertThat(accounts.exists(stale)).isFalse();
+
+        List<SnapshotEvent<AccountStatus>> reversed = new ArrayList<>(export);
+        reversed.sort(Comparator.comparingLong(SnapshotEvent<AccountStatus>::streamSeq).reversed());
+        applier.rebuildFromExport(AUTH, accounts, reversed);
+        assertThat(accounts.findAll()).isEqualTo(first);
+        assertThat(positions.find(AUTH).orElseThrow()).isEqualTo(pos1);
+    }
+
+    // ---------- atomiklik ----------
+
+    @Test // inbox TX'i icinde: is sonra basarisiz olursa ne projeksiyon ne konum ne delta sirasi degisir
+    void applyInsideFailingTransactionLeavesNothingBehind() {
+        UUID account = UUID.randomUUID(), blocker = UUID.randomUUID();
+        applyUser(block(1, blocker, 1, UUID.randomUUID(), Kind.CREATED));    // onceden var olan durum
+        Position userBefore = positions.find(USER).orElseThrow();
+
+        assertThatThrownBy(() -> tx.executeWithoutResult(s -> {
+            assertThat(applyAuth(snapshot(1, account, true, 1))).isEqualTo(Outcome.APPLIED);
+            assertThat(applyUser(block(2, blocker, 2, UUID.randomUUID(), Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+            assertThat(accounts.exists(account)).isTrue();                    // TX icinde gorunur
+            throw new IllegalStateException("inbox isi ortasinda cokme");
+        })).isInstanceOf(IllegalStateException.class);
+
+        assertThat(accounts.exists(account)).isFalse();
+        assertThat(positions.find(AUTH)).isEmpty();
+        assertThat(blocks.findByBlocker(blocker)).hasSize(1);
+        assertThat(positions.find(USER).orElseThrow()).isEqualTo(userBefore);
+        assertThat(jdbc.queryForObject("SELECT last_seq FROM \"order\".rm_delta_position WHERE source = :s AND aggregate_id = :a",
+                Map.of("s", USER, "a", blocker), Long.class)).isEqualTo(1);
+        // yeniden teslimde is yapilir
+        assertThat(applyUser(block(2, blocker, 2, UUID.randomUUID(), Kind.CREATED))).isEqualTo(Outcome.APPLIED);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-messaging/src/test/java/com/acme/platform/messaging/ReadModelMetricNamesTest.java`
+
+```java
+package com.acme.platform.messaging;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.acme.platform.messaging.readmodel.ReadModelApplier;
+import com.acme.platform.messaging.readmodel.ReadModelFreshness;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Kanit seviyesi 1: Micrometer'daki noktali adlar Prometheus'ta referansin (Bolum 4.6) adlariyla gorunur:
+ * readmodel_gap_total{source} ve readmodel_lag_seconds{source}. Alarm kurallari bu adlara yazilir.
+ */
+class ReadModelMetricNamesTest {
+
+    @Test
+    void metricNamesRenderAsInReference() {
+        PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        Counter.builder(ReadModelApplier.GAP_METRIC).tag("source", "user").register(registry).increment();
+        Gauge.builder(ReadModelFreshness.LAG_METRIC, () -> 4.5).tag("source", "auth").register(registry);
+        String scrape = registry.scrape();
+        assertThat(scrape).contains("readmodel_gap_total{source=\"user\"} 1.0");
+        assertThat(scrape).contains("readmodel_lag_seconds{source=\"auth\"} 4.5");
     }
 }
 ```
@@ -8273,6 +17257,3858 @@ public class QuotaParticipant implements SagaParticipant {
 
 ---
 
+### `skeleton-example/platform-parameters/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>platform-parameters</artifactId>
+  <!-- Dinamik is parametreleri, TUKETICI tarafi (referans Bolum 14, 4.7 "control plane"): SystemParameterProvider,
+       bounded staleness (bellek + disk snapshot), tipli okuma (fail-closed), acilis kontrolu. Spring context gerektirmez;
+       servis kendi BackofficeParameterClient'ini ParameterSource olarak baglar. -->
+  <dependencies>
+    <!-- Jackson 3 (Boot 4 varsayilani): DTO degerleri JsonNode olarak tasinir, disk snapshot JSON dosyasidir -->
+    <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+    <!-- parameter_staleness_seconds{group} gauge'u: esik alarmi ops'un isi, metrik kutuphanenin -->
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-core</artifactId></dependency>
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz: sessiz "yesil" durumlarini yakalar (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/Criticality.java`
+
+```java
+package com.acme.platform.parameters;
+
+/**
+ * Grubun bounded-staleness sinifi (referans Bolum 14): katalogda tanimlanir, tuketici kodunda degil.
+ * SECURITY_CRITICAL: maxStaleness asilinca 503 (PARAMETER_UNAVAILABLE). NORMAL: son bilinen degerle devam.
+ */
+public enum Criticality { SECURITY_CRITICAL, NORMAL }
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/DiskSnapshotStore.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Optional;
+import java.util.regex.Pattern;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Grup basina bir JSON dosyasi (<dir>/<group>.json). Her basarili fetch'ten sonra yazilir; soguk acilista kaynak
+ * yoksa buradan ayaga kalkilir (referans Bolum 14 "bellekte ve diskte"). Yazim atomiktir (tmp + move): yarim dosya
+ * okunmaz. Dizin instance'a ozel kalici bir volume'dur; birden fazla instance ayni dosyayi paylasmaz.
+ */
+public final class DiskSnapshotStore {
+    /** kebab-case grup adi disinda dosya adi uretilmez (path traversal'a kapali). */
+    private static final Pattern GROUP = Pattern.compile("[a-z0-9]+(-[a-z0-9]+)*");
+
+    private final Path dir;
+    private final JsonMapper mapper;
+
+    public DiskSnapshotStore(Path dir, JsonMapper mapper) {
+        this.dir = dir;
+        this.mapper = mapper;
+    }
+
+    public Optional<ParameterSnapshot> read(String group) {
+        Path file = fileOf(group);
+        if (!Files.isRegularFile(file)) return Optional.empty();
+        try {
+            return Optional.of(mapper.readValue(Files.readAllBytes(file), ParameterSnapshot.class));
+        } catch (IOException e) {
+            throw new UncheckedIOException("snapshot okunamadi: " + group, e);
+        }
+    }
+
+    public void write(ParameterSnapshot snapshot) {
+        String group = snapshot.group().group();
+        Path file = fileOf(group);
+        try {
+            Files.createDirectories(dir);
+            Path tmp = Files.createTempFile(dir, group + "-", ".tmp");
+            Files.write(tmp, mapper.writeValueAsBytes(snapshot));
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            throw new UncheckedIOException("snapshot yazilamadi: " + group, e);
+        }
+    }
+
+    private Path fileOf(String group) {
+        if (group == null || !GROUP.matcher(group).matches()) throw new IllegalArgumentException("gecersiz grup adi");
+        return dir.resolve(group + ".json");
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterException.java`
+
+```java
+package com.acme.platform.parameters;
+
+/**
+ * Parametre okuma hatalarinin ortak tabani: sabit bir hata kodu ve HTTP semantigi tasir. Servisler bunu kendi
+ * GlobalServiceExceptionHandler'inda ProblemDetail'e cevirir. Mesajlarda deger ve ham yanit bulunmaz (referans
+ * Bolum 14: loglara deger yazilmaz); grup ve key adi deploy hatasini teshis icin gerekli oldugundan yer alir.
+ */
+public abstract class ParameterException extends RuntimeException {
+    private final String code;
+    private final int httpStatus;
+
+    protected ParameterException(String code, int httpStatus, String message, Throwable cause) {
+        super(message, cause);
+        this.code = code;
+        this.httpStatus = httpStatus;
+    }
+
+    public String code() { return code; }
+    public int httpStatus() { return httpStatus; }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterGroupDto.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.util.Map;
+import tools.jackson.databind.JsonNode;
+
+/**
+ * Yonetim servisinin /internal/parameters/groups/{group} yaniti: bir grubun TUM key'leri tek revizyonda.
+ * Birlikte anlamli key'ler ayni revizyondan okunur; kalici sonuclara bu revizyon snapshot olarak yazilir.
+ * Degerler ham JSON tasinir; tip dogrulamasi okuma aninda ParameterValues'ta yapilir (fail-closed).
+ */
+public record ParameterGroupDto(String group, long revision, Map<String, JsonNode> values, Criticality criticality) {
+    public ParameterGroupDto {
+        if (group == null || group.isBlank()) throw new IllegalArgumentException("group bos olamaz");
+        if (criticality == null) throw new IllegalArgumentException("criticality bos olamaz: " + group);
+        values = values == null ? Map.of() : Map.copyOf(values);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterNotDefinedException.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.util.List;
+
+/** Key katalogda yok: deploy hatasi (kod ici default yasak). Acilis kontrolunde ve ilk okumada fail-closed. */
+public class ParameterNotDefinedException extends ParameterException {
+    public static final String CODE = "PARAMETER_NOT_DEFINED";
+
+    public ParameterNotDefinedException(String group, String key) {
+        super(CODE, 500, "parametre tanimsiz: " + group + "/" + key, null);
+    }
+
+    public ParameterNotDefinedException(List<String> missingKeys) {
+        super(CODE, 500, "parametreler tanimsiz: " + missingKeys, null);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterOption.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.util.Map;
+
+/** OPTION_LIST elemani (referans Bolum 14): code, labels.tr/en, order, active. */
+public record ParameterOption(String code, Map<String, String> labels, int order, boolean active) {}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterProperties.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.time.Duration;
+import java.util.Map;
+
+/**
+ * Baslangic ayarlari (referans Bolum 1.4 sinifi): cacheTtl 5 sn instance cache; maxStaleness grup basina
+ * (orn. hak limitleri 10 dk, yas/uygunluk kurallari 1 sa), tanimsiz gruplar icin defaultMaxStaleness.
+ * Bunlar is parametresi degildir; yml'de durur.
+ */
+public record ParameterProperties(Duration cacheTtl, Duration defaultMaxStaleness, Map<String, Duration> maxStalenessByGroup) {
+    public ParameterProperties {
+        if (cacheTtl == null || cacheTtl.isNegative()) throw new IllegalArgumentException("cacheTtl");
+        if (defaultMaxStaleness == null || defaultMaxStaleness.isNegative()) throw new IllegalArgumentException("defaultMaxStaleness");
+        maxStalenessByGroup = maxStalenessByGroup == null ? Map.of() : Map.copyOf(maxStalenessByGroup);
+    }
+
+    public static ParameterProperties defaults() {
+        return new ParameterProperties(Duration.ofSeconds(5), Duration.ofMinutes(10), Map.of());
+    }
+
+    public Duration maxStaleness(String group) {
+        return maxStalenessByGroup.getOrDefault(group, defaultMaxStaleness);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterRevisionStaleException.java`
+
+```java
+package com.acme.platform.parameters;
+
+/** freshGroupSince: kaynak istenen revizyondan eski bir grup dondurdu; eski revizyonla kirpma yapilmaz (503). */
+public class ParameterRevisionStaleException extends ParameterException {
+    public static final String CODE = "PARAMETER_REVISION_STALE";
+
+    public ParameterRevisionStaleException(String group, long required, long actual) {
+        super(CODE, 503, "parametre revizyonu eski: " + group + " istenen>=" + required + " gelen=" + actual, null);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterSnapshot.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.time.Instant;
+
+/** Son basarili fetch: grup + ne zaman alindigi. Staleness = now - fetchedAt; bellekte ve diskte ayni sekil. */
+public record ParameterSnapshot(ParameterGroupDto group, Instant fetchedAt) {
+    public ParameterSnapshot {
+        if (group == null || fetchedAt == null) throw new IllegalArgumentException("snapshot eksik");
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterSource.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.time.Instant;
+
+/**
+ * Uzak parametre kaynagi (yonetim servisinin internal uclari). Servis basina tek implementasyon
+ * (BackofficeParameterClient). Erisilemezlik, timeout, 5xx gibi tum tasima hatalari ParameterSourceException olarak
+ * gelir; fallback karari bu arayuzde degil SystemParameterProvider'da verilir.
+ */
+public interface ParameterSource {
+    /** GET /internal/parameters/groups/{group} */
+    ParameterGroupDto fetch(String group);
+    /** GET /internal/parameters/groups/{group}/since/{revision}: en az bu revizyon beklenir. */
+    ParameterGroupDto fetchSince(String group, long revision);
+    /** GET /internal/parameters/groups/{group}/at?at=<instant>: gecmis bir anin degeri. */
+    ParameterGroupDto fetchAt(String group, Instant at);
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterSourceException.java`
+
+```java
+package com.acme.platform.parameters;
+
+/** Kaynak erisilemedi (baglanti, timeout, 5xx). Provider bunu bounded-staleness kurallariyla ele alir. */
+public class ParameterSourceException extends RuntimeException {
+    public ParameterSourceException(String message) { super(message); }
+    public ParameterSourceException(String message, Throwable cause) { super(message, cause); }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterType.java`
+
+```java
+package com.acme.platform.parameters;
+
+/** Katalog tipleri (referans Bolum 14): INTEGER (+unit), DURATION (her zaman saniye), OPTION_LIST. */
+public enum ParameterType { INTEGER, DURATION, OPTION_LIST }
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterUnavailableException.java`
+
+```java
+package com.acme.platform.parameters;
+
+/**
+ * 503: kaynak erisilemez ve fallback'e izin yok (freshGroup) ya da guvenlik-kritik grup maxStaleness'i asti
+ * ya da hicbir yerde (bellek/disk) son bilinen deger yok.
+ */
+public class ParameterUnavailableException extends ParameterException {
+    public static final String CODE = "PARAMETER_UNAVAILABLE";
+
+    public ParameterUnavailableException(String group, String reason, Throwable cause) {
+        super(CODE, 503, "parametre grubu erisilemez: " + group + " (" + reason + ")", cause);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterValueInvalidException.java`
+
+```java
+package com.acme.platform.parameters;
+
+/** Deger var ama beklenen tipe/sinira uymuyor. Deger mesaja yazilmaz; yalniz grup, key ve beklenen tip. */
+public class ParameterValueInvalidException extends ParameterException {
+    public static final String CODE = "PARAMETER_VALUE_INVALID";
+
+    public ParameterValueInvalidException(String group, String key, ParameterType expected, String reason) {
+        super(CODE, 500, "parametre degeri gecersiz: " + group + "/" + key + " beklenen " + expected + " (" + reason + ")", null);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/ParameterValues.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import tools.jackson.databind.JsonNode;
+
+/**
+ * Tek revizyondan tipli okuma. Fail-closed: key yoksa PARAMETER_NOT_DEFINED, deger tipe uymuyorsa
+ * PARAMETER_VALUE_INVALID. Kod ici default deger YOKTUR; "yoksa su olsun" ihtiyaci katalogda karsilanir.
+ * revision() kalici sonuclarla birlikte yazilir (hangi kuralla karar verildigi sonradan izlenebilir).
+ */
+public final class ParameterValues {
+    private final ParameterGroupDto dto;
+
+    ParameterValues(ParameterGroupDto dto) { this.dto = dto; }
+
+    public String group() { return dto.group(); }
+    public long revision() { return dto.revision(); }
+    public Criticality criticality() { return dto.criticality(); }
+    public Set<String> keys() { return dto.values().keySet(); }
+    public boolean has(String key) { return dto.values().containsKey(key); }
+
+    /** INTEGER: JSON tam sayi (int araligi). Ondalik, metin, null gecersizdir. */
+    public int integer(String key) {
+        JsonNode n = required(key);
+        if (!n.isIntegralNumber() || !n.canConvertToInt()) {
+            throw new ParameterValueInvalidException(dto.group(), key, ParameterType.INTEGER, "tam sayi degil");
+        }
+        return n.intValue();
+    }
+
+    /** DURATION: her zaman saniye cinsinden negatif olmayan tam sayi (referans Bolum 14 tip kurali). */
+    public Duration duration(String key) {
+        JsonNode n = required(key);
+        if (!n.isIntegralNumber() || !n.canConvertToLong() || n.longValue() < 0) {
+            throw new ParameterValueInvalidException(dto.group(), key, ParameterType.DURATION, "negatif olmayan saniye degil");
+        }
+        return Duration.ofSeconds(n.longValue());
+    }
+
+    /** OPTION_LIST: {code, labels{tr,en}, order, active} dizisi; order'a gore sirali doner, code tekil olmali. */
+    public List<ParameterOption> optionList(String key) {
+        JsonNode n = required(key);
+        if (!n.isArray()) throw invalidOption(key, "dizi degil");
+        List<ParameterOption> out = new ArrayList<>();
+        Set<String> codes = new HashSet<>();
+        for (JsonNode item : n) {
+            if (!item.isObject()) throw invalidOption(key, "eleman nesne degil");
+            JsonNode code = item.get("code");
+            JsonNode labels = item.get("labels");
+            JsonNode order = item.get("order");
+            JsonNode active = item.get("active");
+            if (code == null || !code.isString() || code.stringValue().isBlank()
+                    || labels == null || !labels.isObject()
+                    || order == null || !order.isIntegralNumber() || !order.canConvertToInt()
+                    || active == null || !active.isBoolean()) {
+                throw invalidOption(key, "eleman sekli bozuk");
+            }
+            if (!codes.add(code.stringValue())) throw invalidOption(key, "code tekrarli");
+            Map<String, String> labelMap = new LinkedHashMap<>();
+            for (Map.Entry<String, JsonNode> e : labels.properties()) {
+                if (!e.getValue().isString()) throw invalidOption(key, "label metin degil");
+                labelMap.put(e.getKey(), e.getValue().stringValue());
+            }
+            out.add(new ParameterOption(code.stringValue(), Map.copyOf(labelMap), order.intValue(), active.booleanValue()));
+        }
+        out.sort(Comparator.comparingInt(ParameterOption::order));
+        return List.copyOf(out);
+    }
+
+    /** Beklenen tipe gore dogrular; acilis kontrolu tum key'leri bununla gecer. */
+    public void validate(String key, ParameterType type) {
+        switch (type) {
+            case INTEGER -> integer(key);
+            case DURATION -> duration(key);
+            case OPTION_LIST -> optionList(key);
+        }
+    }
+
+    private JsonNode required(String key) {
+        JsonNode n = dto.values().get(key);
+        if (n == null || n.isNull() || n.isMissingNode()) throw new ParameterNotDefinedException(dto.group(), key);
+        return n;
+    }
+
+    private ParameterValueInvalidException invalidOption(String key, String reason) {
+        return new ParameterValueInvalidException(dto.group(), key, ParameterType.OPTION_LIST, reason);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/RequiredParameter.java`
+
+```java
+package com.acme.platform.parameters;
+
+/** Servisin bagimli oldugu bir key: acilis kontrolu bu listeden gecer. Servisin SystemParameterKey enum'undan uretilir. */
+public record RequiredParameter(String group, String key, ParameterType type) {}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/StartupParameterCheck.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Acilis kontrolu (referans Bolum 14 "kayma tespiti"): servisin kullandigi her key katalogda var ve tipine uygun mu?
+ * Tanimsiz key bir DEPLOY hatasidir; uygulama ayaga kalkmaz (fail fast). Grup okumasi group() ile yapilir:
+ * kaynak kapaliysa disk snapshot'i yeterlidir, boylece control plane restart'i data plane acilisini engellemez.
+ */
+public final class StartupParameterCheck {
+    private final SystemParameterProvider provider;
+
+    public StartupParameterCheck(SystemParameterProvider provider) { this.provider = provider; }
+
+    public void verify(List<RequiredParameter> required) {
+        Map<String, List<RequiredParameter>> byGroup = new LinkedHashMap<>();
+        for (RequiredParameter r : required) byGroup.computeIfAbsent(r.group(), g -> new ArrayList<>()).add(r);
+        List<String> missing = new ArrayList<>();
+        for (Map.Entry<String, List<RequiredParameter>> e : byGroup.entrySet()) {
+            ParameterValues values = provider.group(e.getKey());
+            for (RequiredParameter r : e.getValue()) {
+                if (!values.has(r.key())) { missing.add(r.group() + "/" + r.key()); continue; }
+                values.validate(r.key(), r.type());        // bozuk deger PARAMETER_VALUE_INVALID ile burada patlar
+            }
+        }
+        if (!missing.isEmpty()) throw new ParameterNotDefinedException(missing);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/main/java/com/acme/platform/parameters/SystemParameterProvider.java`
+
+```java
+package com.acme.platform.parameters;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Servis basina tek parametre saglayici (referans Bolum 14, 4.7 "control plane"). Kaynak bir control plane'dir;
+ * dustugunde data plane durmaz: bounded staleness.
+ *
+ * group(g):        cacheTtl icinde bellek; sonra kaynak; kaynak yoksa son bilinen (bellek, soguk acilista disk)
+ *                  maxStaleness(g) suresince; asilinca SECURITY_CRITICAL 503, NORMAL son bilinenle devam.
+ *                  parameter_staleness_seconds{group} her okumada yayinlanir; esik alarmi ops'un isidir.
+ * freshGroup:      her zaman kaynak; hata = 503, fallback YOK (kullanici girdisini dogrulayan yazma akislari).
+ * freshGroupSince: kaynak + revizyon alt siniri (clamp); eski revizyon = 503.
+ * groupAt:         gecmis anin degeri, dogrudan kaynak.
+ *
+ * Parametre TX ve lock disinda okunur; worker her turda yeniden okur. Deger ve key adi loglanmaz.
+ */
+public final class SystemParameterProvider {
+    private static final Logger log = LoggerFactory.getLogger(SystemParameterProvider.class);
+    public static final String STALENESS_METRIC = "parameter_staleness_seconds";
+
+    private final ParameterSource source;
+    private final DiskSnapshotStore snapshots;
+    private final ParameterProperties props;
+    private final Clock clock;
+    private final MeterRegistry meters;
+    private final ConcurrentHashMap<String, ParameterSnapshot> memory = new ConcurrentHashMap<>();
+    /** Gauge durumlari guclu referansla tutulur; Micrometer zayif referans kullanir, aksi halde metrik NaN'a duser. */
+    private final ConcurrentHashMap<String, AtomicLong> staleness = new ConcurrentHashMap<>();
+
+    public SystemParameterProvider(ParameterSource source, DiskSnapshotStore snapshots, ParameterProperties props,
+                                   Clock clock, MeterRegistry meters) {
+        this.source = source;
+        this.snapshots = snapshots;
+        this.props = props;
+        this.clock = clock;
+        this.meters = meters;
+    }
+
+    public ParameterValues group(String group) {
+        Instant now = clock.instant();
+        ParameterSnapshot cached = memory.get(group);
+        if (cached != null && Duration.between(cached.fetchedAt(), now).compareTo(props.cacheTtl()) < 0) {
+            publishStaleness(group, cached, now);
+            return new ParameterValues(cached.group());
+        }
+        ParameterGroupDto dto;
+        try {
+            dto = source.fetch(group);
+        } catch (ParameterSourceException e) {
+            return serveLastKnown(group, cached, now, e);
+        }
+        ParameterSnapshot fresh = remember(dto, now);
+        publishStaleness(group, fresh, now);
+        return new ParameterValues(dto);
+    }
+
+    public ParameterValues freshGroup(String group) {
+        ParameterGroupDto dto;
+        try {
+            dto = source.fetch(group);
+        } catch (ParameterSourceException e) {
+            throw new ParameterUnavailableException(group, "fresh okuma, fallback yok", e);
+        }
+        remember(dto, clock.instant());
+        return new ParameterValues(dto);
+    }
+
+    public ParameterValues freshGroupSince(String group, long minRevision) {
+        ParameterGroupDto dto;
+        try {
+            dto = source.fetchSince(group, minRevision);
+        } catch (ParameterSourceException e) {
+            throw new ParameterUnavailableException(group, "since okuma, fallback yok", e);
+        }
+        if (dto.revision() < minRevision) throw new ParameterRevisionStaleException(group, minRevision, dto.revision());
+        remember(dto, clock.instant());
+        return new ParameterValues(dto);
+    }
+
+    /** Gecmis anin degeri: cache'lenmez, snapshot'a yazilmaz (guncel deger degildir). */
+    public ParameterValues groupAt(String group, Instant at) {
+        try {
+            return new ParameterValues(source.fetchAt(group, at));
+        } catch (ParameterSourceException e) {
+            throw new ParameterUnavailableException(group, "at okuma, fallback yok", e);
+        }
+    }
+
+    /** Bellekteki son basarili okumanin yasi; health indicator ve testler icin. */
+    public Optional<Duration> stalenessOf(String group) {
+        ParameterSnapshot s = memory.get(group);
+        return s == null ? Optional.empty() : Optional.of(Duration.between(s.fetchedAt(), clock.instant()));
+    }
+
+    private ParameterValues serveLastKnown(String group, ParameterSnapshot cached, Instant now, ParameterSourceException cause) {
+        ParameterSnapshot last = cached;
+        if (last == null) {
+            // soguk acilis: bellek bos, diskteki son snapshot ile ayaga kalk
+            last = snapshots.read(group).orElse(null);
+            if (last != null) memory.putIfAbsent(group, last);
+        }
+        if (last == null) throw new ParameterUnavailableException(group, "son bilinen deger yok", cause);
+        Duration age = publishStaleness(group, last, now);
+        Duration limit = props.maxStaleness(group);
+        if (age.compareTo(limit) > 0 && last.group().criticality() == Criticality.SECURITY_CRITICAL) {
+            throw new ParameterUnavailableException(group, "guvenlik-kritik grup maxStaleness'i asti", cause);
+        }
+        if (age.compareTo(limit) > 0) {
+            log.warn("parametre grubu {} maxStaleness'i asti ({} sn), son bilinen degerle devam", group, age.toSeconds());
+        }
+        return new ParameterValues(last.group());
+    }
+
+    private ParameterSnapshot remember(ParameterGroupDto dto, Instant now) {
+        ParameterSnapshot snapshot = new ParameterSnapshot(dto, now);
+        memory.put(dto.group(), snapshot);
+        try {
+            snapshots.write(snapshot);
+        } catch (RuntimeException e) {
+            // disk yalniz soguk acilis yedegidir; yazilamamasi guncel degeri servis etmeyi engellemez
+            log.warn("parametre snapshot'i diske yazilamadi: {}", dto.group(), e);
+        }
+        return snapshot;
+    }
+
+    private Duration publishStaleness(String group, ParameterSnapshot snapshot, Instant now) {
+        Duration age = Duration.between(snapshot.fetchedAt(), now);
+        staleness.computeIfAbsent(group, g -> meters.gauge(STALENESS_METRIC, Tags.of("group", g), new AtomicLong()))
+                .set(age.toSeconds());
+        return age;
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/test/java/com/acme/platform/parameters/DiskSnapshotStoreTest.java`
+
+```java
+package com.acme.platform.parameters;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.json.JsonMapper;
+
+/** Disk snapshot: gercek dosya sistemi, tam tur (yaz -> oku) ve dosya adi guvenligi. */
+class DiskSnapshotStoreTest {
+
+    @TempDir Path dir;
+    final JsonMapper mapper = JsonMapper.builder().build();
+
+    @Test
+    void roundTripPreservesRevisionValuesCriticalityAndFetchedAt() throws Exception {
+        DiskSnapshotStore store = new DiskSnapshotStore(dir.resolve("nested"), mapper);   // dizin yoksa olusur
+        Instant at = Instant.parse("2026-09-29T09:58:30Z");
+        ParameterGroupDto dto = new ParameterGroupDto("order-limits", 42,
+                Map.of("order.max_items", mapper.readTree("25"), "order.channels", mapper.readTree("[{\"code\":\"WEB\"}]")),
+                Criticality.SECURITY_CRITICAL);
+        store.write(new ParameterSnapshot(dto, at));
+
+        ParameterSnapshot read = store.read("order-limits").orElseThrow();
+        assertThat(read.fetchedAt()).isEqualTo(at);
+        assertThat(read.group()).isEqualTo(dto);
+        assertThat(dir.resolve("nested").resolve("order-limits.json")).exists();
+        assertThat(Files.list(dir.resolve("nested")).filter(f -> f.toString().endsWith(".tmp"))).as("gecici dosya kalmaz").isEmpty();
+    }
+
+    @Test
+    void missingFileReadsAsEmpty() {
+        assertThat(new DiskSnapshotStore(dir, mapper).read("order-limits")).isEmpty();
+    }
+
+    @Test
+    void rejectsNonKebabCaseGroupNamesSoNoPathTraversal() {
+        DiskSnapshotStore store = new DiskSnapshotStore(dir, mapper);
+        for (String bad : new String[]{"../etc", "Order", "order_limits", "a/b", "", "-x"}) {
+            assertThatThrownBy(() -> store.read(bad)).as(bad).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/test/java/com/acme/platform/parameters/MutableClock.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+
+/** Deterministik zaman: cacheTtl ve maxStaleness testleri gercek zaman beklemeden calisir. */
+final class MutableClock extends Clock {
+    volatile Instant now = Instant.parse("2026-09-29T10:00:00Z");
+    @Override public ZoneOffset getZone() { return ZoneOffset.UTC; }
+    @Override public Clock withZone(ZoneId zone) { return this; }
+    @Override public Instant instant() { return now; }
+    void advance(Duration d) { now = now.plus(d); }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/test/java/com/acme/platform/parameters/ScriptedSource.java`
+
+```java
+package com.acme.platform.parameters;
+
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import tools.jackson.databind.JsonNode;
+
+/**
+ * Senaryolanabilir sahte kaynak: saglikli (revizyon N ile doner) / kapali (ParameterSourceException). Cagri sayar,
+ * boylece cacheTtl ("5 sn icinde bir kez") ve "fresh her zaman kaynaga gider" iddialari sayiyla kanitlanir.
+ */
+final class ScriptedSource implements ParameterSource {
+    private volatile boolean down;
+    private volatile long revision;
+    private volatile Map<String, JsonNode> values;
+    private volatile Criticality criticality;
+    final AtomicInteger fetchCalls = new AtomicInteger();
+    final AtomicInteger sinceCalls = new AtomicInteger();
+    final AtomicInteger atCalls = new AtomicInteger();
+
+    ScriptedSource(long revision, Map<String, JsonNode> values, Criticality criticality) {
+        this.revision = revision;
+        this.values = values;
+        this.criticality = criticality;
+    }
+
+    ScriptedSource down() { down = true; return this; }
+    ScriptedSource up() { down = false; return this; }
+    ScriptedSource revision(long r) { revision = r; return this; }
+    ScriptedSource values(Map<String, JsonNode> v) { values = v; return this; }
+
+    @Override public ParameterGroupDto fetch(String group) {
+        fetchCalls.incrementAndGet();
+        return respond(group);
+    }
+
+    @Override public ParameterGroupDto fetchSince(String group, long minRevision) {
+        sinceCalls.incrementAndGet();
+        return respond(group);       // gercek uc da mevcut revizyonu doner; alt sinir kontrolu tuketicidedir
+    }
+
+    @Override public ParameterGroupDto fetchAt(String group, Instant at) {
+        atCalls.incrementAndGet();
+        return respond(group);
+    }
+
+    private ParameterGroupDto respond(String group) {
+        if (down) throw new ParameterSourceException("baglanti reddedildi: " + group);
+        return new ParameterGroupDto(group, revision, values, criticality);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-parameters/src/test/java/com/acme/platform/parameters/SystemParameterProviderTest.java`
+
+```java
+package com.acme.platform.parameters;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * DAVRANISSAL dogrulama (referans Bolum 14 bounded staleness, 4.7 control plane; kanit seviyesi 1: sahte kaynak,
+ * deterministik saat, GERCEK gecici dizin). Her test bir okuma kuralini kanitlar; kaynak cagri sayilariyla
+ * "kaynaga gitti / gitmedi" iddialari dogrudan olculur.
+ */
+class SystemParameterProviderTest {
+
+    static final String LIMITS = "order-limits";          // guvenlik-kritik: maxStaleness 10 dk
+    static final String LABELS = "order-labels";          // normal: default maxStaleness 1 sa
+    static final Duration TTL = Duration.ofSeconds(5);
+    static final Duration LIMITS_MAX = Duration.ofMinutes(10);
+    static final Duration DEFAULT_MAX = Duration.ofHours(1);
+
+    @TempDir Path dir;
+    final JsonMapper mapper = JsonMapper.builder().build();
+    final MutableClock clock = new MutableClock();
+    SimpleMeterRegistry meters;
+    DiskSnapshotStore disk;
+    ParameterProperties props;
+    ScriptedSource limits;
+    ScriptedSource labels;
+
+    @BeforeEach
+    void setUp() {
+        meters = new SimpleMeterRegistry();
+        disk = new DiskSnapshotStore(dir, mapper);
+        props = new ParameterProperties(TTL, DEFAULT_MAX, Map.of(LIMITS, LIMITS_MAX));
+        limits = new ScriptedSource(7, values("""
+                {"order.max_items": 25, "order.cancel_window": 900,
+                 "order.channels": [
+                   {"code":"WEB","labels":{"tr":"Web","en":"Web"},"order":2,"active":true},
+                   {"code":"APP","labels":{"tr":"Uygulama","en":"App"},"order":1,"active":false}]}
+                """), Criticality.SECURITY_CRITICAL);
+        labels = new ScriptedSource(3, values("""
+                {"label.max_length": 40}
+                """), Criticality.NORMAL);
+    }
+
+    SystemParameterProvider provider(ParameterSource source) {
+        return new SystemParameterProvider(source, disk, props, clock, meters);
+    }
+
+    Map<String, JsonNode> values(String json) {
+        JsonNode node = mapper.readTree(json);
+        Map<String, JsonNode> out = new java.util.LinkedHashMap<>();
+        node.properties().forEach(e -> out.put(e.getKey(), e.getValue()));
+        return out;
+    }
+
+    double staleness(String group) {
+        Gauge g = meters.find(SystemParameterProvider.STALENESS_METRIC).tag("group", group).gauge();
+        assertThat(g).as("parameter_staleness_seconds{group=%s} yayinlanmali", group).isNotNull();
+        return g.value();
+    }
+
+    // --- 1. soguk acilis: kaynak KAPALI, diskte snapshot var -> snapshot servis edilir, staleness raporlanir
+
+    @Test
+    void coldStartWithSourceDownServesDiskSnapshotAndReportsStaleness() {
+        Instant fetchedAt = clock.now.minus(Duration.ofSeconds(90));
+        disk.write(new ParameterSnapshot(new ParameterGroupDto(LIMITS, 5, limits.fetch(LIMITS).values(),
+                Criticality.SECURITY_CRITICAL), fetchedAt));
+        limits.fetchCalls.set(0);
+        limits.down();
+
+        SystemParameterProvider fresh = provider(limits);            // yeni instance: bellek bos
+        ParameterValues v = fresh.group(LIMITS);
+
+        assertThat(v.revision()).isEqualTo(5);
+        assertThat(v.integer("order.max_items")).isEqualTo(25);
+        assertThat(limits.fetchCalls.get()).as("kaynak denendi").isEqualTo(1);
+        assertThat(staleness(LIMITS)).isEqualTo(90.0);
+        assertThat(fresh.stalenessOf(LIMITS)).contains(Duration.ofSeconds(90));
+    }
+
+    @Test
+    void coldStartWithSourceDownAndNoSnapshotAnywhereIsUnavailableEvenForNormalGroup() {
+        labels.down();
+        assertThatThrownBy(() -> provider(labels).group(LABELS))
+                .isInstanceOf(ParameterUnavailableException.class)
+                .satisfies(e -> assertThat(((ParameterException) e).httpStatus()).isEqualTo(503));
+    }
+
+    // --- 2. kaynak dusmus, maxStaleness icinde -> son bilinen deger
+
+    @Test
+    void sourceDownWithinMaxStalenessServesLastKnownValue() {
+        SystemParameterProvider p = provider(limits);
+        assertThat(p.group(LIMITS).revision()).isEqualTo(7);
+        limits.down();
+        clock.advance(LIMITS_MAX.minusSeconds(1));                  // 9 dk 59 sn: sinirin icinde
+
+        ParameterValues v = p.group(LIMITS);
+
+        assertThat(v.revision()).isEqualTo(7);
+        assertThat(v.integer("order.max_items")).isEqualTo(25);
+        assertThat(limits.fetchCalls.get()).as("ttl gectigi icin kaynak yeniden denendi").isEqualTo(2);
+        assertThat(staleness(LIMITS)).isEqualTo(LIMITS_MAX.minusSeconds(1).toSeconds());
+    }
+
+    // --- 3. maxStaleness asildi, SECURITY_CRITICAL -> 503 PARAMETER_UNAVAILABLE
+
+    @Test
+    void beyondMaxStalenessSecurityCriticalGroupThrowsUnavailable() {
+        SystemParameterProvider p = provider(limits);
+        p.group(LIMITS);
+        limits.down();
+        clock.advance(LIMITS_MAX.plusSeconds(1));
+
+        assertThatThrownBy(() -> p.group(LIMITS))
+                .isInstanceOf(ParameterUnavailableException.class)
+                .satisfies(e -> {
+                    assertThat(((ParameterException) e).code()).isEqualTo("PARAMETER_UNAVAILABLE");
+                    assertThat(((ParameterException) e).httpStatus()).isEqualTo(503);
+                });
+        assertThat(staleness(LIMITS)).isGreaterThan(LIMITS_MAX.toSeconds());
+    }
+
+    @Test
+    void perGroupMaxStalenessOverridesDefaultExactlyAtBoundary() {
+        SystemParameterProvider p = provider(limits);
+        p.group(LIMITS);
+        limits.down();
+        clock.advance(LIMITS_MAX);                                   // tam sinir: hala izinli (<=)
+        assertThat(p.group(LIMITS).revision()).isEqualTo(7);
+        clock.advance(Duration.ofSeconds(1));                        // sinir + 1 sn: kritik grup 503
+        assertThatThrownBy(() -> p.group(LIMITS)).isInstanceOf(ParameterUnavailableException.class);
+    }
+
+    // --- 4. maxStaleness asildi, NORMAL -> son bilinen deger + staleness metrigi siniri asar
+
+    @Test
+    void beyondMaxStalenessNormalGroupServesLastKnownAndKeepsPublishingStaleness() {
+        SystemParameterProvider p = provider(labels);
+        p.group(LABELS);
+        labels.down();
+        clock.advance(DEFAULT_MAX.plus(Duration.ofMinutes(30)));
+
+        ParameterValues v = p.group(LABELS);
+
+        assertThat(v.integer("label.max_length")).isEqualTo(40);
+        assertThat(v.revision()).isEqualTo(3);
+        assertThat(staleness(LABELS)).isGreaterThan(DEFAULT_MAX.toSeconds());
+        clock.advance(Duration.ofMinutes(5));
+        p.group(LABELS);
+        assertThat(staleness(LABELS)).as("metrik her okumada guncellenir").isEqualTo(DEFAULT_MAX.toSeconds() + 35 * 60);
+    }
+
+    // --- 5. freshGroup: kaynak dusmus -> exception, bellekte veri olsa bile fallback YOK
+
+    @Test
+    void freshGroupWithSourceDownThrowsEvenWhenMemoryHasData() {
+        SystemParameterProvider p = provider(limits);
+        p.group(LIMITS);                                             // bellek dolu, taze
+        limits.down();
+
+        assertThatThrownBy(() -> p.freshGroup(LIMITS))
+                .isInstanceOf(ParameterUnavailableException.class)
+                .satisfies(e -> assertThat(((ParameterException) e).httpStatus()).isEqualTo(503));
+        assertThat(limits.fetchCalls.get()).as("fresh her zaman kaynaga gider").isEqualTo(2);
+        assertThat(p.group(LIMITS).revision()).as("group() yolu etkilenmez (ttl icinde bellek)").isEqualTo(7);
+    }
+
+    @Test
+    void freshGroupAlwaysHitsSourceAndRefreshesMemoryAndDisk() {
+        SystemParameterProvider p = provider(limits);
+        p.group(LIMITS);
+        limits.revision(8);
+        ParameterValues v = p.freshGroup(LIMITS);                    // ttl icinde olsa da kaynak
+        assertThat(v.revision()).isEqualTo(8);
+        assertThat(limits.fetchCalls.get()).isEqualTo(2);
+        assertThat(p.group(LIMITS).revision()).as("bellek guncellendi").isEqualTo(8);
+        assertThat(disk.read(LIMITS)).map(s -> s.group().revision()).contains(8L);
+    }
+
+    // --- 6. freshGroupSince: istenen revizyon kaynaktakinden yeni -> stale exception
+
+    @Test
+    void freshGroupSinceThrowsWhenSourceRevisionIsOlderThanRequired() {
+        SystemParameterProvider p = provider(limits);
+        assertThatThrownBy(() -> p.freshGroupSince(LIMITS, 8))
+                .isInstanceOf(ParameterRevisionStaleException.class)
+                .satisfies(e -> assertThat(((ParameterException) e).code()).isEqualTo("PARAMETER_REVISION_STALE"));
+        assertThat(p.freshGroupSince(LIMITS, 7).revision()).isEqualTo(7);
+        assertThat(limits.sinceCalls.get()).isEqualTo(2);
+        limits.down();
+        assertThatThrownBy(() -> p.freshGroupSince(LIMITS, 7)).isInstanceOf(ParameterUnavailableException.class);
+    }
+
+    @Test
+    void groupAtDelegatesToSourceWithoutCaching() {
+        SystemParameterProvider p = provider(limits);
+        assertThat(p.groupAt(LIMITS, clock.now.minus(Duration.ofDays(1))).revision()).isEqualTo(7);
+        assertThat(limits.atCalls.get()).isEqualTo(1);
+        assertThat(p.stalenessOf(LIMITS)).as("gecmis okuma bellege girmez").isEmpty();
+        assertThat(disk.read(LIMITS)).isEmpty();
+    }
+
+    // --- 7. key yok -> PARAMETER_NOT_DEFINED, default yok
+
+    @Test
+    void missingKeyFailsClosedWithParameterNotDefined() {
+        ParameterValues v = provider(limits).group(LIMITS);
+        for (var read : List.<Runnable>of(
+                () -> v.integer("order.min_items"),
+                () -> v.duration("order.min_items"),
+                () -> v.optionList("order.min_items"))) {
+            assertThatThrownBy(read::run)
+                    .isInstanceOf(ParameterNotDefinedException.class)
+                    .satisfies(e -> assertThat(((ParameterException) e).code()).isEqualTo("PARAMETER_NOT_DEFINED"));
+        }
+        assertThat(v.has("order.min_items")).isFalse();
+    }
+
+    @Test
+    void explicitNullValueCountsAsNotDefined() {
+        limits.values(values("{\"order.max_items\": null}"));
+        assertThatThrownBy(() -> provider(limits).group(LIMITS).integer("order.max_items"))
+                .isInstanceOf(ParameterNotDefinedException.class);
+    }
+
+    // --- 8. tip uyusmazligi -> PARAMETER_VALUE_INVALID
+
+    @Test
+    void wrongTypeFailsClosedWithParameterValueInvalid() {
+        limits.values(values("""
+                {"as_text": "25", "as_decimal": 2.5, "negative": -1, "too_big": 99999999999,
+                 "opts_not_array": {"code":"X"}, "opts_bad_item": [{"code":"X","labels":{"tr":"x"},"order":"1","active":true}],
+                 "opts_dup": [{"code":"X","labels":{},"order":1,"active":true},{"code":"X","labels":{},"order":2,"active":true}]}
+                """));
+        ParameterValues v = provider(limits).group(LIMITS);
+        for (var read : List.<Runnable>of(
+                () -> v.integer("as_text"),
+                () -> v.integer("as_decimal"),
+                () -> v.integer("too_big"),
+                () -> v.duration("as_text"),
+                () -> v.duration("negative"),
+                () -> v.optionList("opts_not_array"),
+                () -> v.optionList("opts_bad_item"),
+                () -> v.optionList("opts_dup"))) {
+            assertThatThrownBy(read::run)
+                    .isInstanceOf(ParameterValueInvalidException.class)
+                    .satisfies(e -> assertThat(((ParameterException) e).code()).isEqualTo("PARAMETER_VALUE_INVALID"));
+        }
+    }
+
+    @Test
+    void typedAccessorsReturnCatalogTypes() {
+        ParameterValues v = provider(limits).group(LIMITS);
+        assertThat(v.integer("order.max_items")).isEqualTo(25);
+        assertThat(v.duration("order.cancel_window")).isEqualTo(Duration.ofMinutes(15));   // saniye -> Duration
+        List<ParameterOption> opts = v.optionList("order.channels");
+        assertThat(opts).extracting(ParameterOption::code).containsExactly("APP", "WEB");   // order'a gore
+        assertThat(opts.get(0).active()).isFalse();
+        assertThat(opts.get(1).labels()).containsEntry("tr", "Web");
+    }
+
+    // --- 9. cacheTtl: 5 sn icinde kaynak bir kez, sonra yeniden
+
+    @Test
+    void cacheTtlIsRespected() {
+        SystemParameterProvider p = provider(limits);
+        p.group(LIMITS);
+        clock.advance(Duration.ofMillis(4_999));
+        p.group(LIMITS);
+        p.group(LIMITS);
+        assertThat(limits.fetchCalls.get()).as("5 sn icinde tek cagri").isEqualTo(1);
+        limits.revision(9);
+        clock.advance(Duration.ofMillis(1));                         // tam 5 sn: ttl doldu
+        assertThat(p.group(LIMITS).revision()).isEqualTo(9);
+        assertThat(limits.fetchCalls.get()).isEqualTo(2);
+        assertThat(staleness(LIMITS)).isEqualTo(0.0);
+    }
+
+    // --- 10. disk snapshot basarida yazilir ve yeni provider instance'inda hayatta kalir
+
+    @Test
+    void diskSnapshotIsWrittenOnSuccessAndSurvivesNewProviderInstance() throws Exception {
+        provider(limits).group(LIMITS);
+        Path file = dir.resolve(LIMITS + ".json");
+        assertThat(file).exists();
+        assertThat(Files.readString(file)).contains("\"revision\":7").contains("order.max_items");
+
+        clock.advance(Duration.ofMinutes(3));
+        limits.down();
+        meters = new SimpleMeterRegistry();                          // yeni process = yeni registry, yeni store nesnesi
+        SystemParameterProvider restarted = new SystemParameterProvider(limits, new DiskSnapshotStore(dir, mapper),
+                props, clock, meters);
+        ParameterValues v = restarted.group(LIMITS);
+        assertThat(v.revision()).isEqualTo(7);
+        assertThat(v.integer("order.max_items")).isEqualTo(25);
+        assertThat(staleness(LIMITS)).isEqualTo(180.0);
+        clock.advance(Duration.ofMinutes(8));                        // 11 dk: kritik grup artik 503
+        assertThatThrownBy(() -> restarted.group(LIMITS)).isInstanceOf(ParameterUnavailableException.class);
+    }
+
+    @Test
+    void diskSnapshotIsRefreshedOnEverySuccessfulFetch() {
+        SystemParameterProvider p = provider(limits);
+        p.group(LIMITS);
+        limits.revision(8);
+        clock.advance(TTL);
+        p.group(LIMITS);
+        assertThat(disk.read(LIMITS)).map(s -> s.group().revision()).contains(8L);
+        assertThat(disk.read(LIMITS)).map(ParameterSnapshot::fetchedAt).contains(clock.now);
+    }
+
+    // --- 11. acilis kontrolu: eksik key -> fail fast
+
+    @Test
+    void startupCheckFailsFastOnMissingKey() {
+        StartupParameterCheck check = new StartupParameterCheck(provider(limits));
+        check.verify(List.of(
+                new RequiredParameter(LIMITS, "order.max_items", ParameterType.INTEGER),
+                new RequiredParameter(LIMITS, "order.cancel_window", ParameterType.DURATION),
+                new RequiredParameter(LIMITS, "order.channels", ParameterType.OPTION_LIST)));
+
+        assertThatThrownBy(() -> check.verify(List.of(
+                new RequiredParameter(LIMITS, "order.max_items", ParameterType.INTEGER),
+                new RequiredParameter(LIMITS, "order.min_items", ParameterType.INTEGER),
+                new RequiredParameter(LIMITS, "order.max_weight", ParameterType.INTEGER))))
+                .isInstanceOf(ParameterNotDefinedException.class)
+                .hasMessageContaining("order.min_items").hasMessageContaining("order.max_weight");
+    }
+
+    @Test
+    void startupCheckFailsFastOnWrongTypeAndWorksFromDiskWhenSourceIsDown() {
+        StartupParameterCheck check = new StartupParameterCheck(provider(limits));
+        assertThatThrownBy(() -> check.verify(List.of(new RequiredParameter(LIMITS, "order.channels", ParameterType.INTEGER))))
+                .isInstanceOf(ParameterValueInvalidException.class);
+
+        limits.down();                                                // control plane kapali, disk snapshot yeterli
+        new StartupParameterCheck(provider(limits))
+                .verify(List.of(new RequiredParameter(LIMITS, "order.max_items", ParameterType.INTEGER)));
+    }
+
+    // --- 12. revizyon disari verilir: kalici sonuca deger + revizyon snapshot'i yazilabilir
+
+    @Test
+    void revisionIsExposedForPersistingWithResults() {
+        SystemParameterProvider p = provider(limits);
+        ParameterValues v = p.group(LIMITS);
+        assertThat(v.revision()).isEqualTo(7);
+        assertThat(v.group()).isEqualTo(LIMITS);
+        assertThat(v.criticality()).isEqualTo(Criticality.SECURITY_CRITICAL);
+        limits.revision(12);
+        assertThat(p.freshGroup(LIMITS).revision()).isEqualTo(12);
+        assertThat(p.freshGroupSince(LIMITS, 12).revision()).isEqualTo(12);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>platform-security</artifactId>
+  <!-- Servis JWT yuzeyi (referans Bolum 9.2, 9.2.1, 9.4, 9.5): imzalayici, kid kaydi, /internal/** dogrulama filtresi,
+       delegasyon politikasi, @CurrentAccount ve RestClient interceptor'u. Servisler bu kodu kopyalamaz, bu modulu kullanir. -->
+  <properties>
+    <nimbus.version>10.5</nimbus.version>
+    <!-- Spring Framework 6.1+ @PathVariable/@RequestParam adlarini yansimadan okur; starter-parent yerine BOM import
+         kullanan iskelette -parameters bayragi elle acilir, yoksa runtime'da "Name for argument ... not specified" -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-restclient</artifactId></dependency>
+    <dependency><groupId>com.nimbusds</groupId><artifactId>nimbus-jose-jwt</artifactId><version>${nimbus.version}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc-test</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/client/ServiceJwtClientInterceptor.java`
+
+```java
+package com.acme.platform.security.client;
+
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.acme.platform.security.web.ServiceRequestAttributes;
+import java.io.IOException;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Supplier;
+import org.springframework.http.HttpRequest;
+import org.springframework.http.client.ClientHttpRequestExecution;
+import org.springframework.http.client.ClientHttpRequestInterceptor;
+import org.springframework.http.client.ClientHttpResponse;
+
+/**
+ * RestClient interceptor'u: her istek icin TAZE token basar (cache yok; TTL zaten 60 sn ve imza ucuz), hedef aud
+ * sabittir (bir RestClient = bir hedef servis), act = kendi adimiz, sub = holder'dan gelen mevcut hesap.
+ * Varsayilan holder mevcut HTTP istegindeki x.accountId'dir: servis yalniz kendi akisinda gordugu sub'i aktarir
+ * (Bolum 9.2.1). Arka plan isleri bos holder ile calisir ve sub tasimaz.
+ */
+public class ServiceJwtClientInterceptor implements ClientHttpRequestInterceptor {
+
+    private final ServiceJwtSigner signer;
+    private final String targetAudience;
+    private final Supplier<Optional<UUID>> accountContext;
+
+    public ServiceJwtClientInterceptor(ServiceJwtSigner signer, String targetAudience, Supplier<Optional<UUID>> accountContext) {
+        this.signer = Objects.requireNonNull(signer, "signer");
+        this.targetAudience = Objects.requireNonNull(targetAudience, "targetAudience");
+        this.accountContext = Objects.requireNonNull(accountContext, "accountContext");
+    }
+
+    /** Mevcut istegin hesabini aktaran varsayilan kablolama. */
+    public ServiceJwtClientInterceptor(ServiceJwtSigner signer, String targetAudience) {
+        this(signer, targetAudience, ServiceRequestAttributes::currentAccountId);
+    }
+
+    @Override
+    public ClientHttpResponse intercept(HttpRequest request, byte[] body, ClientHttpRequestExecution execution) throws IOException {
+        UUID subject = accountContext.get().orElse(null);
+        request.getHeaders().set(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, signer.mint(targetAudience, subject));
+        return execution.execute(request, body);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/config/ServiceJwtAutoConfiguration.java`
+
+```java
+package com.acme.platform.security.config;
+
+import com.acme.platform.security.delegation.DelegationInterceptor;
+import com.acme.platform.security.delegation.DelegationPolicy;
+import com.acme.platform.security.jwt.ServiceJwtKeyRegistry;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.platform.security.web.CurrentAccountArgumentResolver;
+import com.acme.platform.security.web.InternalAccessPolicy;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.acme.platform.security.web.ServiceSecurityExceptionHandler;
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.ParseException;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.Ordered;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/**
+ * service-jwt.audience tanimliysa devreye girer. Servis yalniz yml yazar: filtre, interceptor, resolver ve advice
+ * buradan gelir. Anahtar dosyalari (Bolum 15.3 config tree) JWK bicimindedir; jwks-path yoksa bos registry
+ * verilir ve uygulama (veya test) anahtarlari programatik kaydeder.
+ */
+@AutoConfiguration
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+@ConditionalOnProperty("service-jwt.audience")
+@EnableConfigurationProperties(ServiceJwtProperties.class)
+public class ServiceJwtAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean
+    public Clock serviceJwtClock() { return Clock.systemUTC(); }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ServiceJwtKeyRegistry serviceJwtKeyRegistry(ServiceJwtProperties props) {
+        if (props.jwksPath() == null || props.jwksPath().isBlank()) return new ServiceJwtKeyRegistry();
+        return ServiceJwtKeyRegistry.fromJson(read(Path.of(props.jwksPath())));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty("service-jwt.private-key-path")
+    public ServiceJwtSigner serviceJwtSigner(ServiceJwtProperties props, Clock clock) {
+        try {
+            JWK jwk = JWK.parse(read(Path.of(props.privateKeyPath())));
+            if (!(jwk instanceof OctetKeyPair okp)) throw new IllegalStateException("private-key-path is not an OKP JWK");
+            return new ServiceJwtSigner(okp, props.serviceName(), Duration.ofSeconds(props.ttlSeconds()), clock);
+        } catch (ParseException e) {
+            throw new IllegalStateException("private-key-path is not a JWK", e);
+        }
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ServiceJwtVerifier serviceJwtVerifier(ServiceJwtProperties props, ServiceJwtKeyRegistry registry, Clock clock) {
+        // Bilinen imzalayicilar: yml'deki liste + JWKS dosyasinda anahtari olanlar
+        Set<String> issuers = new HashSet<>(props.knownIssuers());
+        issuers.addAll(registry.issuers());
+        return new ServiceJwtVerifier(registry, issuers, props.audience(), Duration.ofSeconds(props.clockSkewSeconds()), clock);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public InternalAccessPolicy internalAccessPolicy(ServiceJwtProperties props) { return props.internalAccessPolicy(); }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public DelegationPolicy delegationPolicy(ServiceJwtProperties props) { return props.delegationPolicy(); }
+
+    @Bean
+    public FilterRegistrationBean<ServiceJwtVerificationFilter> serviceJwtVerificationFilter(ServiceJwtVerifier verifier,
+                                                                                            InternalAccessPolicy policy) {
+        var reg = new FilterRegistrationBean<>(new ServiceJwtVerificationFilter(verifier, policy));
+        reg.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);                     // loglama/tracing filtrelerinden sonra, is mantigindan once
+        reg.addUrlPatterns("/*");                                          // /internal karari filtrenin icinde (normalize sonrasi)
+        return reg;
+    }
+
+    @Bean
+    public ServiceSecurityExceptionHandler serviceSecurityExceptionHandler() { return new ServiceSecurityExceptionHandler(); }
+
+    @Bean
+    public WebMvcConfigurer serviceJwtWebMvcConfigurer(DelegationPolicy delegationPolicy) {
+        return new WebMvcConfigurer() {
+            @Override public void addInterceptors(InterceptorRegistry registry) {
+                // tum path'ler: @RequireOperation /internal disinda bir metoda konursa sessizce atlanmasin
+                // (anotasyonsuz handler'da interceptor zaten no-op; kimlik yoksa fail-closed 401)
+                registry.addInterceptor(new DelegationInterceptor(delegationPolicy));
+            }
+            @Override public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
+                resolvers.add(new CurrentAccountArgumentResolver());
+            }
+        };
+    }
+
+    private static String read(Path path) {
+        try {
+            return Files.readString(path, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot read service JWT key material at " + path, e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/config/ServiceJwtProperties.java`
+
+```java
+package com.acme.platform.security.config;
+
+import com.acme.platform.security.delegation.DelegationPolicy;
+import com.acme.platform.security.web.InternalAccessPolicy;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.springframework.validation.annotation.Validated;
+
+/**
+ * Bolum 9.5 yml semasi. internal-access SIRALI listedir (first-match); yml'de yazim sirasi = degerlendirme sirasi.
+ *
+ * <pre>
+ * service-jwt:
+ *   audience: subscription-api
+ *   service-name: subscription-service
+ *   private-key-path: /run/secrets/subscription-service-signing-key   # JWK (OKP, d dahil)
+ *   jwks-path: /run/config/service-jwks.json                          # {"iss": {"keys":[...]}}
+ *   known-issuers: [gateway, order-service]
+ *   internal-access:
+ *     - path: "/internal/subscription/accounts/*&#47;operations/*&#47;consume"
+ *       allowed-actors: [order-service]
+ *   delegation:
+ *     - { actor: order-service, operation: subscription.consume, user-context: REQUIRED }
+ * </pre>
+ */
+@Validated
+@ConfigurationProperties("service-jwt")
+public record ServiceJwtProperties(
+        @NotBlank String audience,
+        @NotBlank String serviceName,
+        String privateKeyPath,
+        String jwksPath,
+        @DefaultValue Set<String> knownIssuers,
+        @DefaultValue("60") @Min(1) @Max(300) int ttlSeconds,
+        @DefaultValue("30") @Min(0) @Max(120) int clockSkewSeconds,
+        @DefaultValue @Valid List<InternalAccessRule> internalAccess,
+        @DefaultValue @Valid List<DelegationRule> delegation) {
+
+    public record InternalAccessRule(@NotBlank String path, @NotEmpty List<String> allowedActors) {
+        public InternalAccessPolicy.Rule toRule() { return new InternalAccessPolicy.Rule(path, new HashSet<>(allowedActors)); }
+    }
+
+    public record DelegationRule(@NotBlank String actor, @NotBlank String operation, @NotNull DelegationPolicy.UserContext userContext) {
+        public DelegationPolicy.Rule toRule() { return new DelegationPolicy.Rule(actor, operation, userContext); }
+    }
+
+    public InternalAccessPolicy internalAccessPolicy() {
+        return new InternalAccessPolicy(internalAccess.stream().map(InternalAccessRule::toRule).toList());
+    }
+
+    public DelegationPolicy delegationPolicy() {
+        return new DelegationPolicy(delegation.stream().map(DelegationRule::toRule).toList());
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/delegation/DelegationInterceptor.java`
+
+```java
+package com.acme.platform.security.delegation;
+
+import com.acme.platform.security.web.ErrorResponse;
+import com.acme.platform.security.web.ServiceRequestAttributes;
+import com.acme.platform.security.web.ServiceSecurityException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.util.Map;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.HandlerMapping;
+
+/**
+ * @RequireOperation tasiyan handler'lar icin delegasyon denetimi (Bolum 9.2.1). Filtre kimligi dogrulamis ve
+ * allowlist'i gecmis olsa da, kullanici baglami kurali burada uygulanir. Kimlik attribute'u yoksa (uc /internal
+ * disinda kalmis, filtre baglanmamis) fail-closed 401.
+ */
+public class DelegationInterceptor implements HandlerInterceptor {
+
+    private static final Logger log = LoggerFactory.getLogger(DelegationInterceptor.class);
+
+    private final DelegationPolicy policy;
+
+    public DelegationInterceptor(DelegationPolicy policy) {
+        this.policy = policy;
+    }
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        if (!(handler instanceof HandlerMethod method)) return true;
+        RequireOperation op = method.getMethodAnnotation(RequireOperation.class);
+        if (op == null) return true;
+        String actor = ServiceRequestAttributes.callerService(request).orElseThrow(() ->
+                new ServiceSecurityException(HttpStatus.UNAUTHORIZED, ErrorResponse.SERVICE_TOKEN_INVALID,
+                        "Service identity required"));
+        UUID tokenAccount = ServiceRequestAttributes.accountId(request).orElse(null);
+        UUID pathAccount = pathAccount(request, op.accountPathVariable());
+        DelegationPolicy.Decision decision = policy.decide(actor, op.value(), tokenAccount, pathAccount);
+        if (!decision.allowed()) {
+            log.info("delegation denied: actor={} operation={} reason={}", actor, op.value(), decision.reason());
+            throw new ServiceSecurityException(HttpStatus.FORBIDDEN, ErrorResponse.DELEGATION_DENIED, "Delegation denied");
+        }
+        return true;
+    }
+
+    /** Path degiskeni yoksa null; UUID degilse null (REQUIRED kural bunu zaten reddeder: fail-closed). */
+    private static UUID pathAccount(HttpServletRequest request, String variable) {
+        Object vars = request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+        if (!(vars instanceof Map<?, ?> map)) return null;
+        Object raw = map.get(variable);
+        if (!(raw instanceof String s)) return null;
+        try {
+            return UUID.fromString(s);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/delegation/DelegationPolicy.java`
+
+```java
+package com.acme.platform.security.delegation;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * Bolum 9.2.1 delegasyon matrisi: (aktor, islem) -> kullanici baglami kurali. Servis kimligi (allowlist) kullanici
+ * adina islem yetkisi DEGILDIR; bu politika ucuncu kontrolu yapar:
+ *  REQUIRED  -> token'da sub olmali VE path'teki {accountId} ile ayni olmali (baskasinin hesabi adina islem yok)
+ *  FORBIDDEN -> arka plan isi; sub tasiyan token bu islemi yapamaz
+ *  OPTIONAL  -> her ikisi de olur (ornek: bildirim komutlari)
+ * Kural yoksa DENY: "her kullanici adina her sey" satiri yoktur.
+ */
+public final class DelegationPolicy {
+
+    public enum UserContext { REQUIRED, FORBIDDEN, OPTIONAL }
+
+    public record Rule(String actor, String operation, UserContext userContext) {
+        public Rule {
+            if (actor == null || actor.isBlank()) throw new IllegalArgumentException("delegation rule without actor");
+            if (operation == null || operation.isBlank()) throw new IllegalArgumentException("delegation rule without operation");
+            if (userContext == null) throw new IllegalArgumentException("delegation rule " + actor + "/" + operation + " without user-context");
+        }
+    }
+
+    public record Decision(boolean allowed, String reason) {
+        static Decision allow() { return new Decision(true, null); }
+        static Decision deny(String reason) { return new Decision(false, reason); }
+    }
+
+    private final List<Rule> rules;
+
+    public DelegationPolicy(List<Rule> rules) {
+        this.rules = List.copyOf(rules);
+    }
+
+    public List<Rule> rules() { return rules; }
+
+    public Optional<Rule> find(String actor, String operation) {
+        return rules.stream().filter(r -> r.actor().equals(actor) && r.operation().equals(operation)).findFirst();
+    }
+
+    /**
+     * @param tokenAccount token'daki sub (arka plan isinde null)
+     * @param pathAccount  path'teki {accountId} (ucta yoksa null)
+     */
+    public Decision decide(String actor, String operation, UUID tokenAccount, UUID pathAccount) {
+        Optional<Rule> rule = find(actor, operation);
+        if (rule.isEmpty()) return Decision.deny("no delegation rule for actor " + actor + " on " + operation);
+        return switch (rule.get().userContext()) {
+            case REQUIRED -> {
+                if (tokenAccount == null) yield Decision.deny("operation requires user context, token is background");
+                if (pathAccount == null) yield Decision.deny("operation requires user context but path carries no accountId");
+                if (!tokenAccount.equals(pathAccount)) yield Decision.deny("token subject does not own the path account");
+                yield Decision.allow();
+            }
+            case FORBIDDEN -> tokenAccount == null ? Decision.allow()
+                    : Decision.deny("background-only operation called with user context");
+            case OPTIONAL -> Decision.allow();
+        };
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/delegation/RequireOperation.java`
+
+```java
+package com.acme.platform.security.delegation;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Internal controller metodunu delegasyon matrisindeki bir isleme baglar (orn. "subscription.consume").
+ * DelegationInterceptor cagirani, sub'i ve {accountId} path degiskenini bu isleme gore denetler.
+ */
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface RequireOperation {
+    String value();
+    /** sub ile karsilastirilacak path degiskeninin adi. */
+    String accountPathVariable() default "accountId";
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/Ed25519Keys.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import com.nimbusds.jose.jwk.Curve;
+import com.nimbusds.jose.jwk.KeyUse;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jose.util.Base64URL;
+import java.math.BigInteger;
+import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.interfaces.EdECPrivateKey;
+import java.security.interfaces.EdECPublicKey;
+import java.security.spec.EdECPoint;
+import java.security.spec.EdECPrivateKeySpec;
+import java.security.spec.EdECPublicKeySpec;
+import java.security.spec.NamedParameterSpec;
+import java.util.Arrays;
+
+/**
+ * Ed25519 anahtarlarini JWK (OKP) ile JDK anahtar tipleri arasinda cevirir. Nimbus'un kendi Ed25519Signer'i
+ * opsiyonel Google Tink bagimliligi ister; JDK 15+ EdDSA'yi yerli destekledigi icin ek kutuphane tasimiyoruz
+ * (daha kucuk saldiri yuzeyi, daha az CVE takibi).
+ *
+ * RFC 8032 kodlamasi: public anahtar = y koordinatinin 32 byte little-endian hali, en ust bit x'in tekligi;
+ * private anahtar = 32 byte tohum. Nimbus OKP "x"/"d" alanlari bu byte dizilerini base64url tasir.
+ */
+public final class Ed25519Keys {
+
+    private static final String ALGORITHM = "Ed25519";
+    private static final int KEY_BYTES = 32;
+
+    private Ed25519Keys() {}
+
+    /** Yeni imzalama cifti; kid ile isaretlenir. Uretim ortaminda anahtar dosyadan gelir, bu metod test/bootstrap icindir. */
+    public static OctetKeyPair generate(String kid) {
+        try {
+            KeyPair pair = KeyPairGenerator.getInstance(ALGORITHM).generateKeyPair();
+            EdECPublicKey pub = (EdECPublicKey) pair.getPublic();
+            EdECPrivateKey priv = (EdECPrivateKey) pair.getPrivate();
+            byte[] seed = priv.getBytes().orElseThrow(() -> new IllegalStateException("Ed25519 private key is not extractable"));
+            return new OctetKeyPair.Builder(Curve.Ed25519, Base64URL.encode(encodePoint(pub.getPoint())))
+                    .d(Base64URL.encode(seed)).keyID(kid).keyUse(KeyUse.SIGNATURE).build();
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Ed25519 key generation failed", e);
+        }
+    }
+
+    public static PublicKey toPublicKey(OctetKeyPair jwk) {
+        requireEd25519(jwk);
+        byte[] raw = jwk.getDecodedX();
+        if (raw.length != KEY_BYTES) throw new IllegalArgumentException("Ed25519 public key must be 32 bytes");
+        byte[] le = raw.clone();
+        boolean xOdd = (le[KEY_BYTES - 1] & 0x80) != 0;
+        le[KEY_BYTES - 1] &= 0x7F;
+        BigInteger y = new BigInteger(1, reverse(le));
+        try {
+            return KeyFactory.getInstance(ALGORITHM)
+                    .generatePublic(new EdECPublicKeySpec(NamedParameterSpec.ED25519, new EdECPoint(xOdd, y)));
+        } catch (GeneralSecurityException e) {
+            throw new IllegalArgumentException("Invalid Ed25519 public key", e);
+        }
+    }
+
+    public static PrivateKey toPrivateKey(OctetKeyPair jwk) {
+        requireEd25519(jwk);
+        if (!jwk.isPrivate()) throw new IllegalArgumentException("JWK " + jwk.getKeyID() + " has no private part");
+        try {
+            return KeyFactory.getInstance(ALGORITHM)
+                    .generatePrivate(new EdECPrivateKeySpec(NamedParameterSpec.ED25519, jwk.getDecodedD()));
+        } catch (GeneralSecurityException e) {
+            throw new IllegalArgumentException("Invalid Ed25519 private key", e);
+        }
+    }
+
+    static void requireEd25519(OctetKeyPair jwk) {
+        if (!Curve.Ed25519.equals(jwk.getCurve())) {
+            throw new IllegalArgumentException("Only Ed25519 keys are supported, got " + jwk.getCurve());
+        }
+    }
+
+    private static byte[] encodePoint(EdECPoint point) {
+        byte[] be = point.getY().toByteArray();                    // big-endian, isaret byte'i olabilir
+        byte[] le = new byte[KEY_BYTES];
+        for (int i = 0; i < KEY_BYTES && i < be.length; i++) le[i] = be[be.length - 1 - i];
+        if (point.isXOdd()) le[KEY_BYTES - 1] |= (byte) 0x80;
+        return le;
+    }
+
+    private static byte[] reverse(byte[] in) {
+        byte[] out = Arrays.copyOf(in, in.length);
+        for (int i = 0; i < out.length / 2; i++) { byte t = out[i]; out[i] = out[out.length - 1 - i]; out[out.length - 1 - i] = t; }
+        return out;
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/JdkEd25519Signer.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSSigner;
+import com.nimbusds.jose.jca.JCAContext;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jose.util.Base64URL;
+import java.security.GeneralSecurityException;
+import java.security.PrivateKey;
+import java.security.Signature;
+import java.util.Set;
+
+/** JDK yerli EdDSA ile imzalayan Nimbus JWSSigner (Tink gerektirmez). Yalniz alg=EdDSA header'i imzalar. */
+public final class JdkEd25519Signer implements JWSSigner {
+
+    private final PrivateKey privateKey;
+    private final JCAContext jcaContext = new JCAContext();
+
+    public JdkEd25519Signer(OctetKeyPair jwk) {
+        this.privateKey = Ed25519Keys.toPrivateKey(jwk);
+    }
+
+    @Override
+    public Base64URL sign(JWSHeader header, byte[] signingInput) throws JOSEException {
+        if (!JWSAlgorithm.EdDSA.equals(header.getAlgorithm())) {
+            throw new JOSEException("Unsupported JWS algorithm " + header.getAlgorithm() + ", expected EdDSA");
+        }
+        try {
+            Signature sig = Signature.getInstance("Ed25519");
+            sig.initSign(privateKey);
+            sig.update(signingInput);
+            return Base64URL.encode(sig.sign());
+        } catch (GeneralSecurityException e) {
+            throw new JOSEException("Ed25519 signing failed", e);
+        }
+    }
+
+    @Override public Set<JWSAlgorithm> supportedJWSAlgorithms() { return Set.of(JWSAlgorithm.EdDSA); }
+    @Override public JCAContext getJCAContext() { return jcaContext; }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/JdkEd25519Verifier.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSVerifier;
+import com.nimbusds.jose.jca.JCAContext;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jose.util.Base64URL;
+import java.security.GeneralSecurityException;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.util.Set;
+
+/**
+ * JDK yerli EdDSA ile dogrulayan Nimbus JWSVerifier. Header'daki alg EdDSA degilse imzaya hic bakmadan reddeder:
+ * "alg confusion" (public anahtari HMAC secret'i gibi kullanma) bu katmanda da kapali kalir.
+ */
+public final class JdkEd25519Verifier implements JWSVerifier {
+
+    private final PublicKey publicKey;
+    private final JCAContext jcaContext = new JCAContext();
+
+    public JdkEd25519Verifier(OctetKeyPair jwk) {
+        this.publicKey = Ed25519Keys.toPublicKey(jwk);
+    }
+
+    @Override
+    public boolean verify(JWSHeader header, byte[] signingInput, Base64URL signature) throws JOSEException {
+        if (!JWSAlgorithm.EdDSA.equals(header.getAlgorithm())) return false;
+        try {
+            Signature sig = Signature.getInstance("Ed25519");
+            sig.initVerify(publicKey);
+            sig.update(signingInput);
+            return sig.verify(signature.decode());
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            return false;                                              // bozuk imza = gecersiz, istisna degil
+        }
+    }
+
+    @Override public Set<JWSAlgorithm> supportedJWSAlgorithms() { return Set.of(JWSAlgorithm.EdDSA); }
+    @Override public JCAContext getJCAContext() { return jcaContext; }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/ServiceIdentity.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import java.util.UUID;
+
+/**
+ * Dogrulanmis servis kimligi. actor = act claim'i (yoksa iss); accountId = sub (arka plan isinde null).
+ * background = sub yok: kullanici-yetkisi isteyen islemler bu token'i kabul etmez (Bolum 9.2.1).
+ */
+public record ServiceIdentity(String actor, String issuer, UUID accountId, String tokenId) {
+    public boolean background() { return accountId == null; }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/ServiceJwtKeyRegistry.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jose.util.JSONObjectUtils;
+import java.text.ParseException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * iss -> (kid -> public JWK) kaydi (referans Bolum 9.2 "iss -> JWKS eslemesi"). Anahtar YALNIZ kayitli oldugu
+ * issuer icin gecerlidir: order-service'in anahtariyla imzalanmis bir token iss=gateway diyemez. Rotasyon icin ayni
+ * issuer altinda birden fazla kid ayni anda aktif olabilir; eski anahtar TTL sonunda remove ile dusurulur, restart yok.
+ *
+ * JSON bicimi (jwks-path dosyasi): {"gateway": {"keys":[...]}, "order-service": {"keys":[...]}}
+ */
+public final class ServiceJwtKeyRegistry {
+
+    private final Map<String, Map<String, OctetKeyPair>> keysByIssuer = new ConcurrentHashMap<>();
+
+    /** Public parcayi kaydeder; yanlislikla private JWK verilse bile "d" alani dusurulur. */
+    public void register(String issuer, OctetKeyPair jwk) {
+        Objects.requireNonNull(issuer, "issuer");
+        Ed25519Keys.requireEd25519(jwk);
+        if (jwk.getKeyID() == null || jwk.getKeyID().isBlank()) throw new IllegalArgumentException("JWK without kid");
+        keysByIssuer.computeIfAbsent(issuer, i -> new ConcurrentHashMap<>()).put(jwk.getKeyID(), jwk.toPublicJWK());
+    }
+
+    public boolean remove(String issuer, String kid) {
+        Map<String, OctetKeyPair> keys = keysByIssuer.get(issuer);
+        return keys != null && keys.remove(kid) != null;
+    }
+
+    public Optional<OctetKeyPair> find(String issuer, String kid) {
+        if (issuer == null || kid == null) return Optional.empty();
+        Map<String, OctetKeyPair> keys = keysByIssuer.get(issuer);
+        return keys == null ? Optional.empty() : Optional.ofNullable(keys.get(kid));
+    }
+
+    public Set<String> issuers() { return Collections.unmodifiableSet(keysByIssuer.keySet()); }
+
+    /** Tek bir issuer'in RFC 7517 JWKS temsili (public anahtarlar). */
+    public String toJwksJson(String issuer) {
+        Map<String, OctetKeyPair> keys = keysByIssuer.getOrDefault(issuer, Map.of());
+        return new JWKSet(new ArrayList<JWK>(keys.values())).toString(true);
+    }
+
+    /** Tum kaydin dosya bicimi: iss -> JWKS. */
+    public String toJson() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        keysByIssuer.forEach((iss, keys) -> out.put(iss, new JWKSet(new ArrayList<JWK>(keys.values())).toJSONObject(true)));
+        return JSONObjectUtils.toJSONString(out);
+    }
+
+    public static ServiceJwtKeyRegistry fromJson(String json) {
+        ServiceJwtKeyRegistry registry = new ServiceJwtKeyRegistry();
+        try {
+            Map<String, Object> root = JSONObjectUtils.parse(json);
+            for (String issuer : root.keySet()) {
+                JWKSet set = JWKSet.parse(JSONObjectUtils.getJSONObject(root, issuer));
+                List<JWK> keys = set.getKeys();
+                for (JWK jwk : keys) {
+                    if (!(jwk instanceof OctetKeyPair okp)) {
+                        throw new IllegalArgumentException("Issuer " + issuer + " key " + jwk.getKeyID() + " is not an OKP key");
+                    }
+                    registry.register(issuer, okp);
+                }
+            }
+        } catch (ParseException e) {
+            throw new IllegalArgumentException("Invalid service JWKS document", e);
+        }
+        return registry;
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/ServiceJwtSigner.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JOSEObjectType;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
+import java.util.Objects;
+import java.util.UUID;
+
+/**
+ * Servis JWT ureticisi (referans Bolum 9.2). Her servis KENDI Ed25519 private anahtariyla imzalar; iss = imzalayan
+ * servisin adi. Token cok kisa omurludur (varsayilan 60 sn): calinsa bile pencere dardir ve replay deposu gerekmez.
+ * typ="service+jwt" ile user/admin JWT'lerinden ayrisir (RFC 8725 3.11: yuzeyler birbirinin yerine gecmez).
+ */
+public final class ServiceJwtSigner {
+
+    public static final JOSEObjectType SERVICE_JWT_TYPE = new JOSEObjectType("service+jwt");
+    public static final String ACTOR_CLAIM = "act";
+    public static final Duration DEFAULT_TTL = Duration.ofSeconds(60);
+
+    private final OctetKeyPair key;
+    private final JdkEd25519Signer jwsSigner;
+    private final String serviceName;
+    private final Duration ttl;
+    private final Clock clock;
+
+    public ServiceJwtSigner(OctetKeyPair privateKey, String serviceName, Duration ttl, Clock clock) {
+        if (privateKey.getKeyID() == null || privateKey.getKeyID().isBlank()) {
+            throw new IllegalArgumentException("Signing key must carry a kid (rotation depends on it)");
+        }
+        if (ttl.isNegative() || ttl.isZero() || ttl.compareTo(Duration.ofMinutes(5)) > 0) {
+            throw new IllegalArgumentException("Service JWT ttl must be within (0, 5m]: " + ttl);
+        }
+        this.key = privateKey;
+        this.jwsSigner = new JdkEd25519Signer(privateKey);
+        this.serviceName = Objects.requireNonNull(serviceName, "serviceName");
+        this.ttl = ttl;
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    public ServiceJwtSigner(OctetKeyPair privateKey, String serviceName, Clock clock) {
+        this(privateKey, serviceName, DEFAULT_TTL, clock);
+    }
+
+    public String serviceName() { return serviceName; }
+    public String kid() { return key.getKeyID(); }
+    /** JWKS'e konacak public parca; private "d" alani asla disari cikmaz. */
+    public OctetKeyPair publicJwk() { return key.toPublicJWK(); }
+
+    /**
+     * @param audience hedef servisin aud'u
+     * @param subject  kullanici istegi baglaminda calisan cagri icin hesap kimligi; arka plan isi icin null
+     */
+    public String mint(String audience, UUID subject) {
+        Instant now = clock.instant();
+        JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
+                .issuer(serviceName)
+                .audience(List.of(Objects.requireNonNull(audience, "audience")))
+                .claim(ACTOR_CLAIM, serviceName)                        // act == iss: dogrulayan bunu sart kosar
+                .issueTime(Date.from(now))
+                .expirationTime(Date.from(now.plus(ttl)))
+                .jwtID(UUID.randomUUID().toString());
+        if (subject != null) claims.subject(subject.toString());
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA).type(SERVICE_JWT_TYPE).keyID(key.getKeyID()).build();
+        SignedJWT jwt = new SignedJWT(header, claims.build());
+        try {
+            jwt.sign(jwsSigner);
+        } catch (JOSEException e) {
+            throw new IllegalStateException("Service JWT signing failed", e);
+        }
+        return jwt.serialize();
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/ServiceJwtVerifier.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import java.text.ParseException;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * Servis JWT dogrulayici (referans Bolum 9.4 adim 3 ve 5). Kontrol sirasi sabittir ve her biri fail-closed'dur:
+ * alg=EdDSA (HS256 ve none reddedilir) -> typ=service+jwt -> iss bilinen imzalayici -> kid o issuer altinda kayitli
+ * -> imza -> aud == bu servis -> exp/nbf (30 sn tolerans) -> act == iss -> sub UUID.
+ * Zaman Clock'tan gelir: sure testleri gercek zaman beklemeden calisir.
+ */
+public final class ServiceJwtVerifier {
+
+    public static final Duration DEFAULT_CLOCK_SKEW = Duration.ofSeconds(30);
+
+    private final ServiceJwtKeyRegistry registry;
+    private final Set<String> knownIssuers;
+    private final String audience;
+    private final Duration clockSkew;
+    private final Clock clock;
+
+    public ServiceJwtVerifier(ServiceJwtKeyRegistry registry, Set<String> knownIssuers, String audience,
+                              Duration clockSkew, Clock clock) {
+        this.registry = Objects.requireNonNull(registry, "registry");
+        this.knownIssuers = Set.copyOf(knownIssuers);
+        this.audience = Objects.requireNonNull(audience, "audience");
+        this.clockSkew = Objects.requireNonNull(clockSkew, "clockSkew");
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    public ServiceJwtVerifier(ServiceJwtKeyRegistry registry, Set<String> knownIssuers, String audience, Clock clock) {
+        this(registry, knownIssuers, audience, DEFAULT_CLOCK_SKEW, clock);
+    }
+
+    public ServiceIdentity verify(String token) {
+        SignedJWT jwt;
+        try {
+            jwt = SignedJWT.parse(token);                                    // alg=none (PlainJWT) burada duser
+        } catch (ParseException e) {
+            throw new ServiceTokenInvalidException("token is not a signed JWT", e);
+        }
+        JWSHeader header = jwt.getHeader();
+        if (!JWSAlgorithm.EdDSA.equals(header.getAlgorithm())) {
+            throw new ServiceTokenInvalidException("alg must be EdDSA, got " + header.getAlgorithm());
+        }
+        if (!ServiceJwtSigner.SERVICE_JWT_TYPE.equals(header.getType())) {
+            throw new ServiceTokenInvalidException("typ must be service+jwt");
+        }
+        JWTClaimsSet claims;
+        try {
+            claims = jwt.getJWTClaimsSet();
+        } catch (ParseException e) {
+            throw new ServiceTokenInvalidException("claims are not parseable", e);
+        }
+        String issuer = claims.getIssuer();
+        if (issuer == null || !knownIssuers.contains(issuer)) {
+            throw new ServiceTokenInvalidException("unknown issuer");
+        }
+        OctetKeyPair key = registry.find(issuer, header.getKeyID())
+                .orElseThrow(() -> new ServiceTokenInvalidException("kid not registered for issuer"));
+        try {
+            if (!jwt.verify(new JdkEd25519Verifier(key))) throw new ServiceTokenInvalidException("signature invalid");
+        } catch (JOSEException e) {
+            throw new ServiceTokenInvalidException("signature verification error", e);
+        }
+        if (!List.of(audience).equals(claims.getAudience())) {              // tam esitlik: coklu aud kabul edilmez
+            throw new ServiceTokenInvalidException("audience mismatch");
+        }
+        Instant now = clock.instant();
+        Date exp = claims.getExpirationTime();
+        if (exp == null || !now.isBefore(exp.toInstant().plus(clockSkew))) {
+            throw new ServiceTokenInvalidException("token expired");
+        }
+        Date nbf = claims.getNotBeforeTime();
+        if (nbf != null && now.isBefore(nbf.toInstant().minus(clockSkew))) {
+            throw new ServiceTokenInvalidException("token not yet valid");
+        }
+        String actor;
+        try {
+            actor = claims.getStringClaim(ServiceJwtSigner.ACTOR_CLAIM);
+        } catch (ParseException e) {
+            throw new ServiceTokenInvalidException("act claim malformed", e);
+        }
+        if (actor == null) actor = issuer;
+        else if (!actor.equals(issuer)) {
+            // Bolum 9.4 adim 5: act == iss. Aksi halde herhangi bir servis kendi anahtariyla baskasinin adini soyler.
+            throw new ServiceTokenInvalidException("act does not match iss");
+        }
+        UUID accountId = null;
+        if (claims.getSubject() != null) {
+            try {
+                accountId = UUID.fromString(claims.getSubject());
+            } catch (IllegalArgumentException e) {
+                throw new ServiceTokenInvalidException("sub is not a UUID");
+            }
+        }
+        return new ServiceIdentity(actor, issuer, accountId, claims.getJWTID());
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/jwt/ServiceTokenInvalidException.java`
+
+```java
+package com.acme.platform.security.jwt;
+
+/**
+ * Token reddi. Mesaj yalniz log icindir (hangi kontrolun dustugu); istemciye tek tip "SERVICE_TOKEN_INVALID" doner
+ * ki saldirgan hangi adimi gectigini ogrenemesin.
+ */
+public final class ServiceTokenInvalidException extends RuntimeException {
+    public ServiceTokenInvalidException(String reason) { super(reason); }
+    public ServiceTokenInvalidException(String reason, Throwable cause) { super(reason, cause); }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/CurrentAccount.java`
+
+```java
+package com.acme.platform.security.web;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Controller parametresine dogrulanmis hesap kimligini (x.accountId) baglar. Header'dan degil, filtrenin/gateway'in
+ * yazdigi attribute'tan okunur. required=true iken attribute yoksa 401 ACCOUNT_CONTEXT_REQUIRED.
+ */
+@Target(ElementType.PARAMETER)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface CurrentAccount {
+    boolean required() default true;
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/CurrentAccountArgumentResolver.java`
+
+```java
+package com.acme.platform.security.web;
+
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.UUID;
+import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.support.WebDataBinderFactory;
+import org.springframework.web.context.request.NativeWebRequest;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.method.support.ModelAndViewContainer;
+
+/** @CurrentAccount UUID parametresini x.accountId attribute'undan cozer (Bolum 23.5 binding testi bunu dogrular). */
+public class CurrentAccountArgumentResolver implements HandlerMethodArgumentResolver {
+
+    @Override
+    public boolean supportsParameter(MethodParameter parameter) {
+        return parameter.hasParameterAnnotation(CurrentAccount.class) && UUID.class.equals(parameter.getParameterType());
+    }
+
+    @Override
+    public Object resolveArgument(MethodParameter parameter, ModelAndViewContainer mav, NativeWebRequest webRequest,
+                                  WebDataBinderFactory binderFactory) {
+        HttpServletRequest request = webRequest.getNativeRequest(HttpServletRequest.class);
+        UUID accountId = request == null ? null : ServiceRequestAttributes.accountId(request).orElse(null);
+        CurrentAccount ann = parameter.getParameterAnnotation(CurrentAccount.class);
+        if (accountId == null && (ann == null || ann.required())) {
+            throw new ServiceSecurityException(HttpStatus.UNAUTHORIZED, ErrorResponse.ACCOUNT_CONTEXT_REQUIRED,
+                    "Account context required");
+        }
+        return accountId;
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/ErrorResponse.java`
+
+```java
+package com.acme.platform.security.web;
+
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+
+/**
+ * Filtre/interceptor hatalari icin kucuk zarf. Filtre DispatcherServlet'ten once calistigi icin controller advice'a
+ * ulasamaz; JSON'u kendisi yazar. Token icerigi, kid, claim ya da red sebebi ASLA bu mesaja girmez.
+ */
+public record ErrorResponse(String code, String message) {
+
+    public static final String SERVICE_TOKEN_INVALID = "SERVICE_TOKEN_INVALID";
+    public static final String INTERNAL_ACCESS_DENIED = "INTERNAL_ACCESS_DENIED";
+    public static final String INTERNAL_PATH_INVALID = "INTERNAL_PATH_INVALID";
+    public static final String DELEGATION_DENIED = "DELEGATION_DENIED";
+    public static final String ACCOUNT_CONTEXT_REQUIRED = "ACCOUNT_CONTEXT_REQUIRED";
+
+    public String toJson() {
+        return "{\"code\":\"" + escape(code) + "\",\"message\":\"" + escape(message) + "\"}";
+    }
+
+    public void write(HttpServletResponse response, HttpStatus status) throws IOException {
+        response.resetBuffer();
+        response.setStatus(status.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setHeader("Cache-Control", "no-store");
+        if (status == HttpStatus.UNAUTHORIZED) response.setHeader("WWW-Authenticate", "Bearer realm=\"service\"");
+        response.getWriter().write(toJson());
+        response.flushBuffer();
+    }
+
+    private static String escape(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> { if (c < 0x20) sb.append(String.format("\\u%04x", (int) c)); else sb.append(c); }
+            }
+        }
+        return sb.toString();
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/InternalAccessPolicy.java`
+
+```java
+package com.acme.platform.security.web;
+
+import java.util.List;
+import java.util.Set;
+import org.springframework.util.AntPathMatcher;
+
+/**
+ * Bolum 9.5 internal-access allowlist: FIRST-MATCH. Path'e uyan ILK kural karar verir; sonraki kurallara bakilmaz.
+ * Bu yuzden dar kurallar catch-all'dan once yazilir. Hicbir kural uymazsa DEFAULT-DENY (Bolum 9.4 adim 7).
+ */
+public final class InternalAccessPolicy {
+
+    public record Rule(String path, Set<String> allowedActors) {
+        public Rule {
+            if (path == null || path.isBlank()) throw new IllegalArgumentException("internal-access rule without path");
+            if (allowedActors == null || allowedActors.isEmpty()) {
+                throw new IllegalArgumentException("internal-access rule " + path + " without allowed-actors");
+            }
+            allowedActors = Set.copyOf(allowedActors);
+        }
+    }
+
+    private final List<Rule> rules;
+    private final AntPathMatcher matcher = new AntPathMatcher();
+
+    public InternalAccessPolicy(List<Rule> rules) {
+        this.rules = List.copyOf(rules);
+    }
+
+    public List<Rule> rules() { return rules; }
+
+    /** @param normalizedPath InternalPathNormalizer'dan gecmis path; ham URI ile CAGRILMAZ */
+    public boolean allows(String normalizedPath, String actor) {
+        for (Rule rule : rules) {
+            if (matcher.match(rule.path(), normalizedPath)) return rule.allowedActors().contains(actor);
+        }
+        return false;
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/InternalPathNormalizer.java`
+
+```java
+package com.acme.platform.security.web;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.regex.Pattern;
+import org.springframework.web.util.UriUtils;
+
+/**
+ * Bolum 9.4 adim 0: path once decode + normalize edilir, allowlist NORMALIZE EDILMIS path uzerinde eslestirilir.
+ * /internal alanina dokunan her istekte cift kodlama, '.'/'..' segmenti, '//', '\' ve NUL gecersizdir (400) ve
+ * public kurallara ASLA geri dusmez: "/internal/..%2Fv1/ping" ne /internal/** ne de /v1/ping olarak degerlendirilir.
+ * /internal disindaki istekler dokunulmadan gecer (Tomcat zaten kendi kanonlastirmasini yapar).
+ * "/internal'a dokunuyor mu?" sorusu, Spring MVC'nin YONLENDIRME icin gordugu forma gore sorulur: Tomcat ve
+ * Spring ';...' path parametrelerini eslestirmeden once atar, yani "/internal;x/admin" handler tarafinda
+ * "/internal/admin" olur. Siniflandirma bu parametreleri atmadan yapilsaydi istek PUBLIC sayilip token'siz
+ * gecerdi. Buyuk/kucuk harf farki da ("/INTERNAL/..") case-insensitive eslestirme acilan uygulamalar icin
+ * internal sayilir ve kanonik olmadigi icin reddedilir.
+ */
+public final class InternalPathNormalizer {
+
+    public enum Kind { PUBLIC, INTERNAL, INVALID }
+
+    public record Result(Kind kind, String path) {
+        static final Result PUBLIC = new Result(Kind.PUBLIC, null);
+        static final Result INVALID = new Result(Kind.INVALID, null);
+    }
+
+    private static final String INTERNAL_PREFIX = "/internal";
+    private static final Pattern PATH_PARAMS = Pattern.compile(";[^/]*");
+
+    private InternalPathNormalizer() {}
+
+    /** @param rawPath context path'i cikarilmis, HENUZ decode edilmemis request URI */
+    public static Result inspect(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return Result.PUBLIC;
+        boolean rawInternal = routesToInternal(rawPath);
+        String decoded;
+        try {
+            decoded = UriUtils.decode(rawPath, StandardCharsets.UTF_8);       // yalniz %XX; '+' path'te literaldir
+        } catch (IllegalArgumentException e) {
+            return rawInternal ? Result.INVALID : Result.PUBLIC;               // bozuk kodlama internal'a ulasamaz
+        }
+        String normalized = normalize(decoded);
+        boolean touchesInternal = rawInternal || routesToInternal(decoded) || routesToInternal(normalized)
+                || routesToInternal(normalize(stripPathParams(decoded)));     // "/v1/..;/internal/x" gibi
+        if (!touchesInternal) return Result.PUBLIC;
+        if (normalized == null) return Result.INVALID;
+        if (decoded.indexOf('%') >= 0 || decoded.indexOf('\\') >= 0 || decoded.indexOf('\0') >= 0
+                || decoded.contains("//") || decoded.indexOf(';') >= 0) {
+            return Result.INVALID;                                             // cift kodlama, ters bolu, NUL, bos segment, matrix param
+        }
+        if (rawPath.toUpperCase().contains("%2F")) return Result.INVALID;     // kodlanmis '/': segment yapisini degistirir
+        if (!normalized.equals(decoded)) return Result.INVALID;                // '.' veya '..' segmenti vardi
+        if (!isInternal(normalized)) return Result.INVALID;
+        return new Result(Kind.INTERNAL, normalized);
+    }
+
+    /** Path parametreleri atilmis ve harf buyuklugu yok sayilmis haliyle /internal alanina yonlenebilir mi? */
+    private static boolean routesToInternal(String path) {
+        return path != null && isInternal(stripPathParams(path).toLowerCase(Locale.ROOT));
+    }
+
+    private static String stripPathParams(String path) {
+        return PATH_PARAMS.matcher(path).replaceAll("");
+    }
+
+    private static boolean isInternal(String path) {
+        return path.equals(INTERNAL_PREFIX) || path.startsWith(INTERNAL_PREFIX + "/");
+    }
+
+    private static String normalize(String decodedPath) {
+        try {
+            String p = new URI(null, null, decodedPath, null).normalize().getPath();
+            return p == null || p.startsWith("/..") ? null : p;               // kokun ustune cikan path gecersiz
+        } catch (URISyntaxException e) {
+            return null;
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/ServiceJwtVerificationFilter.java`
+
+```java
+package com.acme.platform.security.web;
+
+import com.acme.platform.security.jwt.ServiceIdentity;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.platform.security.jwt.ServiceTokenInvalidException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+/**
+ * Bolum 9.4: /internal/** icin servis JWT dogrulama + allowlist. Sira: path normalize (400) -> header (401) ->
+ * token (401) -> first-match allowlist (403) -> attribute'lar. /internal disindaki istekler dokunulmadan gecer.
+ * Red mesajlari tek tiptir; gercek sebep yalniz DEBUG loguna gider.
+ */
+public class ServiceJwtVerificationFilter extends OncePerRequestFilter {
+
+    public static final String SERVICE_AUTH_HEADER = "X-Service-Auth";
+    private static final String BEARER = "Bearer ";
+    private static final Logger log = LoggerFactory.getLogger(ServiceJwtVerificationFilter.class);
+
+    private final ServiceJwtVerifier verifier;
+    private final InternalAccessPolicy policy;
+
+    public ServiceJwtVerificationFilter(ServiceJwtVerifier verifier, InternalAccessPolicy policy) {
+        this.verifier = verifier;
+        this.policy = policy;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        InternalPathNormalizer.Result path = InternalPathNormalizer.inspect(rawPath(request));
+        switch (path.kind()) {
+            case PUBLIC -> { chain.doFilter(request, response); return; }
+            case INVALID -> {
+                log.debug("internal path rejected: {}", request.getRequestURI());
+                new ErrorResponse(ErrorResponse.INTERNAL_PATH_INVALID, "Invalid internal path").write(response, HttpStatus.BAD_REQUEST);
+                return;
+            }
+            case INTERNAL -> { /* devam */ }
+        }
+        String token = extractToken(request);
+        if (token == null) {
+            new ErrorResponse(ErrorResponse.SERVICE_TOKEN_INVALID, "Service token missing").write(response, HttpStatus.UNAUTHORIZED);
+            return;
+        }
+        ServiceIdentity identity;
+        try {
+            identity = verifier.verify(token);
+        } catch (ServiceTokenInvalidException e) {
+            log.debug("service token rejected on {}: {}", path.path(), e.getMessage());
+            new ErrorResponse(ErrorResponse.SERVICE_TOKEN_INVALID, "Service token invalid").write(response, HttpStatus.UNAUTHORIZED);
+            return;
+        }
+        if (!policy.allows(path.path(), identity.actor())) {
+            log.info("internal access denied: actor={} path={}", identity.actor(), path.path());
+            new ErrorResponse(ErrorResponse.INTERNAL_ACCESS_DENIED, "Internal access denied").write(response, HttpStatus.FORBIDDEN);
+            return;
+        }
+        request.setAttribute(ServiceRequestAttributes.CALLER_SERVICE, identity.actor());
+        request.setAttribute(ServiceRequestAttributes.ACCOUNT_ID, identity.accountId());
+        request.setAttribute(ServiceRequestAttributes.BACKGROUND, identity.background());
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            request.removeAttribute(ServiceRequestAttributes.CALLER_SERVICE);
+            request.removeAttribute(ServiceRequestAttributes.ACCOUNT_ID);
+            request.removeAttribute(ServiceRequestAttributes.BACKGROUND);
+        }
+    }
+
+    /** Ham (decode edilmemis) path; context path cikarilir ki normalizer uygulama koku goreli calissin. */
+    private static String rawPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String context = request.getContextPath();
+        if (uri == null) return "";
+        return context != null && !context.isEmpty() && uri.startsWith(context) ? uri.substring(context.length()) : uri;
+    }
+
+    private static String extractToken(HttpServletRequest request) {
+        String header = request.getHeader(SERVICE_AUTH_HEADER);
+        if (header != null && !header.isBlank()) return header.trim();
+        String auth = request.getHeader(HttpHeaders.AUTHORIZATION);
+        if (auth != null && auth.regionMatches(true, 0, BEARER, 0, BEARER.length()) && auth.length() > BEARER.length()) {
+            return auth.substring(BEARER.length()).trim();
+        }
+        return null;
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/ServiceRequestAttributes.java`
+
+```java
+package com.acme.platform.security.web;
+
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+/**
+ * Filtrenin dogrulanmis kimlikten yazdigi request attribute'lari. Controller'lar header'i degil bu attribute'lari
+ * okur (Bolum 23.5: "kimlik yalniz dogrulanmis baglamdan gelir"). x.accountId gateway tarafindan String olarak da
+ * yazilabildiginden okuma tarafi iki tipi de kabul eder.
+ */
+public final class ServiceRequestAttributes {
+
+    public static final String CALLER_SERVICE = "x.callerService";
+    public static final String ACCOUNT_ID = "x.accountId";
+    public static final String BACKGROUND = "x.background";
+
+    private ServiceRequestAttributes() {}
+
+    public static Optional<String> callerService(HttpServletRequest request) {
+        Object v = request.getAttribute(CALLER_SERVICE);
+        return v instanceof String s && !s.isBlank() ? Optional.of(s) : Optional.empty();
+    }
+
+    /** @throws IllegalArgumentException attribute var ama UUID degil (yanlis kablolama; sessizce yutulmaz) */
+    public static Optional<UUID> accountId(HttpServletRequest request) {
+        Object v = request.getAttribute(ACCOUNT_ID);
+        if (v == null) return Optional.empty();
+        if (v instanceof UUID id) return Optional.of(id);
+        if (v instanceof String s) return s.isBlank() ? Optional.empty() : Optional.of(UUID.fromString(s));
+        throw new IllegalArgumentException(ACCOUNT_ID + " attribute has unsupported type " + v.getClass().getName());
+    }
+
+    public static boolean background(HttpServletRequest request) {
+        return Boolean.TRUE.equals(request.getAttribute(BACKGROUND));
+    }
+
+    /** Mevcut thread'in istegi icindeki hesap; RestClient interceptor'u sub'i asagiya boyle tasir. */
+    public static Optional<UUID> currentAccountId() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs) {
+            return accountId(attrs.getRequest());
+        }
+        return Optional.empty();
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/ServiceSecurityException.java`
+
+```java
+package com.acme.platform.security.web;
+
+import org.springframework.http.HttpStatus;
+
+/** Interceptor ve argument resolver katmanindan atilan, ServiceSecurityExceptionHandler'in zarfa cevirdigi hata. */
+public final class ServiceSecurityException extends RuntimeException {
+
+    private final HttpStatus status;
+    private final String code;
+
+    public ServiceSecurityException(HttpStatus status, String code, String message) {
+        super(message);
+        this.status = status;
+        this.code = code;
+    }
+
+    public HttpStatus status() { return status; }
+    public String code() { return code; }
+    public ErrorResponse toResponse() { return new ErrorResponse(code, getMessage()); }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/java/com/acme/platform/security/web/ServiceSecurityExceptionHandler.java`
+
+```java
+package com.acme.platform.security.web;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/** ServiceSecurityException -> {code, message}. Servisin kendi GlobalServiceExceptionHandler'i ile yan yana calisir. */
+@RestControllerAdvice
+public class ServiceSecurityExceptionHandler {
+
+    @ExceptionHandler(ServiceSecurityException.class)
+    public ResponseEntity<ErrorResponse> handle(ServiceSecurityException e) {
+        return ResponseEntity.status(e.status()).header("Cache-Control", "no-store").body(e.toResponse());
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
+
+```
+com.acme.platform.security.config.ServiceJwtAutoConfiguration
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/InternalAccessOrderingTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static com.acme.platform.security.support.SecurityFixture.AUDIENCE;
+import static com.acme.platform.security.support.SecurityFixture.BACKOFFICE;
+import static com.acme.platform.security.support.SecurityFixture.GATEWAY;
+import static com.acme.platform.security.support.SecurityFixture.ORDER;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.platform.security.support.SecurityFixture;
+import com.acme.platform.security.web.ErrorResponse;
+import com.acme.platform.security.web.InternalAccessPolicy;
+import com.acme.platform.security.web.InternalAccessPolicy.Rule;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.web.servlet.MockMvc;
+
+/**
+ * Bolum 9.5 "ilk eslesen kural kazanir": ayni iki kural, iki sira. Dar kural once yazilinca yalniz dar aktor gecer;
+ * catch-all once yazilinca dar kurala hic bakilmaz ve catch-all'daki herkes (dar aktor haric!) gecer. Ikinci
+ * konfigurasyon bilincli olarak yanlis: kural sirasinin kendisinin bir guvenlik karari oldugunu gosterir.
+ */
+class InternalAccessOrderingTest {
+
+    static final Rule NARROW = new Rule("/internal/subscription/accounts/*/balance", Set.of(ORDER));
+    static final Rule CATCH_ALL = new Rule("/internal/subscription/**", Set.of(BACKOFFICE, GATEWAY));
+
+    final SecurityFixture fx = new SecurityFixture();
+    final String balance = "/internal/subscription/accounts/" + UUID.randomUUID() + "/balance";
+
+    int statusOf(MockMvc mvc, String token) throws Exception {
+        return mvc.perform(get(balance).header(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, token))
+                .andReturn().getResponse().getStatus();
+    }
+
+    @Test
+    void narrowBeforeCatchAll_onlyNarrowActorPasses() throws Exception {
+        MockMvc mvc = fx.mockMvc(List.of(NARROW, CATCH_ALL));
+        assertThat(statusOf(mvc, fx.order.mint(AUDIENCE, null))).isEqualTo(200);
+        assertThat(statusOf(mvc, fx.backoffice.mint(AUDIENCE, null))).isEqualTo(403);   // catch-all'a ulasilmaz
+        assertThat(statusOf(mvc, fx.gateway.mint(AUDIENCE, null))).isEqualTo(403);
+        assertThat(fx.controller.hits).hasValue(1);
+    }
+
+    @Test
+    void catchAllFirst_shadowsNarrowRule_everyoneInCatchAllPasses_narrowActorDenied() throws Exception {
+        MockMvc mvc = fx.mockMvc(List.of(CATCH_ALL, NARROW));
+        assertThat(statusOf(mvc, fx.backoffice.mint(AUDIENCE, null))).isEqualTo(200);
+        assertThat(statusOf(mvc, fx.gateway.mint(AUDIENCE, null))).isEqualTo(200);
+        assertThat(statusOf(mvc, fx.order.mint(AUDIENCE, null))).isEqualTo(403);        // dar kural golgelendi
+        mvc.perform(get(balance).header(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, fx.order.mint(AUDIENCE, null)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_ACCESS_DENIED));
+        assertThat(fx.controller.hits).hasValue(2);
+    }
+
+    @Test
+    void policyUnit_firstMatchDecidesEvenWhenLaterRuleWouldAllow() {
+        var policy = new InternalAccessPolicy(List.of(CATCH_ALL, NARROW));
+        assertThat(policy.allows("/internal/subscription/accounts/x/balance", ORDER)).isFalse();
+        assertThat(policy.allows("/internal/subscription/accounts/x/balance", BACKOFFICE)).isTrue();
+        var reversed = new InternalAccessPolicy(List.of(NARROW, CATCH_ALL));
+        assertThat(reversed.allows("/internal/subscription/accounts/x/balance", ORDER)).isTrue();
+        assertThat(reversed.allows("/internal/subscription/accounts/x/balance", BACKOFFICE)).isFalse();
+        assertThat(reversed.allows("/internal/other", BACKOFFICE)).as("default deny").isFalse();
+        // '*' tek segment: iki segmentli hesap yolu dar kurala uymaz, catch-all'a duser
+        assertThat(reversed.allows("/internal/subscription/accounts/x/y/balance", ORDER)).isFalse();
+        assertThat(reversed.allows("/internal/subscription/accounts/x/y/balance", BACKOFFICE)).isTrue();
+    }
+
+    @Test
+    void ruleWithoutActorsOrPath_isRejectedAtConstruction() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new Rule("/internal/x", Set.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new Rule(" ", Set.of(ORDER)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/InternalPathNormalizerTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.acme.platform.security.web.InternalPathNormalizer;
+import com.acme.platform.security.web.InternalPathNormalizer.Kind;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/** Bolum 9.4 adim 0 tablosu: hangi ham path INTERNAL / PUBLIC / INVALID sayilir. */
+class InternalPathNormalizerTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/internal/..%2Fv1/ping", "/internal/../v1/ping", "/internal/subscription/%2e%2e/admin",
+            "/internal/subscription/%2E%2E/admin", "/internal/%252e%252e/v1/ping", "/internal/./x",
+            "/internal/x/.", "/internal/x/..", "/internal//x", "/internal/x%5C..%5Cy", "/internal/x%00y",
+            "/internal/x;jsessionid=1", "/v1/../internal/x", "/v1/%2e%2e/internal/x", "/internal/%zz",
+            "/internal/x%2Fy", "/internal/..",
+            // path parametresi ILK segmentte: Spring ';...' kismini atip /internal handler'ina yonlendirir
+            "/internal;x/admin/keys", "/internal;jsessionid=1/subscription/reconcile", "/internal;", "/internal;x",
+            "/internal%3Bx/admin/keys", "/internal;a/b;c/d", "/v1/..;/internal/x", "/v1;x/../internal/x",
+            // harf buyuklugu: case-insensitive eslestirme acik bir uygulamada internal'a ulasir, kanonik degil
+            "/INTERNAL/admin/keys", "/Internal;x/admin/keys"})
+    void invalid(String raw) {
+        assertThat(InternalPathNormalizer.inspect(raw).kind()).as(raw).isEqualTo(Kind.INVALID);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/v1/ping", "/", "/actuator/health", "/internalx/y", "/v1/internal/x", "/v1/..%2Fping", "",
+            "/v1/ping;jsessionid=1", "/v1;x/ping", "/internalx;y/z"})
+    void publicPassThrough(String raw) {
+        assertThat(InternalPathNormalizer.inspect(raw).kind()).as(raw).isEqualTo(Kind.PUBLIC);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/internal", "/internal/x", "/internal/subscription/accounts/1/balance", "/internal/%61bc",
+            "/internal/a+b", "/internal/a%20b"})
+    void internalNormalized(String raw) {
+        var r = InternalPathNormalizer.inspect(raw);
+        assertThat(r.kind()).as(raw).isEqualTo(Kind.INTERNAL);
+        assertThat(r.path()).doesNotContain("%");
+    }
+
+    @org.junit.jupiter.api.Test
+    void decodedFormIsWhatAllowlistSees() {
+        assertThat(InternalPathNormalizer.inspect("/internal/%61bc").path()).isEqualTo("/internal/abc");
+        assertThat(InternalPathNormalizer.inspect("/internal/a+b").path()).as("'+' path'te literal").isEqualTo("/internal/a+b");
+        assertThat(InternalPathNormalizer.inspect("/internal/a%20b").path()).isEqualTo("/internal/a b");
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/ServiceJwtAutoConfigurationTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.platform.security.jwt.Ed25519Keys;
+import com.acme.platform.security.jwt.ServiceJwtKeyRegistry;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.platform.security.support.MutableClock;
+import com.acme.platform.security.support.SubscriptionInternalController;
+import com.acme.platform.security.web.ErrorResponse;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.Set;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+
+/**
+ * Kutuphane olarak kablolama: servis yalniz yml + anahtar dosyalari verir; filtre, interceptor, resolver, advice ve
+ * signer auto-configuration'dan gelir. Anahtar dosyalari Bolum 9.5'teki bicimde (private JWK, iss -> JWKS).
+ */
+@SpringBootTest(properties = {
+        "service-jwt.audience=subscription-api",
+        "service-jwt.service-name=subscription-service",
+        "service-jwt.ttl-seconds=45",
+        "service-jwt.internal-access[0].path=/internal/subscription/accounts/*/operations/*/consume",
+        "service-jwt.internal-access[0].allowed-actors=order-service",
+        "service-jwt.internal-access[1].path=/internal/subscription/reconcile",
+        "service-jwt.internal-access[1].allowed-actors=subscription-worker",
+        "service-jwt.delegation[0].actor=order-service",
+        "service-jwt.delegation[0].operation=subscription.consume",
+        "service-jwt.delegation[0].user-context=REQUIRED",
+        "service-jwt.delegation[1].actor=subscription-worker",
+        "service-jwt.delegation[1].operation=subscription.reconcile",
+        "service-jwt.delegation[1].user-context=FORBIDDEN"})
+@AutoConfigureMockMvc
+class ServiceJwtAutoConfigurationTest {
+
+    static final MutableClock CLOCK = new MutableClock();
+    static final OctetKeyPair ORDER_KEY = Ed25519Keys.generate("order-1");
+    static final OctetKeyPair WORKER_KEY = Ed25519Keys.generate("worker-1");
+    static final OctetKeyPair OWN_KEY = Ed25519Keys.generate("subscription-1");
+
+    @DynamicPropertySource
+    static void keyFiles(DynamicPropertyRegistry registry) throws IOException {
+        Path dir = Files.createTempDirectory("service-jwt");
+        ServiceJwtKeyRegistry jwks = new ServiceJwtKeyRegistry();
+        jwks.register("order-service", ORDER_KEY);
+        jwks.register("subscription-worker", WORKER_KEY);
+        Path jwksFile = Files.writeString(dir.resolve("service-jwks.json"), jwks.toJson());
+        Path privateFile = Files.writeString(dir.resolve("signing-key.json"), OWN_KEY.toJSONString());
+        registry.add("service-jwt.jwks-path", jwksFile::toString);
+        registry.add("service-jwt.private-key-path", privateFile::toString);
+    }
+
+    @SpringBootConfiguration
+    @EnableAutoConfiguration
+    @Import(SubscriptionInternalController.class)
+    static class App {
+        @Bean Clock clock() { return CLOCK; }                              // ConditionalOnMissingBean: uygulama saati kazanir
+    }
+
+    @Autowired MockMvc mvc;
+    @Autowired ServiceJwtSigner ownSigner;
+    @Autowired ServiceJwtVerifier verifier;
+    @Autowired ServiceJwtKeyRegistry keyRegistry;
+    @Autowired SubscriptionInternalController controller;
+
+    final ServiceJwtSigner order = new ServiceJwtSigner(ORDER_KEY, "order-service", CLOCK);
+    final ServiceJwtSigner worker = new ServiceJwtSigner(WORKER_KEY, "subscription-worker", CLOCK);
+
+    @Test
+    void filterInterceptorAndResolver_areWiredFromProperties() throws Exception {
+        UUID account = UUID.randomUUID();
+        String url = "/internal/subscription/accounts/" + account + "/operations/op/consume";
+        mvc.perform(post(url)).andExpect(status().isUnauthorized());
+        mvc.perform(post(url).header(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, worker.mint("subscription-api", account)))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_ACCESS_DENIED));
+        mvc.perform(post(url).header(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, order.mint("subscription-api", null)))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value(ErrorResponse.DELEGATION_DENIED));
+        mvc.perform(post(url).header(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, order.mint("subscription-api", account)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.caller").value("order-service"))
+                .andExpect(jsonPath("$.account").value(account.toString()));
+        mvc.perform(post("/internal/subscription/reconcile")
+                        .header(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER, worker.mint("subscription-api", null)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.background").value(true));
+        mvc.perform(get("/v1/ping")).andExpect(status().isOk());
+        mvc.perform(get(java.net.URI.create("/internal/..%2Fv1/ping"))).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void requireOperationOutsideInternal_isStillEnforced_failClosed() throws Exception {
+        // filtre /internal disina dokunmaz -> kimlik yok; interceptor yalniz /internal/** icin kayitli olsaydi 200 donerdi
+        int before = controller.hits.get();
+        mvc.perform(post("/v1/misplaced/reconcile"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.SERVICE_TOKEN_INVALID));
+        assertThat(controller.hits).hasValue(before);
+    }
+
+    @Test
+    void signerBean_usesPrivateKeyFileAndConfiguredTtl() throws Exception {
+        assertThat(ownSigner.serviceName()).isEqualTo("subscription-service");
+        assertThat(ownSigner.kid()).isEqualTo("subscription-1");
+        String token = ownSigner.mint("notification-api", null);
+        var claims = com.nimbusds.jwt.SignedJWT.parse(token).getJWTClaimsSet();
+        assertThat(claims.getExpirationTime().toInstant()).isEqualTo(CLOCK.instant().plus(Duration.ofSeconds(45)));
+        // kendi anahtarimiz JWKS'te yok: kendi token'imizi kendimiz dogrulayamayiz (aud zaten baska)
+        assertThat(keyRegistry.issuers()).containsExactlyInAnyOrder("order-service", "subscription-worker");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> verifier.verify(token))
+                .as("uygulamanin verifier bean'i kendi (kayitsiz kid, baska aud) token'ini reddeder")
+                .isInstanceOf(RuntimeException.class);
+        assertThat(Set.copyOf(keyRegistry.issuers())).doesNotContain("subscription-service");
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/ServiceJwtClientInterceptorTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static com.acme.platform.security.support.SecurityFixture.AUDIENCE;
+import static com.acme.platform.security.support.SecurityFixture.ORDER;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.acme.platform.security.client.ServiceJwtClientInterceptor;
+import com.acme.platform.security.jwt.ServiceIdentity;
+import com.acme.platform.security.support.SecurityFixture;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.Test;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.client.MockMvcClientHttpRequestFactory;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClient;
+
+/**
+ * Istemci tarafi: RestClient interceptor'u her istekte taze token basar; token gercek filtre tarafindan dogrulanir
+ * (RestClient -> MockMvc -> filtre -> controller). sub, holder'dan gelir; holder bos ise arka plan token'i.
+ */
+class ServiceJwtClientInterceptorTest {
+
+    static final ParameterizedTypeReference<Map<String, Object>> MAP = new ParameterizedTypeReference<>() {};
+
+    final SecurityFixture fx = new SecurityFixture();
+    final MockMvc mvc = fx.mockMvc();
+    final AtomicReference<UUID> holder = new AtomicReference<>();
+    final RestClient client = RestClient.builder()
+            .requestFactory(new MockMvcClientHttpRequestFactory(mvc))
+            .requestInterceptor(new ServiceJwtClientInterceptor(fx.order, AUDIENCE, () -> Optional.ofNullable(holder.get())))
+            .build();
+
+    @Test
+    void attachesVerifiableToken_withPropagatedSubject_freshPerRequest() {
+        UUID account = UUID.randomUUID();
+        holder.set(account);
+        Map<String, Object> first = client.post()
+                .uri("/internal/subscription/accounts/{a}/operations/{k}/consume", account, "op-1")
+                .retrieve().body(MAP);
+        Map<String, Object> second = client.post()
+                .uri("/internal/subscription/accounts/{a}/operations/{k}/consume", account, "op-1")
+                .retrieve().body(MAP);
+
+        assertThat(first).containsEntry("caller", ORDER).containsEntry("account", account.toString());
+        ServiceIdentity id1 = fx.verifier().verify((String) first.get("token"));   // sunucunun gordugu token dogrulanabilir
+        ServiceIdentity id2 = fx.verifier().verify((String) second.get("token"));
+        assertThat(id1.actor()).isEqualTo(ORDER);
+        assertThat(id1.accountId()).isEqualTo(account);
+        assertThat(id1.tokenId()).isNotEqualTo(id2.tokenId());                    // istek basina taze jti
+    }
+
+    @Test
+    void emptyHolder_sendsBackgroundToken_whichUserOperationRejects() {
+        holder.set(null);
+        assertThatThrownBy(() -> client.post()
+                .uri("/internal/subscription/accounts/{a}/operations/{k}/consume", UUID.randomUUID(), "op-1")
+                .retrieve().body(MAP))
+                .isInstanceOf(HttpClientErrorException.Forbidden.class)
+                .hasMessageContaining("DELEGATION_DENIED");
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    @Test
+    void wrongTargetAudienceConfiguredOnClient_isRejectedByServer() {
+        RestClient misconfigured = RestClient.builder()
+                .requestFactory(new MockMvcClientHttpRequestFactory(mvc))
+                .requestInterceptor(new ServiceJwtClientInterceptor(fx.order, "payment-api", Optional::empty))
+                .build();
+        assertThatThrownBy(() -> misconfigured.post().uri("/internal/subscription/reconcile").retrieve().body(MAP))
+                .isInstanceOf(HttpClientErrorException.Unauthorized.class)
+                .hasMessageContaining("SERVICE_TOKEN_INVALID");
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/ServiceJwtKeyRegistryTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.acme.platform.security.jwt.Ed25519Keys;
+import com.acme.platform.security.jwt.ServiceJwtKeyRegistry;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.platform.security.support.MutableClock;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import java.util.Set;
+import org.junit.jupiter.api.Test;
+
+/** kid kaydi: iki aktif anahtar, kaldirma, JWKS JSON'u (public-only) ve dosya bicimi round-trip. */
+class ServiceJwtKeyRegistryTest {
+
+    final ServiceJwtKeyRegistry registry = new ServiceJwtKeyRegistry();
+    final OctetKeyPair k1 = Ed25519Keys.generate("gw-1");
+    final OctetKeyPair k2 = Ed25519Keys.generate("gw-2");
+
+    @Test
+    void twoActiveKeysThenRemoval() {
+        registry.register("gateway", k1);
+        registry.register("gateway", k2);
+        assertThat(registry.find("gateway", "gw-1")).isPresent();
+        assertThat(registry.find("gateway", "gw-2")).isPresent();
+        assertThat(registry.find("order-service", "gw-1")).as("kid issuer'a baglidir").isEmpty();
+        assertThat(registry.remove("gateway", "gw-1")).isTrue();
+        assertThat(registry.remove("gateway", "gw-1")).isFalse();
+        assertThat(registry.find("gateway", "gw-1")).isEmpty();
+        assertThat(registry.find("gateway", "gw-2")).isPresent();
+    }
+
+    @Test
+    void jwksJsonIsPublicOnly_andParseable() throws Exception {
+        registry.register("gateway", k1);                                    // private JWK verilse bile
+        String jwks = registry.toJwksJson("gateway");
+        assertThat(jwks).doesNotContain("\"d\"").contains("\"kid\":\"gw-1\"").contains("\"crv\":\"Ed25519\"");
+        JWKSet parsed = JWKSet.parse(jwks);
+        assertThat(parsed.getKeyByKeyId("gw-1")).isNotNull();
+        assertThat(parsed.getKeyByKeyId("gw-1").isPrivate()).isFalse();
+        assertThat(registry.find("gateway", "gw-1").orElseThrow().isPrivate()).isFalse();
+    }
+
+    @Test
+    void fileFormatRoundTrip_verifiesTokensSignedWithOriginalPrivateKey() {
+        registry.register("gateway", k1);
+        registry.register("order-service", k2);
+        String json = registry.toJson();
+        assertThat(json).doesNotContain("\"d\"");
+
+        ServiceJwtKeyRegistry loaded = ServiceJwtKeyRegistry.fromJson(json);
+        assertThat(loaded.issuers()).containsExactlyInAnyOrder("gateway", "order-service");
+        MutableClock clock = new MutableClock();
+        String token = new ServiceJwtSigner(k2, "order-service", clock).mint("subscription-api", null);
+        var verifier = new ServiceJwtVerifier(loaded, Set.of("gateway", "order-service"), "subscription-api", clock);
+        assertThat(verifier.verify(token).actor()).isEqualTo("order-service");
+    }
+
+    @Test
+    void rejectsKeyWithoutKid_andNonEd25519() {
+        OctetKeyPair noKid = new OctetKeyPair.Builder(k1.toPublicJWK()).keyID(null).build();
+        assertThatThrownBy(() -> registry.register("gateway", noKid)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ServiceJwtKeyRegistry.fromJson("{\"gateway\": {\"keys\": [{\"kty\":\"oct\",\"k\":\"AAAA\",\"kid\":\"x\"}]}}"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void jdkKeyConversion_roundTripsThroughJwkBytes() throws Exception {
+        // JWK -> JDK -> imza -> dogrulama: x/d kodlamasi RFC 8032 ile uyumlu
+        var sig = java.security.Signature.getInstance("Ed25519");
+        sig.initSign(Ed25519Keys.toPrivateKey(k1));
+        sig.update("payload".getBytes());
+        byte[] s = sig.sign();
+        var ver = java.security.Signature.getInstance("Ed25519");
+        ver.initVerify(Ed25519Keys.toPublicKey(k1.toPublicJWK()));
+        ver.update("payload".getBytes());
+        assertThat(ver.verify(s)).isTrue();
+        // 200 rastgele anahtar: y'nin onde sifir/isaret byte'i olan kodlamalari da dogru cevrilir
+        for (int i = 0; i < 200; i++) {
+            OctetKeyPair k = Ed25519Keys.generate("k" + i);
+            assertThat(k.getDecodedX()).hasSize(32);
+            var s2 = java.security.Signature.getInstance("Ed25519");
+            s2.initSign(Ed25519Keys.toPrivateKey(k));
+            s2.update(new byte[] {(byte) i});
+            var v2 = java.security.Signature.getInstance("Ed25519");
+            v2.initVerify(Ed25519Keys.toPublicKey(k.toPublicJWK()));   // yalniz x'ten kurulan public anahtar
+            v2.update(new byte[] {(byte) i});
+            assertThat(v2.verify(s2.sign())).as("key %d", i).isTrue();
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/ServiceJwtPropertiesBindingTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.acme.platform.security.config.ServiceJwtProperties;
+import com.acme.platform.security.delegation.DelegationPolicy.UserContext;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+
+/** Bolum 9.5 yml anahtarlari birebir baglanir: service-jwt.internal-access[i].path / allowed-actors, delegation[i].user-context. */
+class ServiceJwtPropertiesBindingTest {
+
+    @Test
+    void bindsOrderedRulesFromRelaxedKeys() {
+        var source = new MapConfigurationPropertySource(Map.ofEntries(
+                Map.entry("service-jwt.audience", "subscription-api"),
+                Map.entry("service-jwt.service-name", "subscription-service"),
+                Map.entry("service-jwt.known-issuers[0]", "gateway"),
+                Map.entry("service-jwt.known-issuers[1]", "order-service"),
+                Map.entry("service-jwt.internal-access[0].path", "/internal/subscription/accounts/*/operations/*/consume"),
+                Map.entry("service-jwt.internal-access[0].allowed-actors[0]", "order-service"),
+                Map.entry("service-jwt.internal-access[1].path", "/internal/subscription/**"),
+                Map.entry("service-jwt.internal-access[1].allowed-actors", "backoffice-service,gateway"),
+                Map.entry("service-jwt.delegation[0].actor", "order-service"),
+                Map.entry("service-jwt.delegation[0].operation", "subscription.consume"),
+                Map.entry("service-jwt.delegation[0].user-context", "REQUIRED")));
+        ServiceJwtProperties props = new Binder(source).bind("service-jwt", Bindable.of(ServiceJwtProperties.class)).get();
+
+        assertThat(props.ttlSeconds()).isEqualTo(60);
+        assertThat(props.clockSkewSeconds()).isEqualTo(30);
+        assertThat(props.knownIssuers()).containsExactlyInAnyOrder("gateway", "order-service");
+        assertThat(props.internalAccess()).hasSize(2);
+        assertThat(props.internalAccess().get(0).path()).endsWith("/consume");           // sira korunur
+        assertThat(props.internalAccess().get(1).allowedActors()).containsExactly("backoffice-service", "gateway");
+        assertThat(props.delegation().get(0).userContext()).isEqualTo(UserContext.REQUIRED);
+
+        var policy = props.internalAccessPolicy();
+        assertThat(policy.allows("/internal/subscription/accounts/a/operations/k/consume", "order-service")).isTrue();
+        assertThat(policy.allows("/internal/subscription/accounts/a/operations/k/consume", "backoffice-service")).isFalse();
+        assertThat(props.delegationPolicy().decide("order-service", "subscription.consume", null, null).allowed()).isFalse();
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/ServiceJwtVerificationFilterTest.java`
+
+```java
+package com.acme.platform.security;
+
+import static com.acme.platform.security.support.SecurityFixture.AUDIENCE;
+import static com.acme.platform.security.support.SecurityFixture.BACKOFFICE;
+import static com.acme.platform.security.support.SecurityFixture.ORDER;
+import static com.acme.platform.security.support.SecurityFixture.WORKER;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.support.RawTokens;
+import com.acme.platform.security.support.SecurityFixture;
+import com.acme.platform.security.web.ErrorResponse;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.nimbusds.jose.JWSAlgorithm;
+import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+/**
+ * Bolum 9.4 filtre zinciri ve 9.2.1 delegasyon kurallari, GERCEK filtre + interceptor + resolver uzerinden
+ * (kanit seviyesi 1, MockMvc). Her test bir saldiri/senaryo satiridir; hits sayaci reddedilen istegin controller'a
+ * ulasmadigini kanitlar.
+ */
+class ServiceJwtVerificationFilterTest {
+
+    static final String HDR = ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER;
+    final UUID accountA = UUID.randomUUID();
+    final UUID accountB = UUID.randomUUID();
+    SecurityFixture fx;
+    MockMvc mvc;
+
+    @BeforeEach
+    void setUp() {
+        fx = new SecurityFixture();
+        mvc = fx.mockMvc();
+    }
+
+    MockHttpServletRequestBuilder consume(UUID pathAccount) {
+        return post("/internal/subscription/accounts/{a}/operations/{k}/consume", pathAccount, "op-1")
+                .contentType(MediaType.APPLICATION_JSON);
+    }
+
+    Instant now() { return fx.clock.instant(); }
+
+    // ---- kimlik + allowlist ------------------------------------------------------------------------------------
+
+    @Test
+    void allowedActorWithOwnSubject_reaches200_andAttributesAreSet() throws Exception {
+        mvc.perform(consume(accountA).header(HDR, fx.order.mint(AUDIENCE, accountA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.caller").value(ORDER))
+                .andExpect(jsonPath("$.account").value(accountA.toString()))
+                .andExpect(jsonPath("$.accountAttr").value(accountA.toString()))
+                .andExpect(jsonPath("$.pathAccount").value(accountA.toString()))
+                .andExpect(jsonPath("$.background").value(false));
+        assertThat(fx.controller.hits).hasValue(1);
+    }
+
+    @Test
+    void authorizationBearerHeader_isAcceptedAsCarrier() throws Exception {
+        mvc.perform(consume(accountA).header(HttpHeaders.AUTHORIZATION, "Bearer " + fx.order.mint(AUDIENCE, accountA)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void knownActorNotInRule_is403_INTERNAL_ACCESS_DENIED() throws Exception {
+        // backoffice bilinen bir imzalayici; consume kurali yalniz order-service'e acik
+        mvc.perform(consume(accountA).header(HDR, fx.backoffice.mint(AUDIENCE, accountA)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_ACCESS_DENIED));
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    @Test
+    void pathWithoutAnyRule_isDefaultDeny403() throws Exception {
+        mvc.perform(get("/internal/admin/keys").header(HDR, fx.gateway.mint(AUDIENCE, null)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_ACCESS_DENIED));
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    @Test
+    void missingHeader_is401() throws Exception {
+        mvc.perform(consume(accountA))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("WWW-Authenticate", "Bearer realm=\"service\""))
+                .andExpect(jsonPath("$.code").value(ErrorResponse.SERVICE_TOKEN_INVALID));
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    @Test
+    void publicPath_isUntouched_noTokenNeeded_noAttributes() throws Exception {
+        mvc.perform(get("/v1/ping"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pong").value(true))
+                .andExpect(jsonPath("$.caller").doesNotExist())
+                .andExpect(jsonPath("$.background").value(false));
+        // gecersiz bir token bile public path'i etkilemez
+        mvc.perform(get("/v1/ping").header(HDR, "garbage")).andExpect(status().isOk());
+        assertThat(fx.controller.hits).hasValue(2);
+    }
+
+    // ---- token dogrulama adimlari (hepsi 401 SERVICE_TOKEN_INVALID, mesaj sebebi sizdirmaz) -------------------
+
+    void assert401(String token) throws Exception {
+        mvc.perform(consume(accountA).header(HDR, token))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.SERVICE_TOKEN_INVALID))
+                .andExpect(jsonPath("$.message").value("Service token invalid"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("kid"))));
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    RawTokens.Builder validShape() {
+        return RawTokens.token().kid("order-1").iss(ORDER).aud(AUDIENCE).sub(accountA)
+                .iat(now()).exp(now().plusSeconds(60));
+    }
+
+    @Test
+    void wrongAudience_is401() throws Exception {
+        assert401(fx.order.mint("order-api", accountA));
+    }
+
+    @Test
+    void multiAudienceContainingOurs_isStillRejected() throws Exception {
+        // ayni claim'lerle ama aud=[ours, other]: tam esitlik sarti
+        var claims = new com.nimbusds.jwt.JWTClaimsSet.Builder(validShape().claims())
+                .audience(java.util.List.of(AUDIENCE, "other-api")).build();
+        var jwt = new com.nimbusds.jwt.SignedJWT(validShape().header(), claims);
+        jwt.sign(new com.acme.platform.security.jwt.JdkEd25519Signer(fx.orderKey));
+        assertThat(com.nimbusds.jwt.SignedJWT.parse(jwt.serialize()).getJWTClaimsSet().getAudience())
+                .containsExactly(AUDIENCE, "other-api");
+        assert401(jwt.serialize());
+        // kontrol: tek aud'lu ayni sekil ayni anahtarla kabul edilir -> 401'in tek sebebi fazladan aud
+        mvc.perform(consume(accountA).header(HDR, validShape().signEd25519(fx.orderKey))).andExpect(status().isOk());
+    }
+
+    @Test
+    void expired_is401_butWithinSkewStillAccepted() throws Exception {
+        String token = fx.order.mint(AUDIENCE, accountA);               // exp = now + 60s
+        fx.clock.advance(Duration.ofSeconds(60 + 29));                   // 30 sn tolerans icinde
+        mvc.perform(consume(accountA).header(HDR, token)).andExpect(status().isOk());
+        assertThat(fx.controller.hits).hasValue(1);
+        fx.controller.hits.set(0);
+        fx.clock.advance(Duration.ofSeconds(2));                         // 60 + 31 sn: tolerans disinda
+        assert401(token);
+    }
+
+    @Test
+    void notBeforeInFuture_is401_butWithinSkewAccepted() throws Exception {
+        assert401(validShape().nbf(now().plusSeconds(31)).signEd25519(fx.orderKey));
+        mvc.perform(consume(accountA).header(HDR, validShape().nbf(now().plusSeconds(29)).signEd25519(fx.orderKey)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void hs256SignedWithPublicKeyBytes_algConfusion_is401() throws Exception {
+        // saldirgan public anahtari (JWKS'ten okunabilir) HMAC secret'i olarak kullanir
+        byte[] publicKeyBytes = fx.orderKey.toPublicJWK().getDecodedX();
+        assert401(validShape().signHs256(publicKeyBytes));
+    }
+
+    @Test
+    void algNone_is401() throws Exception {
+        assert401(validShape().unsecured());
+    }
+
+    @Test
+    void unknownKid_is401() throws Exception {
+        assert401(validShape().kid("rogue-1").signEd25519(fx.rogueKey));
+    }
+
+    @Test
+    void unknownIssuer_is401() throws Exception {
+        assert401(validShape().iss("evil-service").signEd25519(fx.orderKey));
+    }
+
+    @Test
+    void issuerImpersonation_keyOfAnotherIssuer_is401() throws Exception {
+        // backoffice kendi anahtariyla (kid backoffice-1) iss=order-service diyor: kid o issuer altinda kayitli degil
+        assert401(validShape().kid("backoffice-1").iss(ORDER).signEd25519(fx.backofficeKey));
+    }
+
+    @Test
+    void actDifferentFromIss_is401() throws Exception {
+        // gercek saldiri: backoffice kendi gecerli anahtariyla act=order-service soyleyip consume kuralini gecmeye calisir
+        assert401(validShape().kid("backoffice-1").iss(BACKOFFICE).act(ORDER).signEd25519(fx.backofficeKey));
+        assert401(validShape().act(BACKOFFICE).signEd25519(fx.orderKey));
+    }
+
+    @Test
+    void wrongTyp_is401() throws Exception {
+        assert401(validShape().typ("JWT").signEd25519(fx.orderKey));
+        assert401(validShape().typ(null).signEd25519(fx.orderKey));
+    }
+
+    @Test
+    void tamperedPayload_is401() throws Exception {
+        String token = fx.order.mint(AUDIENCE, accountA);
+        String[] parts = token.split("\\.");
+        String forged = com.nimbusds.jose.util.Base64URL.encode(
+                new String(com.nimbusds.jose.util.Base64URL.from(parts[1]).decode(), java.nio.charset.StandardCharsets.UTF_8)
+                        .replace(accountA.toString(), accountB.toString())).toString();
+        assert401(parts[0] + "." + forged + "." + parts[2]);
+    }
+
+    @Test
+    void garbageToken_is401() throws Exception {
+        assert401("not.a.jwt");
+        assert401("eyJhbGciOiJFZERTQSJ9.e30.");                            // bos imza
+        mvc.perform(consume(accountA).header(HDR, ""))                     // bos header = eksik token
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.SERVICE_TOKEN_INVALID));
+    }
+
+    // ---- path normalize (Bolum 9.4 adim 0): 400, public kurallara geri dusmez --------------------------------
+
+    void assertPathInvalid(String rawUri) throws Exception {
+        String token = fx.gateway.mint(AUDIENCE, null);                  // gecerli token bile kurtarmaz
+        mvc.perform(get(URI.create(rawUri)).header(HDR, token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_PATH_INVALID));
+        assertThat(fx.controller.hits).as(rawUri).hasValue(0);
+    }
+
+    @Test
+    void encodedTraversalOutOfInternal_isRejected_notMatchedAsPublic() throws Exception {
+        assertPathInvalid("/internal/..%2Fv1/ping");
+    }
+
+    @Test
+    void encodedDotSegmentsInsideInternal_areRejected() throws Exception {
+        assertPathInvalid("/internal/subscription/%2e%2e/admin/keys");
+        assertPathInvalid("/internal/subscription/%2E%2E/admin/keys");
+        assertPathInvalid("/internal/./subscription/reconcile");
+    }
+
+    @Test
+    void doubleEncoding_isRejected() throws Exception {
+        assertPathInvalid("/internal/%252e%252e/v1/ping");
+        assertPathInvalid("/internal/subscription/%252Fadmin");
+    }
+
+    @Test
+    void backslashEmptySegmentAndMatrixParam_areRejected() throws Exception {
+        assertPathInvalid("/internal/subscription/%5C..%5Cadmin/keys");
+        assertPathInvalid("/internal//subscription/reconcile");
+        assertPathInvalid("/internal/subscription/..;/admin/keys");
+    }
+
+    @Test
+    void matrixParamOnFirstSegment_isRejected_withAndWithoutToken() throws Exception {
+        // Spring ';x' kismini atip bunlari /internal handler'larina yonlendirir: PUBLIC sayilirsa token'siz gecerdi
+        String[] raws = {"/internal;x/admin/keys", "/internal;jsessionid=1/admin/keys",
+                "/internal;jsessionid=1/subscription/accounts/" + accountA + "/balance",
+                "/internal;x/subscription/reconcile", "/INTERNAL/admin/keys", "/v1/..;/internal/admin/keys"};
+        for (String raw : raws) {
+            assertPathInvalid(raw);
+            mvc.perform(get(URI.create(raw)))                                // token'siz: yine 400, handler'a ulasmaz
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(ErrorResponse.INTERNAL_PATH_INVALID));
+            assertThat(fx.controller.hits).as(raw).hasValue(0);
+        }
+        // kontrol: ayni handler gecerli token ile normal path'ten ulasilabilir (400'un sebebi path'tir)
+        mvc.perform(get("/internal/admin/keys").header(HDR, fx.gateway.mint(AUDIENCE, null)))
+                .andExpect(status().is(org.hamcrest.Matchers.not(400)));
+    }
+
+    @Test
+    void matrixParamOnPublicPath_isUntouched() throws Exception {
+        mvc.perform(get(URI.create("/v1/ping;jsessionid=1"))).andExpect(status().isOk());
+    }
+
+    @Test
+    void traversalFromPublicIntoInternal_isRejected() throws Exception {
+        assertPathInvalid("/v1/..%2Finternal/subscription/reconcile");
+        assertPathInvalid("/v1/../internal/subscription/reconcile");
+    }
+
+    @Test
+    void encodedButHarmlessInternalPath_isNormalizedBeforeAllowlist() throws Exception {
+        // %61 = 'a': allowlist ham URI ile degil, decode edilmis path ile eslesir (Bolum 9.4 kural)
+        String raw = "/internal/subscription/%61ccounts/" + accountA + "/balance";
+        mvc.perform(get(URI.create(raw)).header(HDR, fx.order.mint(AUDIENCE, accountA))).andExpect(status().isOk());
+    }
+
+    // ---- delegasyon (Bolum 9.2.1) ------------------------------------------------------------------------------
+
+    @Test
+    void requiredUserContext_withBackgroundToken_is403_DELEGATION_DENIED() throws Exception {
+        mvc.perform(consume(accountA).header(HDR, fx.order.mint(AUDIENCE, null)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.DELEGATION_DENIED));
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    @Test
+    void requiredUserContext_subjectDiffersFromPathAccount_is403() throws Exception {
+        mvc.perform(consume(accountB).header(HDR, fx.order.mint(AUDIENCE, accountA)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.DELEGATION_DENIED));
+        assertThat(fx.controller.hits).hasValue(0);
+    }
+
+    @Test
+    void forbiddenUserContext_backgroundOk_subjectPresent403() throws Exception {
+        mvc.perform(post("/internal/subscription/reconcile").header(HDR, fx.worker.mint(AUDIENCE, null)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.caller").value(WORKER))
+                .andExpect(jsonPath("$.background").value(true))
+                .andExpect(jsonPath("$.accountAttr").doesNotExist());
+        mvc.perform(post("/internal/subscription/reconcile").header(HDR, fx.worker.mint(AUDIENCE, accountA)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.DELEGATION_DENIED));
+        assertThat(fx.controller.hits).hasValue(1);
+    }
+
+    @Test
+    void actorAllowlistedButWithoutDelegationRule_is403() throws Exception {
+        // reconcile allowlist'i backoffice'e acik ama delegasyon matrisinde satiri yok
+        mvc.perform(post("/internal/subscription/reconcile").header(HDR, fx.backoffice.mint(AUDIENCE, null)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.DELEGATION_DENIED));
+    }
+
+    @Test
+    void currentAccountRequired_withBackgroundTokenOnOptionalOperation_is401() throws Exception {
+        String url = "/internal/subscription/accounts/" + accountA + "/profile";
+        mvc.perform(post(url).header(HDR, fx.backoffice.mint(AUDIENCE, null)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorResponse.ACCOUNT_CONTEXT_REQUIRED));
+        mvc.perform(post(url).header(HDR, fx.backoffice.mint(AUDIENCE, accountB)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.account").value(accountB.toString()));
+        assertThat(fx.controller.hits).hasValue(1);
+    }
+
+    // ---- rotasyon (Bolum 9.2) ----------------------------------------------------------------------------------
+
+    @Test
+    void keyRotation_newKidAfterRegister_oldKidUntilRemoved() throws Exception {
+        var newKey = com.acme.platform.security.jwt.Ed25519Keys.generate("order-2");
+        var newSigner = new ServiceJwtSigner(newKey, ORDER, fx.clock);
+
+        assert401(newSigner.mint(AUDIENCE, accountA));                    // henuz yayinlanmadi
+        fx.registry.register(ORDER, newKey.toPublicJWK());
+        mvc.perform(consume(accountA).header(HDR, newSigner.mint(AUDIENCE, accountA))).andExpect(status().isOk());
+        mvc.perform(consume(accountA).header(HDR, fx.order.mint(AUDIENCE, accountA))).andExpect(status().isOk()); // eski hala gecerli
+
+        assertThat(fx.registry.remove(ORDER, "order-1")).isTrue();
+        fx.controller.hits.set(0);
+        assert401(fx.order.mint(AUDIENCE, accountA));                    // eski anahtar dusuruldu
+        mvc.perform(consume(accountA).header(HDR, newSigner.mint(AUDIENCE, accountA))).andExpect(status().isOk());
+    }
+
+    @Test
+    void signerAlwaysUsesEdDSA_andTokenCarriesRequiredClaims() throws Exception {
+        String token = fx.order.mint(AUDIENCE, accountA);
+        var jwt = com.nimbusds.jwt.SignedJWT.parse(token);
+        assertThat(jwt.getHeader().getAlgorithm()).isEqualTo(JWSAlgorithm.EdDSA);
+        assertThat(jwt.getHeader().getType()).isEqualTo(ServiceJwtSigner.SERVICE_JWT_TYPE);
+        assertThat(jwt.getHeader().getKeyID()).isEqualTo("order-1");
+        var c = jwt.getJWTClaimsSet();
+        assertThat(c.getIssuer()).isEqualTo(ORDER);
+        assertThat(c.getAudience()).containsExactly(AUDIENCE);
+        assertThat(c.getStringClaim("act")).isEqualTo(ORDER);
+        assertThat(c.getSubject()).isEqualTo(accountA.toString());
+        assertThat(c.getJWTID()).isNotBlank();
+        assertThat(c.getExpirationTime().toInstant()).isEqualTo(now().plusSeconds(60));
+        assertThat(c.getIssueTime().toInstant()).isEqualTo(now());
+        assertThat(fx.order.mint(AUDIENCE, null)).isNotEqualTo(token);   // jti her seferinde farkli
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/support/MutableClock.java`
+
+```java
+package com.acme.platform.security.support;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+
+/** Deterministik zaman: exp/nbf/skew testleri gercek zaman beklemeden calisir (platform-messaging ile ayni desen). */
+public final class MutableClock extends Clock {
+    private volatile Instant now = Instant.parse("2026-09-29T10:00:00Z");
+    @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+    @Override public Clock withZone(ZoneId zone) { return this; }
+    @Override public Instant instant() { return now; }
+    public void advance(Duration d) { now = now.plus(d); }
+    public void set(Instant instant) { now = instant; }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/support/RawTokens.java`
+
+```java
+package com.acme.platform.security.support;
+
+import com.acme.platform.security.jwt.JdkEd25519Signer;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.nimbusds.jose.JOSEObjectType;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSSigner;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import com.nimbusds.jose.util.Base64URL;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Uretim imzalayicisinin ASLA uretmeyecegi token'lari (yanlis alg, typ, nbf, act != iss...) kurmak icin
+ * test tarafi kurucu. Saldirganin elindeki serbestligi temsil eder.
+ */
+public final class RawTokens {
+
+    private RawTokens() {}
+
+    public static final class Builder {
+        private JWSAlgorithm alg = JWSAlgorithm.EdDSA;
+        private JOSEObjectType typ = ServiceJwtSigner.SERVICE_JWT_TYPE;
+        private String kid;
+        private String iss;
+        private String act;
+        private boolean actSet;
+        private String aud;
+        private String sub;
+        private Instant iat;
+        private Instant exp;
+        private Instant nbf;
+        private String jti = UUID.randomUUID().toString();
+
+        public Builder alg(JWSAlgorithm v) { alg = v; return this; }
+        public Builder typ(String v) { typ = v == null ? null : new JOSEObjectType(v); return this; }
+        public Builder kid(String v) { kid = v; return this; }
+        public Builder iss(String v) { iss = v; if (!actSet) act = v; return this; }
+        public Builder act(String v) { act = v; actSet = true; return this; }
+        public Builder aud(String v) { aud = v; return this; }
+        public Builder sub(UUID v) { sub = v == null ? null : v.toString(); return this; }
+        public Builder sub(String v) { sub = v; return this; }
+        public Builder iat(Instant v) { iat = v; return this; }
+        public Builder exp(Instant v) { exp = v; return this; }
+        public Builder nbf(Instant v) { nbf = v; return this; }
+
+        public JWTClaimsSet claims() {
+            JWTClaimsSet.Builder c = new JWTClaimsSet.Builder().issuer(iss).jwtID(jti);
+            if (aud != null) c.audience(List.of(aud));
+            if (act != null) c.claim(ServiceJwtSigner.ACTOR_CLAIM, act);
+            if (sub != null) c.subject(sub);
+            if (iat != null) c.issueTime(Date.from(iat));
+            if (exp != null) c.expirationTime(Date.from(exp));
+            if (nbf != null) c.notBeforeTime(Date.from(nbf));
+            return c.build();
+        }
+
+        public JWSHeader header() {
+            JWSHeader.Builder h = new JWSHeader.Builder(alg).keyID(kid);
+            if (typ != null) h.type(typ);
+            return h.build();
+        }
+
+        /** Ed25519 ile imzala (gecerli anahtar, gecersiz icerik senaryolari). */
+        public String signEd25519(OctetKeyPair privateKey) {
+            return sign(new JdkEd25519Signer(privateKey));
+        }
+
+        /** HS256 "alg confusion": secret olarak public anahtarin ham byte'lari (klasik saldiri). */
+        public String signHs256(byte[] secret) {
+            try {
+                alg = JWSAlgorithm.HS256;
+                return sign(new MACSigner(secret));
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        /** alg=none: imza kismi bos. Nimbus PlainHeader kid tasiyamadigi icin elle serilestirilir. */
+        public String unsecured() {
+            String header = "{\"alg\":\"none\",\"typ\":\"" + typ.getType() + "\",\"kid\":\"" + kid + "\"}";
+            return Base64URL.encode(header.getBytes(StandardCharsets.UTF_8)) + "."
+                    + Base64URL.encode(claims().toString().getBytes(StandardCharsets.UTF_8)) + ".";
+        }
+
+        private String sign(JWSSigner signer) {
+            try {
+                SignedJWT jwt = new SignedJWT(header(), claims());
+                jwt.sign(signer);
+                return jwt.serialize();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
+    }
+
+    public static Builder token() { return new Builder(); }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/support/SecurityFixture.java`
+
+```java
+package com.acme.platform.security.support;
+
+import com.acme.platform.security.delegation.DelegationInterceptor;
+import com.acme.platform.security.delegation.DelegationPolicy;
+import com.acme.platform.security.delegation.DelegationPolicy.UserContext;
+import com.acme.platform.security.jwt.Ed25519Keys;
+import com.acme.platform.security.jwt.ServiceJwtKeyRegistry;
+import com.acme.platform.security.jwt.ServiceJwtSigner;
+import com.acme.platform.security.jwt.ServiceJwtVerifier;
+import com.acme.platform.security.web.CurrentAccountArgumentResolver;
+import com.acme.platform.security.web.InternalAccessPolicy;
+import com.acme.platform.security.web.InternalAccessPolicy.Rule;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.acme.platform.security.web.ServiceSecurityExceptionHandler;
+import com.nimbusds.jose.jwk.OctetKeyPair;
+import java.util.List;
+import java.util.Set;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+/**
+ * GERCEK filtre + interceptor + resolver + advice ile standalone MockMvc (Bolum 23.5 deseni). Dort servis, her biri
+ * kendi Ed25519 anahtariyla; rogue anahtar hicbir issuer altinda kayitli degil.
+ */
+public final class SecurityFixture {
+
+    public static final String AUDIENCE = "subscription-api";
+    public static final String ORDER = "order-service";
+    public static final String WORKER = "subscription-worker";
+    public static final String BACKOFFICE = "backoffice-service";
+    public static final String GATEWAY = "gateway";
+    public static final Set<String> KNOWN_ISSUERS = Set.of(ORDER, WORKER, BACKOFFICE, GATEWAY);
+
+    public final MutableClock clock = new MutableClock();
+    public final OctetKeyPair orderKey = Ed25519Keys.generate("order-1");
+    public final OctetKeyPair workerKey = Ed25519Keys.generate("worker-1");
+    public final OctetKeyPair backofficeKey = Ed25519Keys.generate("backoffice-1");
+    public final OctetKeyPair gatewayKey = Ed25519Keys.generate("gw-1");
+    public final OctetKeyPair rogueKey = Ed25519Keys.generate("rogue-1");
+    public final ServiceJwtKeyRegistry registry = new ServiceJwtKeyRegistry();
+    public final ServiceJwtSigner order = new ServiceJwtSigner(orderKey, ORDER, clock);
+    public final ServiceJwtSigner worker = new ServiceJwtSigner(workerKey, WORKER, clock);
+    public final ServiceJwtSigner backoffice = new ServiceJwtSigner(backofficeKey, BACKOFFICE, clock);
+    public final ServiceJwtSigner gateway = new ServiceJwtSigner(gatewayKey, GATEWAY, clock);
+    public final SubscriptionInternalController controller = new SubscriptionInternalController();
+
+    public SecurityFixture() {
+        registry.register(ORDER, orderKey);
+        registry.register(WORKER, workerKey);
+        registry.register(BACKOFFICE, backofficeKey);
+        registry.register(GATEWAY, gatewayKey);
+    }
+
+    /** Dar kurallar once, catch-all sonda (Bolum 9.5). */
+    public static List<Rule> defaultRules() {
+        return List.of(
+                new Rule("/internal/subscription/accounts/*/operations/*/consume", Set.of(ORDER)),
+                new Rule("/internal/subscription/reconcile", Set.of(WORKER, BACKOFFICE)),
+                new Rule("/internal/subscription/accounts/*/balance", Set.of(ORDER)),
+                new Rule("/internal/subscription/**", Set.of(BACKOFFICE, GATEWAY)));
+    }
+
+    public static List<DelegationPolicy.Rule> defaultDelegation() {
+        return List.of(
+                new DelegationPolicy.Rule(ORDER, "subscription.consume", UserContext.REQUIRED),
+                new DelegationPolicy.Rule(WORKER, "subscription.reconcile", UserContext.FORBIDDEN),
+                new DelegationPolicy.Rule(BACKOFFICE, "subscription.profile", UserContext.OPTIONAL));
+    }
+
+    public ServiceJwtVerifier verifier() {
+        return new ServiceJwtVerifier(registry, KNOWN_ISSUERS, AUDIENCE, clock);
+    }
+
+    public MockMvc mockMvc() { return mockMvc(defaultRules()); }
+
+    public MockMvc mockMvc(List<Rule> rules) {
+        return MockMvcBuilders.standaloneSetup(controller)
+                .addFilters(new ServiceJwtVerificationFilter(verifier(), new InternalAccessPolicy(rules)))
+                .addInterceptors(new DelegationInterceptor(new DelegationPolicy(defaultDelegation())))
+                .setCustomArgumentResolvers(new CurrentAccountArgumentResolver())
+                .setControllerAdvice(new ServiceSecurityExceptionHandler())
+                .build();
+    }
+}
+```
+
+---
+
+### `skeleton-example/platform-security/src/test/java/com/acme/platform/security/support/SubscriptionInternalController.java`
+
+```java
+package com.acme.platform.security.support;
+
+import com.acme.platform.security.delegation.RequireOperation;
+import com.acme.platform.security.web.CurrentAccount;
+import com.acme.platform.security.web.ServiceJwtVerificationFilter;
+import com.acme.platform.security.web.ServiceRequestAttributes;
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Sahte subscription servisi uclari. Yanit, filtrenin yazdigi attribute'lari ve gelen header'i geri yansitir ki
+ * test "controller'a ne ulasti"yi dogrulayabilsin. hits sayaci: reddedilen istek handler'a ulasmamali.
+ */
+@RestController
+public class SubscriptionInternalController {
+
+    public final AtomicInteger hits = new AtomicInteger();
+
+    @PostMapping("/internal/subscription/accounts/{accountId}/operations/{key}/consume")
+    @RequireOperation("subscription.consume")
+    public Map<String, Object> consume(@PathVariable UUID accountId, @PathVariable String key,
+                                       @CurrentAccount UUID account, HttpServletRequest request) {
+        hits.incrementAndGet();
+        Map<String, Object> body = echo(request);
+        body.put("pathAccount", accountId.toString());
+        body.put("account", account.toString());
+        body.put("key", key);
+        return body;
+    }
+
+    @PostMapping("/internal/subscription/reconcile")
+    @RequireOperation("subscription.reconcile")
+    public Map<String, Object> reconcile(HttpServletRequest request) {
+        hits.incrementAndGet();
+        return echo(request);
+    }
+
+    /** OPTIONAL delegasyon ama controller hesap ister: @CurrentAccount 401 senaryosu. */
+    @PostMapping("/internal/subscription/accounts/{accountId}/profile")
+    @RequireOperation("subscription.profile")
+    public Map<String, Object> profile(@PathVariable UUID accountId, @CurrentAccount UUID account, HttpServletRequest request) {
+        hits.incrementAndGet();
+        Map<String, Object> body = echo(request);
+        body.put("account", account.toString());
+        return body;
+    }
+
+    /** Delegasyon kurali olmayan salt-okur uc: allowlist siralama senaryolari icin. */
+    @GetMapping("/internal/subscription/accounts/{accountId}/balance")
+    public Map<String, Object> balance(@PathVariable UUID accountId, HttpServletRequest request) {
+        hits.incrementAndGet();
+        return echo(request);
+    }
+
+    @GetMapping("/internal/admin/keys")
+    public Map<String, Object> adminKeys(HttpServletRequest request) {
+        hits.incrementAndGet();
+        return echo(request);
+    }
+
+    /** /internal DISINDA ama @RequireOperation tasiyan uc: interceptor tum path'lere kayitli olmali (fail-closed). */
+    @PostMapping("/v1/misplaced/reconcile")
+    @RequireOperation("subscription.reconcile")
+    public Map<String, Object> misplacedReconcile(HttpServletRequest request) {
+        hits.incrementAndGet();
+        return echo(request);
+    }
+
+    @GetMapping("/v1/ping")
+    public Map<String, Object> ping(HttpServletRequest request) {
+        hits.incrementAndGet();
+        Map<String, Object> body = echo(request);
+        body.put("pong", true);
+        return body;
+    }
+
+    private static Map<String, Object> echo(HttpServletRequest request) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("caller", ServiceRequestAttributes.callerService(request).orElse(null));
+        body.put("accountAttr", ServiceRequestAttributes.accountId(request).map(UUID::toString).orElse(null));
+        body.put("background", ServiceRequestAttributes.background(request));
+        body.put("token", request.getHeader(ServiceJwtVerificationFilter.SERVICE_AUTH_HEADER));
+        return body;
+    }
+}
+```
+
+---
+
 ### `skeleton-example/pom.xml`
 
 ```xml
@@ -8288,7 +21124,7 @@ public class QuotaParticipant implements SagaParticipant {
     <spring-boot.version>4.1.1</spring-boot.version>
     <archunit.version>1.5.1</archunit.version>
   </properties>
-  <modules><module>platform-core</module><module>platform-messaging</module><module>order-api</module><module>order-core</module></modules>
+  <modules><module>platform-core</module><module>platform-messaging</module><module>order-api</module><module>order-core</module><module>broker-example</module><module>platform-parameters</module><module>rate-limit-example</module><module>modulith-example</module><module>contract-example</module><module>platform-security</module><module>db-security-example</module></modules>
   <dependencyManagement><dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-dependencies</artifactId><version>${spring-boot.version}</version><type>pom</type><scope>import</scope></dependency>
     <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit-junit5</artifactId><version>${archunit.version}</version><scope>test</scope></dependency>
@@ -8309,4 +21145,1158 @@ public class QuotaParticipant implements SagaParticipant {
     </plugins>
   </build>
 </project>
+```
+
+---
+
+### `skeleton-example/rate-limit-example/pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version></parent>
+  <artifactId>rate-limit-example</artifactId>
+  <!-- Redis uzerinde atomik fixed-window rate limit (referans Bolum 9.6, 9.3 fail politikasi, 22 anti-pattern:
+       JVM sayaci). Sayac yalniz Redis'te yasar; Lua script tek round-trip'te INCRBY + ilk vurusta EXPIRE yapar.
+       Servisler kendi sayacini yazmaz, bu modulu kullanir. -->
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>platform-core</artifactId><version>${revision}</version></dependency>
+    <!-- Duz Lettuce (BOM surumu): Spring Data Redis soyutlamasi burada gereksiz; EVALSHA/SCRIPT LOAD dogrudan kullanilir -->
+    <dependency><groupId>io.lettuce</groupId><artifactId>lettuce-core</artifactId></dependency>
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-core</artifactId></dependency>
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId></dependency>
+    <!-- rate-limit.rules.<scope> baglamasi icin; servis zaten Boot uygulamasidir -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot</artifactId></dependency>
+    <!-- Servlet filtresi: API'yi kullanan servis Tomcat ile getirir, bu modul tasimaz -->
+    <dependency><groupId>jakarta.servlet</groupId><artifactId>jakarta.servlet-api</artifactId><scope>provided</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <!-- Prometheus adlandirmasini (rate_limit_fail_open_total{scope}) gercek scrape ciktisinda dogrulamak icin -->
+    <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <!-- 0 test = basarisiz (README ders 2) -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><failIfNoTests>true</failIfNoTests></configuration></plugin>
+  </plugins></build>
+</project>
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/FailPolicy.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+/**
+ * Redis'e ulasilamadiginda scope basina karar (referans Bolum 9.6 fail tablosu).
+ * OPEN: is yuzeyleri (arama, listeleme) - istek gecer, metrik + alarm. CLOSED: guvenlik yuzeyleri (OTP, login,
+ * refresh) - 503, cunku limitsiz gecis kaba kuvvet/SMS pumping kapisini acar. Varsayilan yoktur; her scope
+ * karari acikca yazar (README'deki tek tablo).
+ */
+public enum FailPolicy { OPEN, CLOSED }
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RateLimitDecision.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+/**
+ * Tek bir kontrolun sonucu. {@code retryAfterSeconds} yalniz red durumunda anlamlidir (429/503 Retry-After).
+ * FAIL_OPEN "izin verildi" sayilir ama {@code degraded()} ile ayirt edilir: cagiran isterse loglar, sayac yoktur.
+ */
+public record RateLimitDecision(Outcome outcome, long remaining, long retryAfterSeconds) {
+
+    public enum Outcome {
+        /** Redis sayaci limit icinde. */
+        ALLOWED,
+        /** Redis sayaci limiti asti: 429 + Retry-After. */
+        EXCEEDED,
+        /** Redis'e ulasilamadi, scope fail-open: istek gecer, metrik artar. */
+        FAIL_OPEN,
+        /** Redis'e ulasilamadi, scope fail-closed: 503 RATE_LIMIT_UNAVAILABLE. */
+        UNAVAILABLE,
+        /** Scope icin kural yok: config hatasi, 503 (fail-closed). */
+        RULE_MISSING
+    }
+
+    /** Store'a ulasilamadiginda 503 icin onerilen bekleme; kisa tutulur ki toparlaninca istemci hemen doner. */
+    static final long UNAVAILABLE_RETRY_AFTER_SECONDS = 1;
+
+    public boolean allowed() { return outcome == Outcome.ALLOWED || outcome == Outcome.FAIL_OPEN; }
+
+    public boolean degraded() { return outcome == Outcome.FAIL_OPEN; }
+
+    /** Red icin hata kodu; izin verilen kararlarda null. */
+    public RateLimitErrorCode errorCode() {
+        return switch (outcome) {
+            case ALLOWED, FAIL_OPEN -> null;
+            case EXCEEDED -> RateLimitErrorCode.RATE_LIMIT_EXCEEDED;
+            case UNAVAILABLE -> RateLimitErrorCode.RATE_LIMIT_UNAVAILABLE;
+            case RULE_MISSING -> RateLimitErrorCode.RATE_LIMIT_RULE_MISSING;
+        };
+    }
+
+    static RateLimitDecision failOpen() { return new RateLimitDecision(Outcome.FAIL_OPEN, -1, 0); }
+
+    static RateLimitDecision unavailable() {
+        return new RateLimitDecision(Outcome.UNAVAILABLE, 0, UNAVAILABLE_RETRY_AFTER_SECONDS);
+    }
+
+    static RateLimitDecision ruleMissing() {
+        return new RateLimitDecision(Outcome.RULE_MISSING, 0, UNAVAILABLE_RETRY_AFTER_SECONDS);
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RateLimitErrorCode.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import com.acme.platform.core.ErrorCode;
+import org.springframework.http.HttpStatus;
+
+/**
+ * Ortak "security" blogu (90100-90199, referans Bolum 7.2): rate limit asildi / kural yok / store yok.
+ * Mesajlar istemciye doner; Redis hata metni veya ozne asla buraya girmez.
+ */
+public enum RateLimitErrorCode implements ErrorCode {
+    RATE_LIMIT_EXCEEDED(90100, "Too many requests.", HttpStatus.TOO_MANY_REQUESTS),
+    /** Config hatasi: kural tanimsiz scope fail-closed'dur, uretime cikmadan yakalanmalidir. */
+    RATE_LIMIT_RULE_MISSING(90101, "Rate limit rule is not configured.", HttpStatus.SERVICE_UNAVAILABLE),
+    /** Redis'e ulasilamadi ve scope fail-closed: 503, istemci Retry-After ile tekrar dener. */
+    RATE_LIMIT_UNAVAILABLE(90102, "Rate limit store is unavailable.", HttpStatus.SERVICE_UNAVAILABLE);
+
+    private final int code; private final String message; private final HttpStatus httpStatus;
+    RateLimitErrorCode(int c, String m, HttpStatus s) { code = c; message = m; httpStatus = s; }
+    public int getCode() { return code; } public String getMessage() { return message; }
+    public String getService() { return "security"; } public HttpStatus getHttpStatus() { return httpStatus; }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RateLimitFilter.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import jakarta.servlet.Filter;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.util.function.Function;
+
+/**
+ * Tek scope icin servlet filtresi. Ozne cozumleyici null donerse (ornegin {@code *-account} scope'u anonim
+ * istekte) bu scope o istege uygulanmaz; IP scope'u ayri bir filtre olarak zaten calisir.
+ *
+ * <p>Red yaniti DispatcherServlet'ten once olusur; bu yuzden controller hata formatiyla ayni zarf burada
+ * yazilir (Bolum 6.2, 7.6). 429 ve 503'te {@code Retry-After} her zaman vardir: istemci/SDK geri cekilir,
+ * bekleme suresini tahmin etmez.
+ */
+public final class RateLimitFilter implements Filter {
+
+    private final RedisFixedWindowRateLimiter limiter;
+    private final String scope;
+    private final Function<HttpServletRequest, String> subjectResolver;
+    private final Clock clock;
+
+    public RateLimitFilter(RedisFixedWindowRateLimiter limiter, String scope,
+                           Function<HttpServletRequest, String> subjectResolver, Clock clock) {
+        this.limiter = limiter; this.scope = scope; this.subjectResolver = subjectResolver; this.clock = clock;
+    }
+
+    @Override
+    public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
+            throws IOException, ServletException {
+        HttpServletRequest request = (HttpServletRequest) req;
+        String subject = subjectResolver.apply(request);
+        if (subject == null) { chain.doFilter(req, res); return; }
+        RateLimitDecision decision = limiter.tryAcquire(scope, subject);
+        if (decision.allowed()) { chain.doFilter(req, res); return; }
+        writeRejection(request, (HttpServletResponse) res, decision, clock);
+    }
+
+    /**
+     * 429/503 + Retry-After + standart hata zarfi. Filtre disinda (ornegin OTP servisinde elle kontrol) da
+     * kullanilir ki iki farkli red formati olusmasin.
+     */
+    public static void writeRejection(HttpServletRequest request, HttpServletResponse response,
+                                      RateLimitDecision decision, Clock clock) throws IOException {
+        RateLimitErrorCode code = decision.errorCode();
+        if (code == null) throw new IllegalArgumentException("izin verilen karar reddedilemez: " + decision);
+        response.setStatus(code.getHttpStatus().value());
+        response.setHeader("Retry-After", Long.toString(decision.retryAfterSeconds()));
+        response.setContentType("application/json");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        // details yalniz istemciye gosterilebilir anahtar=deger; ozne (IP/telefon) asla yazilmaz.
+        String body = "{\"ok\":false,\"data\":null,\"error\":{\"code\":" + code.getCode()
+                + ",\"message\":" + json(code.getMessage())
+                + ",\"service\":" + json(code.getService())
+                + ",\"path\":" + json(request.getRequestURI())
+                + ",\"timestamp\":" + clock.millis()
+                + ",\"traceId\":null"
+                + ",\"details\":[" + json("retryAfterSeconds=" + decision.retryAfterSeconds()) + "]}}";
+        response.getWriter().write(body);
+    }
+
+    private static String json(String s) {
+        StringBuilder b = new StringBuilder(s.length() + 2).append('"');
+        for (char ch : s.toCharArray()) {
+            switch (ch) {
+                case '"' -> b.append("\\\"");
+                case '\\' -> b.append("\\\\");
+                default -> {
+                    if (ch < 0x20) b.append(String.format("\\u%04x", (int) ch)); else b.append(ch);
+                }
+            }
+        }
+        return b.append('"').toString();
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RateLimitRedis.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import io.lettuce.core.ClientOptions;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisURI;
+import io.lettuce.core.SocketOptions;
+import io.lettuce.core.TimeoutOptions;
+import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.resource.ClientResources;
+import io.lettuce.core.resource.DefaultClientResources;
+import io.lettuce.core.resource.Delay;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Rate limit icin Lettuce baglantisi. Guvenlik state'i cache Redis'inden AYRI instance'tadir (Bolum 9.6:
+ * noeviction + AOF); bu yuzden Spring'in varsayilan RedisConnectionFactory'si yerine ayri, acik ayarli baglanti.
+ *
+ * <p>Neden bu ayarlar: limiter her istegin sicak yolundadir. Varsayilan Lettuce davranisi kopukken komutlari
+ * kuyruga alir ve 60 sn bekletir; bu, "fail-open" scope'u bile fiilen durdurur. Burada:
+ * <ul>
+ *   <li>kopukken komut aninda reddedilir (REJECT_COMMANDS) -> fail politikasi milisaniyede uygulanir;</li>
+ *   <li>yanit vermeyen (asili) Redis icin kisa komut timeout'u -> ayni politika timeout sonunda;</li>
+ *   <li>yeniden baglanma ust siniri kisa -> Redis donunce limit hizla yeniden devreye girer.</li>
+ * </ul>
+ */
+public final class RateLimitRedis implements AutoCloseable {
+
+    private final ClientResources resources;
+    private final RedisClient client;
+    private final StatefulRedisConnection<String, String> connection;
+
+    private RateLimitRedis(ClientResources resources, RedisClient client,
+                           StatefulRedisConnection<String, String> connection) {
+        this.resources = resources; this.client = client; this.connection = connection;
+    }
+
+    /** @param commandTimeout sicak yol butcesi; tipik 50-250 ms. */
+    public static RateLimitRedis connect(RedisURI uri, Duration commandTimeout) {
+        ClientResources resources = DefaultClientResources.builder()
+                .reconnectDelay(Delay.exponential(Duration.ofMillis(20), Duration.ofSeconds(1), 2, TimeUnit.MILLISECONDS))
+                .build();
+        RedisClient client = RedisClient.create(resources, RedisURI.builder(uri).withTimeout(commandTimeout).build());
+        client.setOptions(ClientOptions.builder()
+                .autoReconnect(true)
+                .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
+                .timeoutOptions(TimeoutOptions.enabled(commandTimeout))
+                .socketOptions(SocketOptions.builder().connectTimeout(commandTimeout.multipliedBy(4)).build())
+                .build());
+        try {
+            return new RateLimitRedis(resources, client, client.connect());
+        } catch (RuntimeException e) {
+            client.shutdown();
+            resources.shutdown();
+            throw e;
+        }
+    }
+
+    public StatefulRedisConnection<String, String> connection() { return connection; }
+
+    @Override
+    public void close() {
+        connection.close();
+        client.shutdown();
+        resources.shutdown();
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RateLimitRule.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import java.util.regex.Pattern;
+
+/**
+ * Bir scope'un kurali: pencere basina en fazla {@code limit} istek, pencere {@code windowSeconds} saniye.
+ * Scope adi anahtar tipini de tasir ({@code <aksiyon>-ip}, {@code <aksiyon>-account} ...), boylece ayni ozne
+ * farkli scope'larda bagimsiz sayilir. Scope adi Redis key'ine ham girer; bu yuzden karakter kumesi dardir.
+ */
+public record RateLimitRule(String scope, int limit, int windowSeconds, FailPolicy failPolicy) {
+
+    static final Pattern SCOPE = Pattern.compile("[a-z0-9]+(-[a-z0-9]+)*");
+
+    public RateLimitRule {
+        if (scope == null || !SCOPE.matcher(scope).matches()) {
+            throw new IllegalArgumentException("scope kebab-case olmali: " + scope);
+        }
+        if (limit < 1) throw new IllegalArgumentException("limit >= 1 olmali: " + scope);
+        if (windowSeconds < 1) throw new IllegalArgumentException("window-seconds >= 1 olmali: " + scope);
+        if (failPolicy == null) throw new IllegalArgumentException("fail-policy acikca secilmeli (OPEN|CLOSED): " + scope);
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RateLimitRules.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+
+/** Scope -> kural kaydi. Degismez; kural olmayan scope icin karar limiter'da fail-closed'dur (config hatasi). */
+public final class RateLimitRules {
+
+    private final Map<String, RateLimitRule> byScope;
+
+    private RateLimitRules(Map<String, RateLimitRule> byScope) { this.byScope = Map.copyOf(byScope); }
+
+    public static RateLimitRules of(RateLimitRule... rules) { return of(List.of(rules)); }
+
+    public static RateLimitRules of(Collection<RateLimitRule> rules) {
+        Map<String, RateLimitRule> m = new LinkedHashMap<>();
+        for (RateLimitRule r : rules) {
+            if (m.putIfAbsent(r.scope(), r) != null) throw new IllegalArgumentException("scope iki kez tanimli: " + r.scope());
+        }
+        return new RateLimitRules(m);
+    }
+
+    /** {@code rate-limit.rules.<scope>.{limit, window-seconds, fail-policy}} baglama sekli. */
+    public record RuleProperties(Integer limit, Integer windowSeconds, FailPolicy failPolicy) {}
+
+    /**
+     * {@code rate-limit.rules.<scope>.*} baglar. Eksik alan acilista patlar (limit/window/fail-policy icin
+     * varsayilan yoktur): yanlis/eksik kural uretimde "limitsiz" ya da "hep 503" olarak degil, deploy'da gorunur.
+     */
+    public static RateLimitRules bind(Binder binder) {
+        Map<String, RuleProperties> raw = binder
+                .bind("rate-limit.rules", Bindable.mapOf(String.class, RuleProperties.class))
+                .orElse(Map.of());
+        return of(raw.entrySet().stream().map(e -> {
+            RuleProperties p = e.getValue();
+            if (p.limit() == null || p.windowSeconds() == null) {
+                throw new IllegalArgumentException("limit ve window-seconds zorunlu: " + e.getKey());
+            }
+            return new RateLimitRule(e.getKey(), p.limit(), p.windowSeconds(), p.failPolicy());
+        }).toList());
+    }
+
+    public Optional<RateLimitRule> find(String scope) { return Optional.ofNullable(byScope.get(scope)); }
+
+    public Collection<RateLimitRule> all() { return byScope.values(); }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/java/com/acme/platform/ratelimit/RedisFixedWindowRateLimiter.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import io.lettuce.core.RedisException;
+import io.lettuce.core.RedisNoScriptException;
+import io.lettuce.core.ScriptOutputType;
+import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Redis uzerinde atomik fixed-window rate limiter (referans Bolum 9.6).
+ *
+ * <ul>
+ *   <li>Sayac YALNIZ Redis'tedir (Bolum 22: JVM sayaci yasak). N replika ayni limiti paylasir; Redis yoksa bu
+ *       sinif "yerel tahmin" yapmaz, scope'un fail politikasini uygular.</li>
+ *   <li>Tek Lua script (INCRBY + TTL yoksa EXPIRE) EVALSHA ile calisir: govde bir kez yuklenir, her istekte
+ *       yalniz 40 byte'lik SHA gider. Redis yeniden baslayip script cache'i bosalirsa (NOSCRIPT) bir kez yeniden
+ *       yuklenip tekrar denenir.</li>
+ *   <li>Key {@code rl:<scope>:<sha256(scope \0 ozne)>}: telefon/IP gibi ham ozne Redis'e (ve MONITOR/slowlog'a)
+ *       yazilmaz; scope hash'e katildigi icin ayni ozne farkli scope'larda iliskilendirilemez.</li>
+ * </ul>
+ *
+ * Baglanti {@link RateLimitRedis#connect} ile kurulmalidir: kisa komut timeout'u ve kopukken komut reddi olmadan
+ * Redis kesintisi istek thread'lerini bekletir, fail politikasi ise ancak timeout dolunca devreye girer.
+ */
+public final class RedisFixedWindowRateLimiter {
+
+    private static final Logger log = LoggerFactory.getLogger(RedisFixedWindowRateLimiter.class);
+
+    static final String SCRIPT = loadScript();
+    static final String SCRIPT_SHA = sha1Hex(SCRIPT);
+
+    private final StatefulRedisConnection<String, String> connection;
+    private final RateLimitRules rules;
+    private final Map<String, Counter> failOpen;
+    private final Map<String, Counter> failClosed;
+    private final Counter ruleMissing;
+    /** Yalniz log gurultusunu kesmek icin (her istekte WARN degil, durum degisiminde bir kez). Sayac degildir. */
+    private final AtomicBoolean storeHealthy = new AtomicBoolean(true);
+
+    public RedisFixedWindowRateLimiter(StatefulRedisConnection<String, String> connection, RateLimitRules rules,
+                                       MeterRegistry registry) {
+        this.connection = connection;
+        this.rules = rules;
+        // Sayaclar acilista 0 ile kayitlanir: alarm kurali (increase(...) > 0) serinin ilk hatada dogmasini
+        // beklemez, ilk kesinti kacmaz.
+        this.failOpen = counters(registry, "rate_limit.fail_open");
+        this.failClosed = counters(registry, "rate_limit.fail_closed");
+        this.ruleMissing = Counter.builder("rate_limit.rule_missing").register(registry);
+        loadScriptQuietly();
+    }
+
+    /** Tek istek = maliyet 1. */
+    public RateLimitDecision tryAcquire(String scope, String subject) { return tryAcquire(scope, subject, 1); }
+
+    public RateLimitDecision tryAcquire(String scope, String subject, int cost) {
+        if (subject == null || subject.isBlank()) throw new IllegalArgumentException("ozne bos olamaz: " + scope);
+        if (cost < 1) throw new IllegalArgumentException("maliyet >= 1 olmali");
+        RateLimitRule rule = rules.find(scope).orElse(null);
+        if (rule == null) {
+            // Kural yok = config hatasi. Limitsiz gecirmek yerine 503: test/staging'de hemen gorunur.
+            ruleMissing.increment();
+            log.error("rate limit rule missing scope={} code={}", scope,
+                    RateLimitErrorCode.RATE_LIMIT_RULE_MISSING.getCode());
+            return RateLimitDecision.ruleMissing();
+        }
+        List<Object> reply;
+        try {
+            reply = evalCounter(key(scope, subject), rule.windowSeconds(), cost);
+        } catch (RedisException e) {
+            return onStoreFailure(rule, e);
+        }
+        markHealthy();
+        long count = (Long) reply.get(0);
+        long pttlMillis = (Long) reply.get(1);
+        if (count <= rule.limit()) {
+            return new RateLimitDecision(RateLimitDecision.Outcome.ALLOWED, rule.limit() - count, 0);
+        }
+        // Retry-After tam saniye; PTTL yukari yuvarlanir ki istemci pencere bitmeden donmesin, en az 1.
+        long retryAfter = Math.max(1, (pttlMillis + 999) / 1000);
+        return new RateLimitDecision(RateLimitDecision.Outcome.EXCEEDED, 0, retryAfter);
+    }
+
+    /** Key formati tek yerde: servisler kendi formatini kopyalamaz (Bolum 22: paylasilan key formati kopyasi). */
+    public static String key(String scope, String subject) {
+        return "rl:" + scope + ":" + sha256Hex(scope + '\0' + subject);
+    }
+
+    private List<Object> evalCounter(String key, int windowSeconds, int cost) {
+        String[] keys = { key };
+        String window = Integer.toString(windowSeconds);
+        String c = Integer.toString(cost);
+        try {
+            return connection.sync().evalsha(SCRIPT_SHA, ScriptOutputType.MULTI, keys, window, c);
+        } catch (RedisNoScriptException e) {
+            // Redis yeniden basladi / failover: script cache bos. Yukle ve bir kez tekrar dene. NOSCRIPT'te
+            // script hic calismamistir, tekrar deneme cift sayim yapmaz.
+            connection.sync().scriptLoad(SCRIPT);
+            return connection.sync().evalsha(SCRIPT_SHA, ScriptOutputType.MULTI, keys, window, c);
+        }
+    }
+
+    private RateLimitDecision onStoreFailure(RateLimitRule rule, RedisException e) {
+        if (storeHealthy.compareAndSet(true, false)) {
+            // Ham exception mesaji host/port icerebilir; yalniz sinif adi (Bolum 7.4).
+            log.warn("rate limit store unavailable scope={} policy={} reason={}", rule.scope(), rule.failPolicy(),
+                    e.getClass().getSimpleName());
+        }
+        if (rule.failPolicy() == FailPolicy.OPEN) {
+            failOpen.get(rule.scope()).increment();
+            return RateLimitDecision.failOpen();
+        }
+        failClosed.get(rule.scope()).increment();
+        return RateLimitDecision.unavailable();
+    }
+
+    private void markHealthy() {
+        if (storeHealthy.compareAndSet(false, true)) log.info("rate limit store available again");
+    }
+
+    private void loadScriptQuietly() {
+        try {
+            String sha = connection.sync().scriptLoad(SCRIPT);
+            if (!SCRIPT_SHA.equals(sha)) throw new IllegalStateException("script SHA uyusmuyor: " + sha);
+        } catch (RedisException e) {
+            // Acilista Redis yoksa uygulama yine kalkar; ilk istekte NOSCRIPT yolu yukler.
+            log.warn("rate limit script not preloaded reason={}", e.getClass().getSimpleName());
+        }
+    }
+
+    private Map<String, Counter> counters(MeterRegistry registry, String name) {
+        return rules.all().stream().collect(Collectors.toUnmodifiableMap(RateLimitRule::scope,
+                r -> Counter.builder(name).tag("scope", r.scope()).register(registry)));
+    }
+
+    private static String loadScript() {
+        try (InputStream in = RedisFixedWindowRateLimiter.class.getResourceAsStream("/ratelimit/fixed_window.lua")) {
+            if (in == null) throw new IllegalStateException("/ratelimit/fixed_window.lua bulunamadi");
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    static String sha256Hex(String s) { return hex("SHA-256", s); }
+
+    private static String sha1Hex(String s) { return hex("SHA-1", s); }
+
+    private static String hex(String algorithm, String s) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance(algorithm).digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/main/resources/ratelimit/fixed_window.lua`
+
+```
+-- Fixed window sayac (referans Bolum 9.6). Tek script = tek atomik adim: INCRBY ile TTL kontrolu arasina
+-- baska istemcinin komutu giremez; iki instance ayni anda "ilk vurus" sanip sayaci bozamaz.
+-- KEYS[1] = rl:<scope>:<sha256(scope \0 ozne)>, ARGV[1] = pencere (sn), ARGV[2] = maliyet (genelde 1)
+-- Donus: { sayac, kalan pencere (ms) }
+local current = redis.call('INCRBY', KEYS[1], ARGV[2])
+local pttl = redis.call('PTTL', KEYS[1])
+-- "current == maliyet" yerine TTL'e bakilir: TTL'siz kalmis bir key (elle SET, eski surum, INCR/EXPIRE'i ayri
+-- yapan bir istemci) aksi halde sonsuza dek kilitli kalir; bu kosul onu bir sonraki vurusta iyilestirir.
+if pttl < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  pttl = tonumber(ARGV[1]) * 1000
+end
+return { current, pttl }
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/test/java/com/acme/platform/ratelimit/RateLimitRulesTest.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.bind.BindException;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+
+/** Kanit seviyesi 1: {@code rate-limit.rules.<scope>.*} baglamasi ve kural dogrulamasi. */
+class RateLimitRulesTest {
+
+    static Binder binder(Map<String, String> props) { return new Binder(new MapConfigurationPropertySource(props)); }
+
+    @Test
+    void bindsKebabCaseRulesWithExplicitFailPolicy() {
+        RateLimitRules rules = RateLimitRules.bind(binder(Map.of(
+                "rate-limit.rules.otp-send-phone.limit", "5",
+                "rate-limit.rules.otp-send-phone.window-seconds", "3600",
+                "rate-limit.rules.otp-send-phone.fail-policy", "closed",
+                "rate-limit.rules.search-ip.limit", "120",
+                "rate-limit.rules.search-ip.window-seconds", "60",
+                "rate-limit.rules.search-ip.fail-policy", "OPEN")));
+        assertThat(rules.find("otp-send-phone")).contains(new RateLimitRule("otp-send-phone", 5, 3600, FailPolicy.CLOSED));
+        assertThat(rules.find("search-ip")).contains(new RateLimitRule("search-ip", 120, 60, FailPolicy.OPEN));
+        assertThat(rules.find("upload-ip")).isEmpty();
+    }
+
+    @Test
+    void missingFailPolicyIsRejectedAtStartup() {
+        // Referansin config ornegi fail-policy icermez; varsayilan secmek ya limitsiz ya hep-503 demektir.
+        assertThatThrownBy(() -> RateLimitRules.bind(binder(Map.of(
+                "rate-limit.rules.order-create-account.limit", "60",
+                "rate-limit.rules.order-create-account.window-seconds", "60"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fail-policy");
+    }
+
+    @Test
+    void invalidRulesAreRejected() {
+        assertThatThrownBy(() -> new RateLimitRule("OTP:send", 5, 60, FailPolicy.CLOSED))
+                .hasMessageContaining("kebab-case");
+        assertThatThrownBy(() -> new RateLimitRule("otp-send", 0, 60, FailPolicy.CLOSED)).hasMessageContaining("limit");
+        assertThatThrownBy(() -> new RateLimitRule("otp-send", 5, 0, FailPolicy.CLOSED)).hasMessageContaining("window");
+        assertThatThrownBy(() -> RateLimitRules.of(new RateLimitRule("a", 1, 1, FailPolicy.OPEN),
+                new RateLimitRule("a", 2, 2, FailPolicy.OPEN))).hasMessageContaining("iki kez");
+        assertThatThrownBy(() -> RateLimitRules.bind(binder(Map.of("rate-limit.rules.a.limit", "x"))))
+                .isInstanceOf(BindException.class);
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/test/java/com/acme/platform/ratelimit/RateLimiterBehaviourIT.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.acme.platform.ratelimit.RateLimitDecision.Outcome;
+import io.lettuce.core.KeyScanCursor;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisURI;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanCursor;
+import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.api.sync.RedisCommands;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+
+/**
+ * DAVRANISSAL dogrulama (referans Bolum 9.6, 22; kanit seviyesi 2): gercek redis-server 7.0 sureci uzerinde
+ * fixed-window limiter. Pencere zamani Redis TTL'idir (sunucu saati); JVM saati yalniz hata zarfindaki
+ * timestamp icindir ve deterministik Clock ile verilir.
+ */
+class RateLimiterBehaviourIT {
+
+    static final RateLimitRules RULES = RateLimitRules.of(
+            new RateLimitRule("otp-send-phone", 5, 60, FailPolicy.CLOSED),
+            new RateLimitRule("search-ip", 5, 60, FailPolicy.OPEN),
+            new RateLimitRule("login-ip", 5, 60, FailPolicy.CLOSED),
+            new RateLimitRule("login-account", 5, 60, FailPolicy.CLOSED),
+            new RateLimitRule("burst-ip", 10, 60, FailPolicy.CLOSED),
+            new RateLimitRule("tick-ip", 2, 1, FailPolicy.OPEN));
+
+    static final Duration COMMAND_TIMEOUT = Duration.ofMillis(200);
+    static final Clock FIXED = Clock.fixed(Instant.parse("2026-09-29T10:00:00Z"), ZoneOffset.UTC);
+
+    static RedisServerProcess redis;
+    static RedisClient adminClient;
+    static StatefulRedisConnection<String, String> adminConn;
+    static RedisCommands<String, String> admin;
+
+    final List<RateLimitRedis> opened = new ArrayList<>();
+    PrometheusMeterRegistry registry;
+    RedisFixedWindowRateLimiter limiter;
+
+    @BeforeAll
+    static void startRedis() throws Exception {
+        redis = RedisServerProcess.startOnFreePort();
+        adminClient = RedisClient.create(uri());
+        adminConn = adminClient.connect();
+        admin = adminConn.sync();
+    }
+
+    @AfterAll
+    static void stopRedis() throws Exception {
+        if (adminConn != null) adminConn.close();
+        if (adminClient != null) adminClient.shutdown();
+        if (redis != null) redis.stop();
+    }
+
+    @BeforeEach
+    void setUp() {
+        admin.flushall();
+        registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        limiter = newLimiter();
+    }
+
+    @AfterEach
+    void closeConnections() { opened.forEach(RateLimitRedis::close); }
+
+    static RedisURI uri() { return RedisURI.create("redis://127.0.0.1:" + redis.port); }
+
+    /** Her cagri ayri Lettuce baglantisi = ayri uygulama replikasi. */
+    RedisFixedWindowRateLimiter newLimiter() {
+        RateLimitRedis conn = RateLimitRedis.connect(uri(), COMMAND_TIMEOUT);
+        opened.add(conn);
+        return new RedisFixedWindowRateLimiter(conn.connection(), RULES, registry);
+    }
+
+    // --- 1. limit 5/60: 5 izin, 6. red + Retry-After <= 60 --------------------------------------------------
+
+    @Test
+    void fiveAllowedThenSixthDeniedWithRetryAfterWithinWindow() {
+        String phone = "+905551112233";
+        for (int i = 1; i <= 5; i++) {
+            RateLimitDecision d = limiter.tryAcquire("otp-send-phone", phone);
+            assertThat(d.outcome()).as("istek %d", i).isEqualTo(Outcome.ALLOWED);
+            assertThat(d.remaining()).isEqualTo(5 - i);
+        }
+        RateLimitDecision sixth = limiter.tryAcquire("otp-send-phone", phone);
+        assertThat(sixth.allowed()).isFalse();
+        assertThat(sixth.outcome()).isEqualTo(Outcome.EXCEEDED);
+        assertThat(sixth.errorCode()).isEqualTo(RateLimitErrorCode.RATE_LIMIT_EXCEEDED);
+        assertThat(sixth.errorCode().getHttpStatus().value()).isEqualTo(429);
+        assertThat(sixth.retryAfterSeconds()).isBetween(1L, 60L);
+        // Red de sayilir ama pencereyi uzatmaz (fixed window): TTL 60 sn'yi asmaz.
+        assertThat(limiter.tryAcquire("otp-send-phone", phone).allowed()).isFalse();
+        long pttl = admin.pttl(RedisFixedWindowRateLimiter.key("otp-send-phone", phone));
+        assertThat(pttl).isBetween(1L, 60_000L);
+        // Baska ozne etkilenmez.
+        assertThat(limiter.tryAcquire("otp-send-phone", "+905559998877").outcome()).isEqualTo(Outcome.ALLOWED);
+    }
+
+    // --- 2. pencere dolumu: 1 sn'lik pencere, sinirli yoklama ile tekrar izin --------------------------------
+
+    @Test
+    void windowExpiresAndSubjectIsAllowedAgain() throws Exception {
+        String ip = "198.51.100.23";
+        assertThat(limiter.tryAcquire("tick-ip", ip).allowed()).isTrue();
+        assertThat(limiter.tryAcquire("tick-ip", ip).allowed()).isTrue();
+        RateLimitDecision denied = limiter.tryAcquire("tick-ip", ip);
+        assertThat(denied.outcome()).isEqualTo(Outcome.EXCEEDED);
+        assertThat(denied.retryAfterSeconds()).isEqualTo(1);
+
+        long start = System.nanoTime();
+        RateLimitDecision d = pollUntil(() -> limiter.tryAcquire("tick-ip", ip), x -> x.outcome() == Outcome.ALLOWED,
+                Duration.ofSeconds(5));
+        assertThat(d.outcome()).as("1 sn'lik pencere 5 sn icinde dolmali (TTL'siz key = sonsuz kilit)")
+                .isEqualTo(Outcome.ALLOWED);
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(3));
+        // Yeni pencere: sayac 1'den basladi.
+        assertThat(d.remaining()).isEqualTo(1);
+    }
+
+    /** INCR ve EXPIRE ayri yapan (atomik olmayan) bir surumun cokmesi TTL'siz sayac birakir; script onu iyilestirir. */
+    @Test
+    void ttlLessCounterLeftByNonAtomicWriterIsHealed() {
+        String ip = "198.51.100.77";
+        String key = RedisFixedWindowRateLimiter.key("search-ip", ip);
+        admin.set(key, "40");                                   // INCR oldu, EXPIRE'dan once surec oldu
+        assertThat(admin.pttl(key)).isEqualTo(-1L);
+        RateLimitDecision d = limiter.tryAcquire("search-ip", ip);
+        assertThat(d.outcome()).isEqualTo(Outcome.EXCEEDED);
+        assertThat(d.retryAfterSeconds()).isBetween(1L, 60L);
+        assertThat(admin.pttl(key)).as("sonsuz kilit kalmamali").isBetween(1L, 60_000L);
+    }
+
+    // --- 3. key hash: ham ozne Redis'e yazilmaz ------------------------------------------------------------
+
+    @Test
+    void rawSubjectNeverAppearsInRedisKeys() throws Exception {
+        String phone = "+905551112233";
+        String ip = "203.0.113.7";
+        limiter.tryAcquire("otp-send-phone", phone);
+        limiter.tryAcquire("login-ip", ip);
+        limiter.tryAcquire("login-account", ip);                // ayni ozne, farkli scope
+
+        List<String> keys = scanAll();
+        assertThat(keys).hasSize(3);
+        for (String k : keys) {
+            assertThat(k).matches("rl:[a-z0-9-]+:[0-9a-f]{64}");
+            assertThat(k).doesNotContain(phone).doesNotContain("5551112233").doesNotContain(ip).doesNotContain("203.0");
+            assertThat(admin.get(k)).isEqualTo("1");            // deger yalniz sayac
+        }
+        // Beklenen hash testte bagimsiz hesaplanir: sha256(scope \0 ozne)
+        assertThat(keys).containsExactlyInAnyOrder(
+                "rl:otp-send-phone:" + sha256("otp-send-phone\0" + phone),
+                "rl:login-ip:" + sha256("login-ip\0" + ip),
+                "rl:login-account:" + sha256("login-account\0" + ip));
+        // Scope hash'e katildigi icin ayni IP iki scope'ta iliskilendirilemez.
+        assertThat(keys.stream().map(k -> k.substring(k.lastIndexOf(':') + 1)).distinct()).hasSize(3);
+    }
+
+    // --- 4. atomiklik: 50 thread, 5 replika, limit 10 -> tam 10 izin ------------------------------------------
+
+    @Test
+    void fiftyConcurrentRequestsAcrossReplicasAllowExactlyTheLimit() throws Exception {
+        List<RedisFixedWindowRateLimiter> replicas = List.of(limiter, newLimiter(), newLimiter(), newLimiter(), newLimiter());
+        ExecutorService pool = Executors.newFixedThreadPool(50);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<RateLimitDecision>> results = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            RedisFixedWindowRateLimiter r = replicas.get(i % replicas.size());
+            results.add(pool.submit(() -> { go.await(); return r.tryAcquire("burst-ip", "192.0.2.10"); }));
+        }
+        go.countDown();
+        Map<Outcome, AtomicInteger> byOutcome = new ConcurrentHashMap<>();
+        for (Future<RateLimitDecision> f : results) {
+            byOutcome.computeIfAbsent(f.get(10, TimeUnit.SECONDS).outcome(), o -> new AtomicInteger()).incrementAndGet();
+        }
+        pool.shutdownNow();
+        assertThat(byOutcome.get(Outcome.ALLOWED).get()).isEqualTo(10);
+        assertThat(byOutcome.get(Outcome.EXCEEDED).get()).isEqualTo(40);
+        assertThat(byOutcome).containsOnlyKeys(Outcome.ALLOWED, Outcome.EXCEEDED);
+        assertThat(admin.get(RedisFixedWindowRateLimiter.key("burst-ip", "192.0.2.10"))).isEqualTo("50");
+    }
+
+    /** Bolum 22: sayac JVM'de degil; iki replika ayni limiti paylasir. */
+    @Test
+    void replicasShareOneCounter() {
+        RedisFixedWindowRateLimiter replicaB = newLimiter();
+        for (int i = 0; i < 3; i++) assertThat(limiter.tryAcquire("login-account", "acc-42").allowed()).isTrue();
+        assertThat(replicaB.tryAcquire("login-account", "acc-42").remaining()).isEqualTo(1);
+        assertThat(replicaB.tryAcquire("login-account", "acc-42").allowed()).isTrue();
+        assertThat(replicaB.tryAcquire("login-account", "acc-42").outcome()).isEqualTo(Outcome.EXCEEDED);
+        assertThat(limiter.tryAcquire("login-account", "acc-42").outcome()).isEqualTo(Outcome.EXCEEDED);
+    }
+
+    // --- 5. scope'lar bagimsiz -----------------------------------------------------------------------------
+
+    @Test
+    void scopesAreIndependent() {
+        String subject = "acc-7";
+        for (int i = 0; i < 5; i++) limiter.tryAcquire("login-ip", subject);
+        assertThat(limiter.tryAcquire("login-ip", subject).outcome()).isEqualTo(Outcome.EXCEEDED);
+        for (int i = 1; i <= 5; i++) {
+            RateLimitDecision d = limiter.tryAcquire("login-account", subject);
+            assertThat(d.outcome()).as("login-account istek %d", i).isEqualTo(Outcome.ALLOWED);
+            assertThat(d.remaining()).isEqualTo(5 - i);
+        }
+        assertThat(limiter.tryAcquire("search-ip", subject).remaining()).isEqualTo(4);
+    }
+
+    @Test
+    void unknownScopeIsFailClosedAndWritesNothing() {
+        RateLimitDecision d = limiter.tryAcquire("upload-ip", "198.51.100.1");
+        assertThat(d.outcome()).isEqualTo(Outcome.RULE_MISSING);
+        assertThat(d.allowed()).isFalse();
+        assertThat(d.errorCode().getHttpStatus().value()).isEqualTo(503);
+        assertThat(registry.get("rate_limit.rule_missing").counter().count()).isEqualTo(1.0);
+        assertThat(scanAll()).isEmpty();
+    }
+
+    // --- 6. Lua bir kez yuklenir, sonra yalniz EVALSHA -------------------------------------------------------
+
+    @Test
+    void scriptIsLoadedOnceAndInvokedByShaOnly() throws Exception {
+        admin.scriptFlush();
+        admin.configResetstat();
+        RedisFixedWindowRateLimiter fresh = newLimiter();       // acilista SCRIPT LOAD
+        for (int i = 0; i < 20; i++) fresh.tryAcquire("search-ip", "198.51.100." + i);
+
+        String expectedSha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-1")
+                .digest(RedisFixedWindowRateLimiter.SCRIPT.getBytes(StandardCharsets.UTF_8)));
+        assertThat(admin.scriptExists(expectedSha)).containsExactly(true);
+        Map<String, Long> stats = commandCalls();
+        assertThat(stats).containsEntry("script|load", 1L).containsEntry("evalsha", 20L);
+        assertThat(stats).doesNotContainKey("eval");
+    }
+
+    // --- 7. fail politikalari: Redis olur -> OPEN gecer + metrik, CLOSED 503; Redis doner -> ikisi de calisir --
+
+    @Test
+    void redisDownAppliesPerScopeFailPolicyAndRecoversAfterRestart() throws Exception {
+        RateLimitFilter otpFilter = new RateLimitFilter(limiter, "otp-send-phone", r -> r.getParameter("phone"), FIXED);
+        assertThat(limiter.tryAcquire("search-ip", "203.0.113.50").outcome()).isEqualTo(Outcome.ALLOWED);
+        assertThat(limiter.tryAcquire("otp-send-phone", "+905550000000").outcome()).isEqualTo(Outcome.ALLOWED);
+
+        redis.stop();
+        try {
+            // OPEN: istek gecer, beklemeden (komut kuyruga alinmaz), metrik artar.
+            for (int i = 0; i < 3; i++) {
+                long t0 = System.nanoTime();
+                RateLimitDecision d = limiter.tryAcquire("search-ip", "203.0.113.50");
+                assertThat(Duration.ofNanos(System.nanoTime() - t0)).isLessThan(Duration.ofSeconds(1));
+                assertThat(d.outcome()).isEqualTo(Outcome.FAIL_OPEN);
+                assertThat(d.allowed()).isTrue();
+                assertThat(d.degraded()).isTrue();
+            }
+            assertThat(registry.get("rate_limit.fail_open").tag("scope", "search-ip").counter().count()).isEqualTo(3.0);
+            assertThat(registry.scrape()).contains("rate_limit_fail_open_total{scope=\"search-ip\"} 3.0");
+
+            // CLOSED: hic gorulmemis ozneler dahil HER istek reddedilir (JVM'de "yedek sayac" yok).
+            // Kopukluk artik biliniyor: komut kuyrukta timeout'u beklemeden (REJECT_COMMANDS) aninda reddedilir;
+            // kuyruklayan istemci her istekte tam komut timeout'u kadar thread bloklardi.
+            for (int i = 0; i < 6; i++) {
+                long t0 = System.nanoTime();
+                RateLimitDecision d = limiter.tryAcquire("otp-send-phone", "+90555000010" + i);
+                assertThat(Duration.ofNanos(System.nanoTime() - t0)).as("kopukken bekleme olmamali")
+                        .isLessThan(COMMAND_TIMEOUT.dividedBy(2));
+                assertThat(d.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+                assertThat(d.allowed()).isFalse();
+                assertThat(d.errorCode()).isEqualTo(RateLimitErrorCode.RATE_LIMIT_UNAVAILABLE);
+                assertThat(d.errorCode().getHttpStatus().value()).isEqualTo(503);
+                assertThat(d.retryAfterSeconds()).isEqualTo(1);
+            }
+            assertThat(registry.get("rate_limit.fail_closed").tag("scope", "otp-send-phone").counter().count())
+                    .isEqualTo(6.0);
+            assertThat(registry.get("rate_limit.fail_open").tag("scope", "otp-send-phone").counter().count())
+                    .isZero();
+            assertThat(registry.get("rate_limit.fail_open").tag("scope", "search-ip").counter().count()).isEqualTo(3.0);
+
+            // Filtre: 503 + Retry-After + standart zarf, istek zincire gitmez.
+            MockHttpServletRequest req = new MockHttpServletRequest("POST", "/otp/send");
+            req.setParameter("phone", "+905551234567");
+            MockHttpServletResponse res = new MockHttpServletResponse();
+            MockFilterChain chain = new MockFilterChain();
+            otpFilter.doFilter(req, res, chain);
+            assertThat(res.getStatus()).isEqualTo(503);
+            assertThat(res.getHeader("Retry-After")).isEqualTo("1");
+            assertThat(res.getContentAsString()).contains("\"code\":90102").doesNotContain("5551234567");
+            assertThat(chain.getRequest()).isNull();
+        } finally {
+            redis.start();                                      // ayni port, bos veri + bos script cache
+        }
+
+        // Lettuce yeniden baglanir; ilk EVALSHA NOSCRIPT alir, script yeniden yuklenir.
+        RateLimitDecision open = pollUntil(() -> limiter.tryAcquire("search-ip", "203.0.113.51"),
+                d -> d.outcome() == Outcome.ALLOWED, Duration.ofSeconds(10));
+        assertThat(open.outcome()).isEqualTo(Outcome.ALLOWED);
+        assertThat(open.degraded()).isFalse();
+        for (int i = 1; i <= 5; i++) {
+            assertThat(limiter.tryAcquire("otp-send-phone", "+905550000099").outcome()).as("istek %d", i)
+                    .isEqualTo(Outcome.ALLOWED);
+        }
+        assertThat(limiter.tryAcquire("otp-send-phone", "+905550000099").outcome()).isEqualTo(Outcome.EXCEEDED);
+        assertThat(admin.scriptExists(RedisFixedWindowRateLimiter.SCRIPT_SHA)).containsExactly(true);
+        double openAfter = registry.get("rate_limit.fail_open").tag("scope", "search-ip").counter().count();
+        limiter.tryAcquire("search-ip", "203.0.113.52");
+        assertThat(registry.get("rate_limit.fail_open").tag("scope", "search-ip").counter().count()).isEqualTo(openAfter);
+    }
+
+    /** Asili (yanit vermeyen) Redis: komut timeout'u dolunca politika uygulanir, istek thread'i bloklanmaz. */
+    @Test
+    void hangingRedisHitsCommandTimeoutThenPolicyApplies() throws Exception {
+        admin.clientPause(1500);                                // tum istemcilerin komutlari 1.5 sn bekletilir
+        long t0 = System.nanoTime();
+        RateLimitDecision open = limiter.tryAcquire("search-ip", "203.0.113.90");
+        RateLimitDecision closed = limiter.tryAcquire("otp-send-phone", "+905550000090");
+        Duration took = Duration.ofNanos(System.nanoTime() - t0);
+        assertThat(open.outcome()).isEqualTo(Outcome.FAIL_OPEN);
+        assertThat(closed.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(took).as("iki cagri ~2x200 ms timeout ile donmeli, pause suresi (1.5 sn) kadar degil")
+                .isLessThan(Duration.ofMillis(1200));
+        RateLimitDecision back = pollUntil(() -> limiter.tryAcquire("search-ip", "203.0.113.91"),
+                d -> d.outcome() == Outcome.ALLOWED, Duration.ofSeconds(10));
+        assertThat(back.outcome()).isEqualTo(Outcome.ALLOWED);
+    }
+
+    // --- 8. 429 filtresi / Retry-After ---------------------------------------------------------------------
+
+    @Test
+    void filterAnswers429WithRetryAfterAndEnvelopeWithoutSubject() throws Exception {
+        RateLimitFilter filter = new RateLimitFilter(limiter, "login-ip", r -> r.getRemoteAddr(), FIXED);
+        for (int i = 0; i < 5; i++) {
+            MockFilterChain chain = new MockFilterChain();
+            filter.doFilter(request("203.0.113.200"), new MockHttpServletResponse(), chain);
+            assertThat(chain.getRequest()).as("istek %d zincire gitmeli", i + 1).isNotNull();
+        }
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+        filter.doFilter(request("203.0.113.200"), res, chain);
+        assertThat(chain.getRequest()).isNull();
+        assertThat(res.getStatus()).isEqualTo(429);
+        assertThat(Long.parseLong(res.getHeader("Retry-After"))).isBetween(1L, 60L);
+        assertThat(res.getContentType()).startsWith("application/json");
+        assertThat(res.getContentAsString())
+                .contains("\"ok\":false", "\"code\":90100", "\"service\":\"security\"", "\"path\":\"/auth/login\"",
+                        "\"timestamp\":" + FIXED.millis(), "retryAfterSeconds=" + res.getHeader("Retry-After"))
+                .doesNotContain("203.0.113.200");
+        // Baska IP etkilenmez.
+        MockFilterChain other = new MockFilterChain();
+        filter.doFilter(request("203.0.113.201"), new MockHttpServletResponse(), other);
+        assertThat(other.getRequest()).isNotNull();
+    }
+
+    // --- yardimcilar ---------------------------------------------------------------------------------------
+
+    static MockHttpServletRequest request(String ip) {
+        MockHttpServletRequest r = new MockHttpServletRequest("POST", "/auth/login");
+        r.setRemoteAddr(ip);
+        return r;
+    }
+
+    /** Gercek zamanli altyapi (Redis TTL, TCP yeniden baglanma) icin sinirli yoklama; son sonucu dondurur. */
+    static <T> T pollUntil(Supplier<T> action, java.util.function.Predicate<T> done, Duration max) throws InterruptedException {
+        long deadline = System.nanoTime() + max.toNanos();
+        T last = action.get();
+        while (!done.test(last) && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+            last = action.get();
+        }
+        return last;
+    }
+
+    static List<String> scanAll() {
+        List<String> keys = new ArrayList<>();
+        KeyScanCursor<String> c = admin.scan(ScanArgs.Builder.matches("*").limit(1000));
+        keys.addAll(c.getKeys());
+        while (!c.isFinished()) {
+            c = admin.scan(ScanCursor.of(c.getCursor()), ScanArgs.Builder.matches("*").limit(1000));
+            keys.addAll(c.getKeys());
+        }
+        return keys;
+    }
+
+    /** INFO commandstats -> komut adi (alt komut dahil, ornegin script|load) -> calls. */
+    static Map<String, Long> commandCalls() {
+        Map<String, Long> m = new ConcurrentHashMap<>();
+        for (String line : admin.info("commandstats").split("\r?\n")) {
+            if (!line.startsWith("cmdstat_")) continue;
+            String name = line.substring("cmdstat_".length(), line.indexOf(':'));
+            String calls = line.substring(line.indexOf("calls=") + 6, line.indexOf(',', line.indexOf("calls=")));
+            m.put(name, Long.parseLong(calls));
+        }
+        return m;
+    }
+
+    static String sha256(String s) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+    }
+}
+```
+
+---
+
+### `skeleton-example/rate-limit-example/src/test/java/com/acme/platform/ratelimit/RedisServerProcess.java`
+
+```java
+package com.acme.platform.ratelimit;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Gercek redis-server sureci (kanit seviyesi 2). Docker gerektirmez; kalicilik kapali (--save "" --appendonly no)
+ * oldugu icin yeniden baslatma = bos Redis + bos script cache: failover/restart sonrasi NOSCRIPT yolunu da sinar.
+ */
+final class RedisServerProcess {
+
+    static final String BINARY = "/usr/bin/redis-server";
+
+    final int port;
+    private final Path dir;
+    private Process process;
+
+    private RedisServerProcess(int port, Path dir) { this.port = port; this.dir = dir; }
+
+    static RedisServerProcess startOnFreePort() throws IOException {
+        int port;
+        try (ServerSocket s = new ServerSocket(0)) { port = s.getLocalPort(); }
+        RedisServerProcess r = new RedisServerProcess(port, Files.createTempDirectory("rl-redis"));
+        r.start();
+        return r;
+    }
+
+    void start() throws IOException {
+        ProcessBuilder pb = new ProcessBuilder(List.of(BINARY, "--port", Integer.toString(port), "--bind", "127.0.0.1",
+                "--save", "", "--appendonly", "no", "--dir", dir.toString()))
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(dir.resolve("redis.log").toFile()));
+        process = pb.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        // Gercek surecin portu dinlemeye baslamasi icin sinirli yoklama (uygulama mantigi beklenmiyor).
+        while (!ping()) {
+            if (!process.isAlive() || System.nanoTime() > deadline) {
+                throw new IllegalStateException("redis-server baslamadi, log: " + Files.readString(dir.resolve("redis.log")));
+            }
+            try { Thread.sleep(20); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException(e); }
+        }
+    }
+
+    /** Redis'in cokmesi: surec olur, TCP baglantilari kapanir. */
+    void stop() throws InterruptedException {
+        if (process == null) return;
+        process.destroyForcibly();
+        if (!process.waitFor(10, TimeUnit.SECONDS)) throw new IllegalStateException("redis-server olmedi");
+        process = null;
+    }
+
+    boolean ping() {
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress("127.0.0.1", port), 200);
+            s.setSoTimeout(500);
+            OutputStream out = s.getOutputStream();
+            out.write("PING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            InputStream in = s.getInputStream();
+            byte[] buf = new byte[7];
+            int n = in.readNBytes(buf, 0, 7);
+            return n == 7 && new String(buf, StandardCharsets.US_ASCII).equals("+PONG\r\n");
+        } catch (IOException e) {
+            return false;
+        }
+    }
+}
 ```
