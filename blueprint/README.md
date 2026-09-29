@@ -66,7 +66,7 @@ Yapısal `PASS` davranışsal `PASS` değildir; uyum raporu ve PR şablonu ikisi
 ## Kurulum
 
 ```bash
-rsync -a --exclude 'skeleton-example/*/target' blueprint/ <yeni-repo>/      # build artefaktları kopyalanmaz
+rsync -a --exclude 'skeleton-example/*/target' blueprint/ <yeni-repo>/      # build artefaktları kopyalanmaz (rsync yoksa: cp -r blueprint/. <yeni-repo>/ && rm -rf <yeni-repo>/skeleton-example/*/target)
 cp docs/mikroservis-mimari-referans.md <yeni-repo>/docs/                     # AGENTS.md ve skill'ler bu dosyaya "referans Bölüm N" diye gönderir
 cd <yeni-repo>
 for d in .agents/skills/proj-*; do mv "$d" ".agents/skills/<proje>-${d##*/proj-}"; done   # Claude Code skill'i KLASÖR adıyla kaydeder; yalnız frontmatter'ı değiştirmek yetmez
@@ -93,7 +93,9 @@ echo '{"tool_input":{"skill":"proj-security-review"}}' | .claude/hooks/review-st
 | Skill keşfi | 12 `proj-*` skill symlink üzerinden yüklendi |
 | `/proj-db-migration-review` slash komutu | skill formatında tam rapor üretti (immutability komutunu koştu, `Nihai karar` ile bitti) — ama **damga yazılmadı**: kullanıcı slash komutu Skill aracını çağırmaz. Düzeltme: `UserPromptSubmit` hook'u eklendi (settings.json); damga artık her iki yolda yazılır |
 
-Bulunan diğer kusurlar ve düzeltmeleri: skill klasör adları `sed` ile değişmiyordu (Kurulum'a `mv` adımı eklendi); referans doküman blueprint kopyasında yoktu ve ajan onu aramakla tur harcadı (Kurulum'a `cp` adımı, AGENTS.md'ye "yoksa net kanıt bulunamadı yaz" notu); hook mesajı base bulunamayınca `origin/develop` yazıyordu (gerçek kullanılan ref yazılır); dar `--allowedTools` ile `; echo $?` gibi bileşik komutlar reddediliyordu (settings.json'a okuma amaçlı `permissions.allow` listesi eklendi; script'ler zaten `OK/IHLAL/DOGRULANAMADI` basar, çıkış kodu yakalamak gerekmez). Headless kullanımda review skill'i için `--max-turns` ≥ 20 verilmelidir (okuma sırası + komutlar 15–19 tur sürdü).
+Bulunan diğer kusurlar ve düzeltmeleri: skill klasör adları `sed` ile değişmiyordu (Kurulum'a `mv` adımı eklendi); referans doküman blueprint kopyasında yoktu ve ajan onu aramakla tur harcadı (Kurulum'a `cp` adımı, AGENTS.md'ye "yoksa net kanıt bulunamadı yaz" notu); hook mesajı base bulunamayınca `origin/develop` yazıyordu (gerçek kullanılan ref yazılır); dar `--allowedTools` ile `; echo $?` gibi bileşik komutlar reddediliyordu (settings.json'a okuma amaçlı `permissions.allow` listesi eklendi; script'ler zaten `OK/IHLAL/DOGRULANAMADI` basar, çıkış kodu yakalamak gerekmez). Headless kullanımda review skill'i için `--max-turns` ≥ 25 verilmelidir (okuma sırası + komutlar 19–29 tur sürdü).
+
+**Headless/CI'da `permissions.allow` (D7):** Claude Code 2.1.284, **güvenilmemiş** (ilk kez açılan) bir çalışma alanında `.claude/settings.json`'daki `permissions.allow` girdilerini yok sayar (`Ignoring 19 permissions.allow entries … this workspace has not been trusted`) ve `node scripts/flyway-immutability.js …` gibi komutlar onaya düşer → `-p` modunda reddedilir. Taze clone ve CI container'ı her zaman güvenilmemiştir. Doğrulanmış iki çözüm: `claude -p … --settings .claude/settings.json` (hook'lar çift koşmaz) **veya** çalışma alanını bir kez güvenilir işaretlemek (`~/.claude.json` → `projects["<mutlak yol>"].hasTrustDialogAccepted: true`, ya da bir kez etkileşimli açmak). Yeniden doğrulama (2026-09-29): slash komutu damgası UserPromptSubmit ile yazıldı, klasör adı değiştirilen `acme-*` skill'ler CLI'da listelendi, hook mesajı gerçek base'i (`origin/main`) ve HEAD fallback'ini doğru gösterdi, referans doküman kopyalanınca ajan aramaya tur harcamadı.
 
 ## İlkeler
 
