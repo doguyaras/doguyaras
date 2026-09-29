@@ -406,7 +406,9 @@ class BrokerBehaviourIT {
             OutboxEvent row = outbox.findAll().get(0);
             assertThat(row.status()).isEqualTo("PENDING");
             assertThat(row.retryCount()).isGreaterThanOrEqualTo(1);
-            assertThat(row.lastErrorCode()).isEqualTo("AmqpConnectException");          // kod, mesaj/host degil
+            // kod, mesaj/host degil. Durdurma aninda baglanti kurulamiyorsa AmqpConnectException, kurulu baglanti
+            // kapanirken AmqpIOException gelir (CI: docker exec rabbitmqctl ile gozlendi); ikisi de gecici broker hatasidir.
+            assertThat(row.lastErrorCode()).isIn("AmqpConnectException", "AmqpIOException");
         } finally {
             ctl.startApp();
         }
@@ -473,8 +475,8 @@ class BrokerBehaviourIT {
         assertThat(await(BOUND, () -> mgmtDepth(BrokerTopology.ORDER_CANCELLED_QUEUE) == 0)).isTrue();
     }
 
-    @Test // k: 4.3.0 gercegi: gecikmeli retry KUYRUK ARGUMANI ile etkin; ayni anahtarlar policy olarak reddedilir
-    void k_delayedRetryIsEffectiveViaQueueArgumentsNotPolicy() throws Exception {
+    @Test // k: gecikmeli retry KUYRUK ARGUMANI ile her 4.3.x'te etkin; policy yolu SURUME BAGLI (4.3.0 reddeder, 4.3.6 kabul eder)
+    void k_delayedRetryIsEffectiveViaQueueArgumentsPolicyDependsOnVersion() throws Exception {
         JsonNode q = mgmt.queue(BrokerTopology.ORDER_CANCELLED_QUEUE);
         JsonNode args = q.get("arguments");
         assertThat(args.get("x-queue-type").asString()).isEqualTo("quorum");
@@ -485,13 +487,56 @@ class BrokerBehaviourIT {
         assertThat(args.get("x-dead-letter-strategy").asString()).isEqualTo("at-least-once");
         assertThat(args.get("x-overflow").asString()).isEqualTo("reject-publish");
 
-        var resp = mgmt.putPolicyRaw("bvt-delayed-retry-probe", "^bvt\\.never\\.matches$",
+        String version = mgmt.brokerVersion();
+        String probeQueue = "bvt.policy-probe.queue";
+        String policy = "bvt-delayed-retry-probe";
+        var resp = mgmt.putPolicyRaw(policy, "^" + probeQueue.replace(".", "\\.") + "$",
                 Map.of("delayed-retry-type", "failed", "delayed-retry-min", 1000, "delayed-retry-max", 5000), "quorum_queues");
-        mgmt.deletePolicy("bvt-delayed-retry-probe");
-        // 4.3.0: validator kayitli degil -> 400 "not recognised policy settings". Ileri surumde kabul edilirse bu
-        // assert gevsetilir; o zaman policy yolu da kullanilabilir (docCorrection kaydi).
-        assertThat(resp.statusCode()).as("policy route on this broker: " + resp.body()).isEqualTo(400);
-        assertThat(resp.body()).contains("not recognised policy settings");
+        try {
+            if ("4.3.0".equals(version)) {
+                // 4.3.0: validator kayitli degil -> 400 "not recognised policy settings" (yerel broker'da gozlendi)
+                assertThat(resp.statusCode()).as("policy route on " + version + ": " + resp.body()).isEqualTo(400);
+                assertThat(resp.body()).contains("not recognised policy settings");
+                return;
+            }
+            // Sonraki 4.3.x (CI: 4.3.6): policy kabul edilir. 201/204 yetmez; ARGUMANSIZ bir QQ'da policy'nin gecikmeyi
+            // gercekten uyguladigi olculur (reject requeue=true -> ikinci teslim >= 900 ms sonra).
+            assertThat(resp.statusCode()).as("policy route on " + version + ": " + resp.body()).isIn(201, 204);
+            assertThat(measureRedeliveryGapMs(probeQueue)).as("policy-only delayed retry on " + version).isGreaterThanOrEqualTo(900);
+        } finally {
+            mgmt.deletePolicy(policy);
+        }
+    }
+
+    /** Argumansiz quorum queue: 1 mesaj, ilk teslimde basicReject(requeue=true), ikinci teslime kadar gecen sure. */
+    private long measureRedeliveryGapMs(String queue) throws Exception {
+        try (var conn = cf.createConnection(); var ch = conn.createChannel(false)) {
+            ch.queueDelete(queue);
+            ch.queueDeclare(queue, true, false, false, Map.of("x-queue-type", "quorum"));
+            try {
+                // policy uygulanana kadar bekle (effective_policy_definition)
+                assertThat(await(Duration.ofSeconds(15), () -> {
+                    try {
+                        JsonNode def = mgmt.queue(queue).get("effective_policy_definition");
+                        return def != null && def.has("delayed-retry-type");
+                    } catch (Exception ex) { return false; }
+                })).as("policy applied to " + queue).isTrue();
+                ch.basicQos(1);
+                List<Instant> seen = new CopyOnWriteArrayList<>();
+                CountDownLatch two = new CountDownLatch(2);
+                ch.basicConsume(queue, false, (tag, d) -> {
+                    seen.add(Instant.now());
+                    two.countDown();
+                    if (seen.size() == 1) ch.basicReject(d.getEnvelope().getDeliveryTag(), true);
+                    else ch.basicAck(d.getEnvelope().getDeliveryTag(), false);
+                }, tag -> { });
+                ch.basicPublish("", queue, null, "probe".getBytes(StandardCharsets.UTF_8));
+                assertThat(two.await(20, TimeUnit.SECONDS)).as("second delivery").isTrue();
+                return Duration.between(seen.get(0), seen.get(1)).toMillis();
+            } finally {
+                ch.queueDelete(queue);
+            }
+        }
     }
 
     @Test // l: bilinmeyen tip (binding order.order.* ile gelen order.order.created) yok sayilir ve ack'lenir (12.2)

@@ -68,6 +68,13 @@ public final class ManagementApi {
                 .header("Authorization", auth).DELETE()).statusCode();
     }
 
+    /** Broker surumu (/api/overview rabbitmq_version), orn. "4.3.6". Surume bagli davranis testlerinde kullanilir. */
+    public String brokerVersion() throws IOException, InterruptedException {
+        HttpResponse<String> r = send(HttpRequest.newBuilder(URI.create(base + "/api/overview")).header("Authorization", auth).GET());
+        if (r.statusCode() != 200) throw new IOException("GET overview -> " + r.statusCode());
+        return json.readTree(r.body()).get("rabbitmq_version").asString();
+    }
+
     public boolean alive() {
         try {
             return send(HttpRequest.newBuilder(URI.create(base + "/api/overview")).header("Authorization", auth).GET())
