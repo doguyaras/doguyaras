@@ -2954,4 +2954,6 @@ Bu ekteki tarih ve sürüm iddiaları aşağıdaki kaynaklardan doğrulandı; ka
 | RFC 9745 Deprecation header, RFC 8594 Sunset | rfc-editor.org/info/rfc9745 |
 | PIT 1.30 (2026-08), JUnit 5 plugin | pitest.org, github.com/hcoles/pitest |
 | `docker-rollout` (wowu) aktif | github.com/wowu/docker-rollout |
+| CI şablonu gerçek GitHub Actions'ta koştu: gömülü PostgreSQL non-root runner'da, `rabbitmq:4.3-management` servis container'ı (4.3.6 / Erlang 27.3.4), 44 test, tam build 27 sn; hook kuru çalıştırması gerçek yollarla yeşil | github.com/doguyaras/doguyaras/actions/runs/36547695286 (run 2; run 1'deki kırmızı, CI adımının kendi tasarım hatasıydı) |
+| Flyway immutability hook'unda alt klasör (monorepo) fail-open hatası bulundu ve düzeltildi | `blueprint/scripts/flyway-immutability.js` `checkFile`, regresyon testi `flyway-immutability.test.js` (13 test) |
 | Hibernate `@UuidGenerator(style = VERSION_7)` (6.5+) | docs.hibernate.org UuidVersion7Strategy |
