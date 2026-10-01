@@ -61,10 +61,15 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Java surumu prod image (eclipse-temurin:25-jre) ve maven.compiler.release ile ayni
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with: { distribution: temurin, java-version: '21', cache: maven }
+        with: { distribution: temurin, java-version: '25', cache: maven }
       - name: local infra binaries used by tests (redis-server, pgbouncer)
-        run: sudo apt-get update -q && sudo apt-get install -y -q redis-server pgbouncer && sudo systemctl stop redis-server pgbouncer || true
+        # '|| true' yalniz servis durdurmaya uygulanir; kurulum hatasi adimi kirar (tek satirda '&& ... || true' tum zinciri yutardi)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q redis-server pgbouncer
+          sudo systemctl stop redis-server pgbouncer || true
       - name: build and test (embedded PostgreSQL 18 runs as the non-root runner user; broker chaos test reaches rabbitmqctl inside the service container)
         env:
           BVT_RABBITMQCTL: docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl

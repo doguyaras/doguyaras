@@ -2,7 +2,7 @@
 
 `blueprint/tests/*.java` şablonlarının, enforcer kuralının ve **generic outbox/inbox'ın** gerçekten derlenip çalıştığı en küçük Maven multi-module projesi. Referans dokümanın (Bölüm 3, 4, 7, 11.2–11.3, 16, 19.5–19.6, 23.3–23.4) somut, çalışan karşılığı.
 
-- Spring Boot **4.1.1** BOM, Java 21 (25 ile de uyumlu), ArchUnit 1.5.1, Maven 3.9.11.
+- Spring Boot **4.1.1** BOM, Java 25 (derleme hedefi ve CI; prod image `eclipse-temurin:25-jre` ile aynı), ArchUnit 1.5.1, Maven 3.9.11.
 - Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `platform-messaging` (generic outbox/inbox: `OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`; local saga: `LocalSagaStore`, `SagaRecoveryWorker`, `SagaParticipant`, `db/platform/saga_coordinator.sql`), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + yapısal testler). `broker-example` (seviye 3: gerçek RabbitMQ 4.3 topolojisi, `OutboxEventPublisher`, `OrderCancelledListener`, stream okuyucu; `BrokerBehaviourIT`).
 - Config: `application-local.yml`, `config/order.yml`, `deploy/prod.env.example` (drift testi için).
 

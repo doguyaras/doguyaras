@@ -77,3 +77,17 @@ Daha önemlisi, **outbox partition edilmemeli**: satırlar iletimden sonra silin
 ## Gemini'ye genel not
 
 Raporun yönü çoğunlukla doğru ama verdiği kodların üçü çalışmıyor: ENTRYPOINT'teki bayrak yok sayılıyor, pg_partman çağrıları 5.x'te hata veriyor, ArchUnit kodu derlenmiyor. Ölçüm içermeyen yüzdeler var ("%80", "%90"). Bazı tespitler ise dokümanda zaten olan ya da test ettiğimiz davranışın tersini söylüyor (SET LOCAL, prepared statement). Sonraki turda öneri başına bir doğrulama yolu (komut, test veya kaynak satırı) istemek faydalı olur.
+
+## Ek: `skeleton-ci.yml` için önerilen tam dosya
+
+**"Dosya yarıda kalmış" (Katılmıyorum).** Repodaki dosya tam: 79 satır, son adımı surefire raporu yükleme. Gemini'ye giden kopya kesilmiş olmalı. Önerilen dosya bizimkinin neredeyse aynısı; gerçek farklar aşağıdaki üç madde.
+
+**Java 25 (Katılıyorum, haklı ve önemli bir tespit).** Referans Java 25 öneriyor ve prod image `eclipse-temurin:25-jre`. Ama iskelet `maven.compiler.release=21` ile derleniyor ve CI JDK 21'de koşuyordu, yani prod runtime'ı hiç test edilmiyordu. Önce tam build'i JDK 25 runtime ile koşturduk (305 test yeşil). Ardından derleme hedefini de 25'e çektik (class dosyaları major version 69) ve yine 305 test yeşil. İki CI dosyası da 25'e alındı ve referansa "CI, derleme hedefi ve prod image aynı Java sürümü" kuralı eklendi.
+
+**Kurulum adımını satırlara bölmek (Katılıyorum, gerçek bir hatayı düzeltiyor).** Bizdeki tek satır `apt-get update && apt-get install ... && systemctl stop ... || true` idi. Bash'te `|| true` tüm zincire uygulanır, dolayısıyla `apt-get install` başarısız olsa bile adım yeşil geçiyordu. Öneride `|| true` yalnız servis durdurma satırında kalıyor. İki CI dosyasında da düzeltildi ve kural referansa yazıldı.
+
+**Test sayısı koruması `-gt 0` (Katılmıyorum, geriye gidiş).** Bizdeki koruma `-ge 290`. Amacı "0 test" durumunu değil, testlerin **sessizce azalmasını** yakalamak: bir modülün testleri yanlışlıkla devre dışı kalırsa toplam 305'ten 200'e düşer ve `-gt 0` bunu geçirir. "0 test = başarısız" kontrolü zaten her modülde `failIfNoTests=true` ile yapılıyor.
+
+**SHA pinning (Zaten var).** Önerilen dosyadaki SHA'lar bizim dosyadakilerle aynı; dosyamız zaten pinli.
+
+**`cd blueprint/skeleton-example && mvn verify` (Fark yok).** Bizdeki `mvn -f blueprint/skeleton-example/pom.xml verify` ile eşdeğer.

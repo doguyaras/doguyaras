@@ -1112,10 +1112,15 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Java surumu prod image (eclipse-temurin:25-jre) ve maven.compiler.release ile ayni
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with: { distribution: temurin, java-version: '21', cache: maven }
+        with: { distribution: temurin, java-version: '25', cache: maven }
       - name: testlerin kullandigi yerel ikililer (redis-server, pgbouncer)
-        run: sudo apt-get update -q && sudo apt-get install -y -q redis-server pgbouncer && (sudo systemctl stop redis-server pgbouncer || true)
+        # '|| true' yalniz servis durdurmaya uygulanir; kurulum hatasi adimi kirar
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q redis-server pgbouncer
+          sudo systemctl stop redis-server pgbouncer || true
       - name: build + test (gercek DB testleri dahil; ArchUnit, ErrorCode tekilligi, config drift, gercek broker senaryolari)
         env:
           BVT_RABBITMQCTL: docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl   # kaos senaryosu (stop_app/start_app) servis container'inin icinde kosar
@@ -3932,7 +3937,7 @@ target/
 
 `blueprint/tests/*.java` şablonlarının, enforcer kuralının ve **generic outbox/inbox'ın** gerçekten derlenip çalıştığı en küçük Maven multi-module projesi. Referans dokümanın (Bölüm 3, 4, 7, 11.2–11.3, 16, 19.5–19.6, 23.3–23.4) somut, çalışan karşılığı.
 
-- Spring Boot **4.1.1** BOM, Java 21 (25 ile de uyumlu), ArchUnit 1.5.1, Maven 3.9.11.
+- Spring Boot **4.1.1** BOM, Java 25 (derleme hedefi ve CI; prod image `eclipse-temurin:25-jre` ile aynı), ArchUnit 1.5.1, Maven 3.9.11.
 - Modüller: `platform-core` (ErrorCode arayüzü, ServiceException), `platform-messaging` (generic outbox/inbox: `OutboxRepository`, `OutboxPoller`, `InboxProcessor`, `db/platform/outbox_inbox.sql`; local saga: `LocalSagaStore`, `SagaRecoveryWorker`, `SagaParticipant`, `db/platform/saga_coordinator.sql`), `order-api` (DTO), `order-core` (controller/service/impl/repository/entity/exception/config + yapısal testler). `broker-example` (seviye 3: gerçek RabbitMQ 4.3 topolojisi, `OutboxEventPublisher`, `OrderCancelledListener`, stream okuyucu; `BrokerBehaviourIT`).
 - Config: `application-local.yml`, `config/order.yml`, `deploy/prod.env.example` (drift testi için).
 
@@ -18492,7 +18497,7 @@ public class SubscriptionInternalController {
   <groupId>com.acme</groupId><artifactId>skeleton</artifactId><version>${revision}</version><packaging>pom</packaging>
   <properties>
     <revision>0.1.0-SNAPSHOT</revision>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <spring-boot.version>4.1.1</spring-boot.version>
     <archunit.version>1.5.1</archunit.version>
